@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: cheerstick-server
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cheerstick-db
+          property: connectionString
+
+databases:
+  - name: cheerstick-db
+    databaseName: cheerstick
+    plan: free

@@ -1,0 +1,29 @@
+{
+  "name": "cheerstick-server",
+  "version": "1.0.0",
+  "description": "CheerStick IoT cloud server - REST API backend",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "migrate": "node src/db/migrate.js",
+    "lint": "eslint src/"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "pg": "^8.12.0",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "eslint": "^9.6.0",
+    "nodemon": "^3.1.4"
+  }
+}
