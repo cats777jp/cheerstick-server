@@ -2,7 +2,7 @@ services:
   - type: web
     name: cheerstick-server
     env: node
-    buildCommand: npm install
+    buildCommand: npm install && npm run migrate
     startCommand: npm start
     envVars:
       - key: NODE_ENV
