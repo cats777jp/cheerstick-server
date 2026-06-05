@@ -1,37 +1,60 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const db = require('./index');
 
-const migrations = [
-  `CREATE TABLE IF NOT EXISTS devices (
-    id               UUID PRIMARY KEY,
-    serial_number    VARCHAR(64) UNIQUE NOT NULL,
-    firmware_version VARCHAR(32),
-    location         VARCHAR(255),
-    status           VARCHAR(32) NOT NULL DEFAULT 'active',
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`,
+const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
 
-  `CREATE TABLE IF NOT EXISTS events (
-    id          UUID PRIMARY KEY,
-    device_id   UUID REFERENCES devices(id) ON DELETE SET NULL,
-    event_type  VARCHAR(64) NOT NULL,
-    payload     JSONB NOT NULL DEFAULT '{}',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`,
+// 適用済みマイグレーションを管理するテーブルを作成
+const ENSURE_TRACKING_TABLE = `
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    filename   VARCHAR(255) PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`;
 
-  `CREATE INDEX IF NOT EXISTS idx_events_device_id  ON events(device_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC)`,
-];
+async function getApplied() {
+  const { rows } = await db.query('SELECT filename FROM schema_migrations ORDER BY filename');
+  return new Set(rows.map((r) => r.filename));
+}
 
-(async () => {
-  for (const sql of migrations) {
-    await db.query(sql);
-    console.log('OK:', sql.slice(0, 60).replace(/\s+/g, ' '));
+async function run() {
+  await db.query(ENSURE_TRACKING_TABLE);
+
+  const applied = await getApplied();
+
+  const files = fs.readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  let count = 0;
+  for (const file of files) {
+    if (applied.has(file)) {
+      console.log(`SKIP  ${file} (already applied)`);
+      continue;
+    }
+
+    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+
+    // 1ファイルをトランザクションで適用し、完了後に記録
+    await db.query('BEGIN');
+    try {
+      await db.query(sql);
+      await db.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
+      await db.query('COMMIT');
+      console.log(`APPLY ${file}`);
+      count++;
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw new Error(`Failed on ${file}: ${err.message}`);
+    }
   }
-  console.log('Migration complete');
+
+  console.log(`\nMigration complete. ${count} file(s) applied.`);
   process.exit(0);
-})().catch((err) => {
-  console.error('Migration failed:', err);
+}
+
+run().catch((err) => {
+  console.error('Migration failed:', err.message);
   process.exit(1);
 });
