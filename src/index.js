@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 
 const server = http.createServer(app);
 
-wsServer.attach(server, '/ws/cheer');
+wsServer.attach(server, '/cheer');
 
 server.listen(PORT, () => {
   console.log(`CheerStick server running on port ${PORT}`);

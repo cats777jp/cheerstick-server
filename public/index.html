@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>CheerStick</title>
+<style>
+  :root {
+    --team-color: rgb(0, 90, 170);
+    --bg: #0b0f14;
+    --card-bg: #161b22;
+    --text: #f4f6f8;
+    --text-muted: #9aa4af;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+  }
+  .status-bar {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+  .status-bar.error { color: #ff6b6b; }
+
+  .team-logo {
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #fff;
+    border: 3px solid var(--team-color);
+    margin-bottom: 8px;
+  }
+  .team-name {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 28px 24px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+  .card h1 {
+    font-size: 18px;
+    margin: 0 0 20px;
+  }
+  input[type="text"], input[type="email"] {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid #2a323c;
+    background: #0b0f14;
+    color: var(--text);
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+  input[type="text"]:focus, input[type="email"]:focus {
+    outline: none;
+    border-color: var(--team-color);
+  }
+  button {
+    width: 100%;
+    padding: 13px;
+    border-radius: 10px;
+    border: none;
+    background: var(--team-color);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  button:active:not(:disabled) { opacity: 0.85; }
+
+  .welcome-name {
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 4px;
+  }
+  .welcome-sub {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0 0 24px;
+  }
+
+  .oshi-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: #0b0f14;
+    border: 1px solid #2a323c;
+    border-radius: 12px;
+    padding: 12px;
+    text-align: left;
+  }
+  .oshi-photo {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    object-fit: cover;
+    background: #222;
+    flex-shrink: 0;
+  }
+  .oshi-name { font-size: 15px; font-weight: 600; margin: 0; }
+  .oshi-position { font-size: 12px; color: var(--team-color); margin: 2px 0; }
+  .oshi-data { font-size: 11px; color: var(--text-muted); margin: 0; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+  <div id="statusBar" class="status-bar">接続中...</div>
+
+  <img id="teamLogo" class="team-logo hidden" alt="team logo">
+  <div id="teamName" class="team-name hidden"></div>
+
+  <!-- 未登録時：ニックネーム＋メールアドレス登録フォーム -->
+  <div id="nameFormCard" class="card hidden">
+    <h1>応援スティックへようこそ！<br>ニックネームとメールアドレスを登録してください</h1>
+    <input type="text" id="nameInput" placeholder="ニックネーム" maxlength="20" autocomplete="nickname">
+    <input type="email" id="emailInput" placeholder="メールアドレス" autocomplete="email">
+    <p id="formError" class="status-bar error hidden" style="margin: -8px 0 12px;"></p>
+    <button id="registerBtn">登録する</button>
+  </div>
+
+  <!-- 名前登録済み：ウェルカム画面 -->
+  <div id="welcomeCard" class="card hidden">
+    <p class="welcome-name" id="welcomeName"></p>
+    <p class="welcome-sub">さん、応援ありがとうございます！</p>
+
+    <div class="oshi-card">
+      <img id="oshiPhoto" class="oshi-photo" alt="推し">
+      <div>
+        <p class="oshi-name" id="oshiName"></p>
+        <p class="oshi-position" id="oshiPosition"></p>
+        <p class="oshi-data" id="oshiData"></p>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const params = new URLSearchParams(window.location.search);
+  const deviceId = params.get('id');
+
+  const statusBar = document.getElementById('statusBar');
+  const teamLogo = document.getElementById('teamLogo');
+  const teamNameEl = document.getElementById('teamName');
+  const nameFormCard = document.getElementById('nameFormCard');
+  const welcomeCard = document.getElementById('welcomeCard');
+  const nameInput = document.getElementById('nameInput');
+  const emailInput = document.getElementById('emailInput');
+  const formError = document.getElementById('formError');
+  const registerBtn = document.getElementById('registerBtn');
+  const welcomeName = document.getElementById('welcomeName');
+  const oshiPhoto = document.getElementById('oshiPhoto');
+  const oshiName = document.getElementById('oshiName');
+  const oshiPosition = document.getElementById('oshiPosition');
+  const oshiData = document.getElementById('oshiData');
+
+  if (!deviceId) {
+    statusBar.textContent = 'エラー：MACアドレス(id)が指定されていません';
+    statusBar.classList.add('error');
+    return;
+  }
+
+  // 本番は wss://ws.cheerstick.com/cheer 、ローカル確認時は同一ホストのws/wssを使う
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsHost = window.location.hostname === 'app.cheerstick.com'
+    ? 'ws.cheerstick.com'
+    : window.location.hostname; // ローカル/検証用フォールバック
+  const wsUrl = `${wsProtocol}//${wsHost}/cheer`;
+
+  let socket;
+  let reconnectTimer = null;
+
+  function connect() {
+    statusBar.textContent = '接続中...';
+    statusBar.classList.remove('error');
+    socket = new WebSocket(wsUrl);
+
+    socket.addEventListener('open', () => {
+      statusBar.textContent = '';
+      send({ type: 'connect', id: deviceId });
+    });
+
+    socket.addEventListener('message', (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch (e) {
+        return;
+      }
+      if (msg.type === 'connect') {
+        renderConnect(msg);
+      } else if (msg.type === 'error') {
+        registerBtn.disabled = false;
+        formError.textContent = msg.message;
+        formError.classList.remove('hidden');
+      }
+    });
+
+    socket.addEventListener('close', () => {
+      statusBar.textContent = '接続が切れました。再接続しています...';
+      statusBar.classList.add('error');
+      reconnectTimer = setTimeout(connect, 2000);
+    });
+
+    socket.addEventListener('error', () => {
+      // close イベントが続けて発火し再接続処理が走る
+    });
+  }
+
+  function send(payload) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(payload));
+    }
+  }
+
+  function renderConnect(msg) {
+    const { status, user, team, member } = msg;
+
+    if (team) {
+      teamLogo.src = team.logo_url;
+      teamLogo.classList.remove('hidden');
+      teamNameEl.textContent = team.name;
+      teamNameEl.classList.remove('hidden');
+    }
+
+    if (status === 'unregistered') {
+      // 未登録 → ニックネーム＋メール登録フォーム表示
+      nameFormCard.classList.remove('hidden');
+      welcomeCard.classList.add('hidden');
+      registerBtn.disabled = false;
+    } else if (status === 'registered') {
+      // 登録済み → ウェルカム画面表示
+      nameFormCard.classList.add('hidden');
+      welcomeCard.classList.remove('hidden');
+      welcomeName.textContent = user.name;
+
+      if (member) {
+        oshiPhoto.src = member.image_url;
+        oshiName.textContent = member.name;
+        oshiPosition.textContent = member.type === 'mascot' ? 'マスコット' : (member.type || '');
+        oshiData.textContent = (member.metadata && member.metadata.description) || '';
+      }
+    }
+  }
+
+  function isValidEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  }
+
+  registerBtn.addEventListener('click', () => {
+    const name = nameInput.value.trim();
+    const email = emailInput.value.trim();
+    formError.classList.add('hidden');
+
+    if (!name) {
+      formError.textContent = 'ニックネームを入力してください';
+      formError.classList.remove('hidden');
+      return;
+    }
+    if (!isValidEmail(email)) {
+      formError.textContent = 'メールアドレスの形式が正しくありません';
+      formError.classList.remove('hidden');
+      return;
+    }
+
+    registerBtn.disabled = true;
+    send({ type: 'register', id: deviceId, name, email });
+  });
+
+  [nameInput, emailInput].forEach((el) => {
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') registerBtn.click();
+    });
+  });
+
+  connect();
+})();
+</script>
+</body>
+</html>
