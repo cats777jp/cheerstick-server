@@ -2,18 +2,19 @@
 // CheerStick WebSocketサーバー。
 //
 // 対応イベント：
-//   connect  : HTML -> Server { type: "connect", id }
-//              Server -> HTML { type: "connect", status, user, team, member }
-//              status: "unregistered"（未登録→名前+メール登録フォーム表示）
-//                    | "registered"（登録済み→ウェルカム画面表示）
-//   register : HTML -> Server { type: "register", id, name, email }
-//              Server -> HTML { type: "connect", ... }（登録後の最新状態を返す）
-//   set_oshi : HTML -> Server { type: "set_oshi", id, target_id }
-//              Server -> HTML { type: "connect", ... }
+//   connect     : HTML -> Server { type: "connect", id }
+//                 Server -> HTML { type: "connect", status, user, teams?, team, targets?, member }
+//                 status: "unregistered"      -> ニックネーム+メール登録フォーム表示
+//                       | "team_selection"    -> チーム選択画面表示（teamsに選択肢）
+//                       | "player_selection"  -> 選手/推し選択画面表示（targetsに選択肢）
+//                       | "complete"          -> ウェルカム画面表示
+//   register    : HTML -> Server { type: "register", id, name, email }
+//   select_team : HTML -> Server { type: "select_team", id, organization_id }
+//   set_oshi    : HTML -> Server { type: "set_oshi", id, target_id }
+//   （いずれも応答は type: "connect" の最新状態）
 
 const { WebSocketServer } = require('ws');
 const cheerQueries = require('../db/cheerstickQueries');
-const { DEFAULT_TARGET_ID } = require('../config/cheerstickDefaults');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -33,22 +34,38 @@ function buildMemberPayload(row) {
     name: row.target_name,
     type: row.target_type,
     image_url: row.target_image_url,
+    number: row.target_number,
     metadata: row.target_metadata,
   };
 }
 
+function computeStatus(row) {
+  if (!row || !row.owner_user_id) return 'unregistered';
+  if (!row.selected_organization_id) return 'team_selection';
+  if (!row.current_target_id) return 'player_selection';
+  return 'complete';
+}
+
 async function buildConnectResponse(macAddress) {
   const row = await cheerQueries.findDeviceWithProfile(macAddress);
+  const status = computeStatus(row);
 
-  const isRegistered = !!(row && row.owner_user_id);
-
-  return {
+  const payload = {
     type: 'connect',
-    status: isRegistered ? 'registered' : 'unregistered',
-    user: isRegistered ? { name: row.display_name, email: row.email } : null,
+    status,
+    user: row && row.owner_user_id ? { name: row.display_name, email: row.email } : null,
     team: buildTeamPayload(row),
     member: buildMemberPayload(row),
   };
+
+  if (status === 'team_selection') {
+    payload.teams = await cheerQueries.listOrganizations();
+  }
+  if (status === 'player_selection') {
+    payload.targets = await cheerQueries.listTargetsByOrganization(row.selected_organization_id);
+  }
+
+  return payload;
 }
 
 class CheerWebSocketServer {
@@ -97,10 +114,19 @@ class CheerWebSocketServer {
                 return this.send(ws, { type: 'error', message: 'invalid email format' });
               }
               await cheerQueries.registerDeviceOwner(id, email, name);
+              this.send(ws, await buildConnectResponse(id));
+              break;
+            }
 
-              // 現状は1チーム・1推し対象のみのため、登録と同時に既定の推しを割り当てる
-              await cheerQueries.setDeviceTarget(id, DEFAULT_TARGET_ID);
-
+            case 'select_team': {
+              const { id, organization_id: organizationId } = msg;
+              if (!id || !organizationId) {
+                return this.send(ws, {
+                  type: 'error',
+                  message: 'id and organization_id are required',
+                });
+              }
+              await cheerQueries.setDeviceOrganization(id, organizationId);
               this.send(ws, await buildConnectResponse(id));
               break;
             }
@@ -123,7 +149,11 @@ class CheerWebSocketServer {
           }
         } catch (err) {
           console.error('[WS] handler error:', err);
-          this.send(ws, { type: 'error', message: 'internal server error' });
+          const message =
+            err.code === 'TARGET_TEAM_MISMATCH'
+              ? '選択中のチームに属さない対象です'
+              : 'internal server error';
+          this.send(ws, { type: 'error', message });
         }
       });
 

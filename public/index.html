@@ -48,7 +48,7 @@
 
   .card {
     width: 100%;
-    max-width: 360px;
+    max-width: 380px;
     background: var(--card-bg);
     border-radius: 16px;
     padding: 28px 24px;
@@ -111,7 +111,7 @@
     padding: 12px;
     text-align: left;
   }
-  .oshi-photo {
+  .oshi-photo, .avatar {
     width: 56px;
     height: 56px;
     border-radius: 10px;
@@ -119,9 +119,51 @@
     background: #222;
     flex-shrink: 0;
   }
+  .avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 18px;
+    color: #fff;
+  }
   .oshi-name { font-size: 15px; font-weight: 600; margin: 0; }
   .oshi-position { font-size: 12px; color: var(--team-color); margin: 2px 0; }
   .oshi-data { font-size: 11px; color: var(--text-muted); margin: 0; }
+
+  /* 選択リスト（チーム／選手） */
+  .select-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .select-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: #0b0f14;
+    border: 1px solid #2a323c;
+    border-radius: 12px;
+    padding: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .select-item:hover, .select-item:active {
+    border-color: var(--team-color);
+  }
+  .select-item .thumb {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    object-fit: cover;
+    background: #fff;
+    flex-shrink: 0;
+  }
+  .select-item .avatar { width: 48px; height: 48px; font-size: 16px; }
+  .select-item .label { font-size: 14px; font-weight: 600; }
+  .select-item .sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
   .hidden { display: none !important; }
 </style>
@@ -133,7 +175,7 @@
   <img id="teamLogo" class="team-logo hidden" alt="team logo">
   <div id="teamName" class="team-name hidden"></div>
 
-  <!-- 未登録時：ニックネーム＋メールアドレス登録フォーム -->
+  <!-- 1. 未登録時：ニックネーム＋メールアドレス登録フォーム -->
   <div id="nameFormCard" class="card hidden">
     <h1>応援スティックへようこそ！<br>ニックネームとメールアドレスを登録してください</h1>
     <input type="text" id="nameInput" placeholder="ニックネーム" maxlength="20" autocomplete="nickname">
@@ -142,13 +184,26 @@
     <button id="registerBtn">登録する</button>
   </div>
 
-  <!-- 名前登録済み：ウェルカム画面 -->
+  <!-- 2. チーム選択画面 -->
+  <div id="teamSelectCard" class="card hidden">
+    <h1>応援するチームを選んでください</h1>
+    <div id="teamList" class="select-list"></div>
+  </div>
+
+  <!-- 3. 選手（推し）選択画面 -->
+  <div id="playerSelectCard" class="card hidden">
+    <h1>推しを選んでください</h1>
+    <div id="playerList" class="select-list"></div>
+  </div>
+
+  <!-- 4. 選択完了：ウェルカム画面 -->
   <div id="welcomeCard" class="card hidden">
     <p class="welcome-name" id="welcomeName"></p>
     <p class="welcome-sub">さん、応援ありがとうございます！</p>
 
     <div class="oshi-card">
-      <img id="oshiPhoto" class="oshi-photo" alt="推し">
+      <img id="oshiPhoto" class="oshi-photo hidden" alt="推し">
+      <div id="oshiAvatar" class="avatar hidden"></div>
       <div>
         <p class="oshi-name" id="oshiName"></p>
         <p class="oshi-position" id="oshiPosition"></p>
@@ -165,17 +220,33 @@
   const statusBar = document.getElementById('statusBar');
   const teamLogo = document.getElementById('teamLogo');
   const teamNameEl = document.getElementById('teamName');
+
   const nameFormCard = document.getElementById('nameFormCard');
+  const teamSelectCard = document.getElementById('teamSelectCard');
+  const playerSelectCard = document.getElementById('playerSelectCard');
   const welcomeCard = document.getElementById('welcomeCard');
+
   const nameInput = document.getElementById('nameInput');
   const emailInput = document.getElementById('emailInput');
   const formError = document.getElementById('formError');
   const registerBtn = document.getElementById('registerBtn');
+
+  const teamList = document.getElementById('teamList');
+  const playerList = document.getElementById('playerList');
+
   const welcomeName = document.getElementById('welcomeName');
   const oshiPhoto = document.getElementById('oshiPhoto');
+  const oshiAvatar = document.getElementById('oshiAvatar');
   const oshiName = document.getElementById('oshiName');
   const oshiPosition = document.getElementById('oshiPosition');
   const oshiData = document.getElementById('oshiData');
+
+  const AVATAR_COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#8338ec', '#3a86ff', '#ff6b6b'];
+  function colorFor(id) {
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  }
 
   if (!deviceId) {
     statusBar.textContent = 'エラー：MACアドレス(id)が指定されていません';
@@ -216,6 +287,8 @@
         registerBtn.disabled = false;
         formError.textContent = msg.message;
         formError.classList.remove('hidden');
+        statusBar.textContent = msg.message;
+        statusBar.classList.add('error');
       }
     });
 
@@ -236,31 +309,104 @@
     }
   }
 
+  function hideAllCards() {
+    [nameFormCard, teamSelectCard, playerSelectCard, welcomeCard].forEach((c) =>
+      c.classList.add('hidden')
+    );
+  }
+
+  function renderTeamList(teams) {
+    teamList.innerHTML = '';
+    teams.forEach((team) => {
+      const item = document.createElement('div');
+      item.className = 'select-item';
+      item.innerHTML = `
+        <img class="thumb" src="${team.logo_url || ''}" alt="">
+        <div>
+          <div class="label">${escapeHtml(team.name)}</div>
+        </div>
+      `;
+      item.addEventListener('click', () => {
+        send({ type: 'select_team', id: deviceId, organization_id: team.id });
+      });
+      teamList.appendChild(item);
+    });
+  }
+
+  function renderPlayerList(targets) {
+    playerList.innerHTML = '';
+    targets.forEach((t) => {
+      const item = document.createElement('div');
+      item.className = 'select-item';
+
+      const thumbHtml = t.image_url
+        ? `<img class="thumb" src="${t.image_url}" alt="">`
+        : `<div class="avatar" style="background:${colorFor(t.id)}">${escapeHtml((t.name || '?').charAt(0))}</div>`;
+
+      const subLabel = t.type === 'mascot' ? 'マスコット' : (t.number ? `背番号 ${t.number}` : '');
+
+      item.innerHTML = `
+        ${thumbHtml}
+        <div>
+          <div class="label">${escapeHtml(t.name)}</div>
+          <div class="sub">${escapeHtml(subLabel)}</div>
+        </div>
+      `;
+      item.addEventListener('click', () => {
+        send({ type: 'set_oshi', id: deviceId, target_id: t.id });
+      });
+      playerList.appendChild(item);
+    });
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
   function renderConnect(msg) {
-    const { status, user, team, member } = msg;
+    const { status, user, team, member, teams, targets } = msg;
 
     if (team) {
       teamLogo.src = team.logo_url;
       teamLogo.classList.remove('hidden');
       teamNameEl.textContent = team.name;
       teamNameEl.classList.remove('hidden');
+    } else {
+      teamLogo.classList.add('hidden');
+      teamNameEl.classList.add('hidden');
     }
 
+    hideAllCards();
+
     if (status === 'unregistered') {
-      // 未登録 → ニックネーム＋メール登録フォーム表示
       nameFormCard.classList.remove('hidden');
-      welcomeCard.classList.add('hidden');
       registerBtn.disabled = false;
-    } else if (status === 'registered') {
-      // 登録済み → ウェルカム画面表示
-      nameFormCard.classList.add('hidden');
+    } else if (status === 'team_selection') {
+      teamSelectCard.classList.remove('hidden');
+      renderTeamList(teams || []);
+    } else if (status === 'player_selection') {
+      playerSelectCard.classList.remove('hidden');
+      renderPlayerList(targets || []);
+    } else if (status === 'complete') {
       welcomeCard.classList.remove('hidden');
       welcomeName.textContent = user.name;
 
       if (member) {
-        oshiPhoto.src = member.image_url;
+        if (member.image_url) {
+          oshiPhoto.src = member.image_url;
+          oshiPhoto.classList.remove('hidden');
+          oshiAvatar.classList.add('hidden');
+        } else {
+          oshiAvatar.textContent = (member.name || '?').charAt(0);
+          oshiAvatar.style.background = colorFor(member.id);
+          oshiAvatar.classList.remove('hidden');
+          oshiPhoto.classList.add('hidden');
+        }
         oshiName.textContent = member.name;
-        oshiPosition.textContent = member.type === 'mascot' ? 'マスコット' : (member.type || '');
+        oshiPosition.textContent =
+          member.type === 'mascot' ? 'マスコット' : (member.number ? `背番号 ${member.number}` : (member.type || ''));
         oshiData.textContent = (member.metadata && member.metadata.description) || '';
       }
     }
