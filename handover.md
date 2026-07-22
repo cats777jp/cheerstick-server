@@ -191,3 +191,49 @@ claude
 ```
 /exit または Ctrl+C を2回
 ```
+
+---
+
+## 2026-07-22: カテゴリー（ジャンル）機能の追加
+
+### 背景
+
+応援グッズは「Jリーグ用」「Vリーグ用」のようにジャンル単位で販売される（＝収益モデル上、グッズ購入時点でジャンルが確定している）。そのため、量産機のMACアドレスは入荷ロット段階でKMT側がカテゴリーを振り分け、CSVインポート時にカテゴリーが確定している前提とする。ユーザーにカテゴリーを選ばせる画面は作らず、category_id未設定のデバイスは異常系（エラー）として扱う設計。チーム選択・推し選択のUI/フロー自体は変更なし。
+
+### スキーマ変更（`migrations/004_add_category.sql`）
+
+| 変更 | 内容 |
+|---|---|
+| `categories`（新設） | カテゴリーマスタ。`name`, `slug`（例: `j-league`）。初期データとしてJリーグを投入 |
+| `organizations.category_id` | 追加。既存のV・ファーレン長崎をJリーグに紐付け済み |
+| `devices.category_id` | 追加。既存デバイス（テスト機）は暫定でJリーグに紐付け済み |
+| `devices.preset_organization_id` | 追加。**将来拡張用の予約カラム**（チーム専用グッズ対応）。今回はロジック未実装・常にNULL |
+
+### WebSocketロジック変更（`src/websocket/index.js`, `src/db/cheerstickQueries.js`）
+
+- `category_id`が未設定のデバイスは`connect`時に`status: "error"`＋「カテゴリー未設定のデバイスです。サポートまでお問い合わせください。」を返す（`computeStatus`内で最優先チェック）
+- `team_selection`の選択肢（`organizations`）は、デバイスの`category_id`で絞り込むように変更（`listOrganizations(categoryId)`）
+- `select_team`で、選択された`organization_id`がデバイスの`category_id`と一致しない場合はエラー（`CATEGORY_MISMATCH`）を返し更新を拒否
+- **`category_selection`状態・`select_category`メッセージは実装していない**（カテゴリーはCSVインポート時に確定しており、正常フローには存在しない前提のため、意図的にスコープ外とした設計判断）
+- `preset_organization_id`を使った分岐（将来、team_selectionをスキップしてplayer_selectionへ直接進める機能）はTODOコメントのみ。ロジック未実装
+
+### 本番反映
+
+- ブランチ`feature/category-support`で実装 → `main`へマージ・push（マージコミット `7c100b6`、実装コミット `d75d8f1`）
+- EC2本番環境（`cheerstick-server`, `/home/ubuntu/cheerstick-server-new`）へ反映済み
+  - 変更ファイル（`migrations/004_add_category.sql`, `src/db/cheerstickQueries.js`, `src/websocket/index.js`）を転送し、md5sumで一致確認
+  - 適用前に本番DB（`cheerstick_production`）を`pg_dump`でバックアップ（`~/db_backups/`配下）
+  - `npm run migrate`でマイグレーション適用済み（`schema_migrations`に`004_add_category.sql`記録済み）
+  - `pm2 restart cheerstick-server`済み、ログにエラーなし
+
+### 動作確認
+
+実回線（`wss://ws.cheerstick.com/cheer`）で確認済み。検証用に一時作成したテストデバイス・ダミー組織・テストユーザーは確認後すべて削除済み（本番データへの影響なし）。
+
+- ✅ 正常系: `connect`（unregistered）→`register`（team_selection、teamsがJリーグの1チームのみに絞り込まれることを確認）→`select_team`→`player_selection`→`set_oshi`→`complete`
+- ✅ 異常系: category_id未設定のMACアドレスで`connect`→`status: "error"`＋所定メッセージを実フレームで確認
+
+### 次回への申し送り
+
+- **CSVインポート機能実装時**、`category_slug`列からの`category_id`反映が必要（仕様は別紙`csv-import-category-spec.md`参照。不明なslugはインポートエラーとして弾く設計）
+- **`preset_organization_id`の将来実装**：チーム専用グッズ運用が始まった際、値が入っているデバイスは`team_selection`をスキップして`player_selection`から開始する分岐の実装が必要（現状はカラムのみ存在、ロジック未実装）
