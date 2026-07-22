@@ -3,11 +3,12 @@
 //
 // 対応イベント：
 //   connect     : HTML -> Server { type: "connect", id }
-//                 Server -> HTML { type: "connect", status, user, teams?, team, targets?, member }
+//                 Server -> HTML { type: "connect", status, user, teams?, team, targets?, member, message? }
 //                 status: "unregistered"      -> ニックネーム+メール登録フォーム表示
 //                       | "team_selection"    -> チーム選択画面表示（teamsに選択肢）
 //                       | "player_selection"  -> 選手/推し選択画面表示（targetsに選択肢）
 //                       | "complete"          -> ウェルカム画面表示
+//                       | "error"             -> category_id未設定デバイス等の異常系（messageに理由）
 //   register    : HTML -> Server { type: "register", id, name, email }
 //   select_team : HTML -> Server { type: "select_team", id, organization_id }
 //   set_oshi    : HTML -> Server { type: "set_oshi", id, target_id }
@@ -40,7 +41,12 @@ function buildMemberPayload(row) {
 }
 
 function computeStatus(row) {
-  if (!row || !row.owner_user_id) return 'unregistered';
+  // category_id未設定のデバイスは異常系として扱う（カテゴリー選択画面は作らない）。
+  // ensureDeviceで作成されただけの未インポートデバイスは常にここに該当する。
+  if (!row || !row.category_id) return 'error';
+  // ★将来拡張用（今回は未実装）：preset_organization_idが入っている場合、
+  //   team_selectionをスキップしてplayer_selectionから開始する分岐をここに追加する想定。
+  if (!row.owner_user_id) return 'unregistered';
   if (!row.selected_organization_id) return 'team_selection';
   if (!row.current_target_id) return 'player_selection';
   return 'complete';
@@ -58,8 +64,11 @@ async function buildConnectResponse(macAddress) {
     member: buildMemberPayload(row),
   };
 
+  if (status === 'error') {
+    payload.message = 'カテゴリー未設定のデバイスです。サポートまでお問い合わせください。';
+  }
   if (status === 'team_selection') {
-    payload.teams = await cheerQueries.listOrganizations();
+    payload.teams = await cheerQueries.listOrganizations(row.category_id);
   }
   if (status === 'player_selection') {
     payload.targets = await cheerQueries.listTargetsByOrganization(row.selected_organization_id);
@@ -152,6 +161,8 @@ class CheerWebSocketServer {
           const message =
             err.code === 'TARGET_TEAM_MISMATCH'
               ? '選択中のチームに属さない対象です'
+              : err.code === 'CATEGORY_MISMATCH'
+              ? '選択できないチームです。'
               : 'internal server error';
           this.send(ws, { type: 'error', message });
         }

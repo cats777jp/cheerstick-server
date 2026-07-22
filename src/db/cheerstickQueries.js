@@ -16,6 +16,7 @@ async function findDeviceWithProfile(macAddress) {
     SELECT
       d.id                       AS device_id,
       d.mac_address,
+      d.category_id,
       d.owner_user_id,
       d.selected_organization_id,
       d.current_target_id,
@@ -99,10 +100,13 @@ async function registerDeviceOwner(macAddress, email, displayName) {
 
 /**
  * 応援チーム一覧（organizations）を取得。
+ * デバイスのcategory_idに属するチームのみに絞り込む
+ * （グッズがジャンル単位で販売されるため、異なるジャンルのチームは選択肢に出さない）。
  */
-async function listOrganizations() {
+async function listOrganizations(categoryId) {
   const { rows } = await db.query(
-    `SELECT id, name, logo_url FROM organizations WHERE is_active = TRUE ORDER BY name`
+    `SELECT id, name, logo_url FROM organizations WHERE category_id = $1 AND is_active = TRUE ORDER BY name`,
+    [categoryId]
   );
   return rows;
 }
@@ -123,9 +127,25 @@ async function listTargetsByOrganization(organizationId) {
 
 /**
  * デバイスの「応援チーム」を選択。チームを変更した場合は推し選択をリセットする。
+ * 選択中デバイスのcategory_idに属さないorganizationは拒否する。
  */
 async function setDeviceOrganization(macAddress, organizationId) {
   await ensureDevice(macAddress);
+
+  const { rows } = await db.query(
+    `SELECT d.category_id AS device_category_id, o.category_id AS org_category_id
+     FROM devices d, organizations o
+     WHERE d.mac_address = $1 AND o.id = $2`,
+    [macAddress, organizationId]
+  );
+
+  const row = rows[0];
+  if (!row || !row.device_category_id || row.device_category_id !== row.org_category_id) {
+    const err = new Error('organization does not belong to the device category');
+    err.code = 'CATEGORY_MISMATCH';
+    throw err;
+  }
+
   await db.query(
     `UPDATE devices
      SET selected_organization_id = $1, current_target_id = NULL
