@@ -3,7 +3,7 @@
 //
 // 対応イベント：
 //   connect     : HTML -> Server { type: "connect", id }
-//                 Server -> HTML { type: "connect", status, user, teams?, team, targets?, member, message? }
+//                 Server -> HTML { type: "connect", status, user, teams?, team, targets?, member, message?, reference_url? }
 //                 status: "unregistered"      -> ニックネーム+メール登録フォーム表示
 //                       | "team_selection"    -> チーム選択画面表示（teamsに選択肢）
 //                       | "player_selection"  -> 選手/推し選択画面表示（targetsに選択肢）
@@ -16,6 +16,7 @@
 
 const { WebSocketServer } = require('ws');
 const cheerQueries = require('../db/cheerstickQueries');
+const { generateReferenceToken } = require('../utils/referenceToken');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -72,6 +73,11 @@ async function buildConnectResponse(macAddress) {
   }
   if (status === 'player_selection') {
     payload.targets = await cheerQueries.listTargetsByOrganization(row.selected_organization_id);
+  }
+
+  if (row) {
+    const token = generateReferenceToken(row.device_id, row.mac_address);
+    payload.reference_url = `https://app.cheerstick.com/reference.html?token=${token}`;
   }
 
   return payload;

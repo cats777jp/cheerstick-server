@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>応援データ参照 | CheerStick</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700;900&family=Noto+Sans+JP:wght@400;500&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0d12;
+    --surface: #141922;
+    --surface-2: #1c222e;
+    --border: rgba(255, 255, 255, 0.08);
+    --text-primary: #f2f4f8;
+    --text-secondary: #8a93a6;
+    --text-tertiary: #565f72;
+    --accent: #ff7a45;
+    --accent-dim: rgba(255, 122, 69, 0.16);
+    --accent-glow: rgba(255, 122, 69, 0.55);
+    --font-display: 'Zen Kaku Gothic New', sans-serif;
+    --font-body: 'Noto Sans JP', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --radius: 20px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle at 20% 0%, rgba(255, 122, 69, 0.10), transparent 45%),
+      radial-gradient(circle at 85% 15%, rgba(255, 122, 69, 0.06), transparent 40%);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+
+  .page {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 28px 20px 48px;
+    min-height: 100vh;
+  }
+
+  a { color: inherit; }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  /* ---------- Loading state ---------- */
+  #state-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 70vh;
+    gap: 14px;
+    color: var(--text-secondary);
+  }
+
+  .loader-glow {
+    width: 14px;
+    height: 44px;
+    border-radius: 8px;
+    background: linear-gradient(180deg, var(--accent), rgba(255, 122, 69, 0.15));
+    box-shadow: 0 0 18px var(--accent-glow);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.35; transform: scaleY(0.7); }
+    50% { opacity: 1; transform: scaleY(1); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .loader-glow { animation: none; opacity: 0.8; }
+  }
+
+  #state-loading .loader-label {
+    font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ---------- Error state ---------- */
+  #state-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    justify-content: center;
+    min-height: 70vh;
+    gap: 12px;
+    padding: 0 12px;
+  }
+
+  #state-error .error-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-weight: 700;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  #state-error h1 {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  #state-error p {
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 30em;
+  }
+
+  /* ---------- Content ---------- */
+  #state-content { display: none; }
+  #state-content.visible { display: block; }
+
+  .fan-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-bottom: 22px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .team-logo {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    object-fit: contain;
+    padding: 6px;
+    flex-shrink: 0;
+  }
+
+  .team-logo.placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .fan-header .eyebrow {
+    font-size: 11.5px;
+    color: var(--accent);
+    letter-spacing: 0.06em;
+    font-weight: 500;
+    margin: 0 0 3px;
+  }
+
+  .fan-header .nickname {
+    font-family: var(--font-display);
+    font-size: 21px;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.3;
+  }
+
+  .fan-header .oshi-line {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    margin: 3px 0 0;
+  }
+
+  section.block { margin-bottom: 28px; }
+
+  .block h2 {
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    letter-spacing: 0.04em;
+    margin: 0 0 14px;
+  }
+
+  /* ---------- Recent events: glow-stick bars ---------- */
+  .bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 18px 18px;
+  }
+
+  .bar-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .bar-track {
+    width: 100%;
+    height: 130px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .bar-stick {
+    width: 15px;
+    border-radius: 8px;
+    background: linear-gradient(180deg, var(--accent) 0%, rgba(255, 122, 69, 0.35) 100%);
+    box-shadow: 0 0 14px var(--accent-glow);
+    position: relative;
+    min-height: 6px;
+    transition: height 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .bar-stick::after {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 21px;
+    height: 21px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 16px 4px var(--accent-glow);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar-stick { transition: none; }
+  }
+
+  .bar-value {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .bar-date {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+
+  .bar-title {
+    font-size: 10.5px;
+    color: var(--text-secondary);
+    text-align: center;
+    line-height: 1.4;
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .bars-empty {
+    width: 100%;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 12.5px;
+    padding: 20px 0;
+  }
+
+  /* ---------- All-time total ---------- */
+  .alltime-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 20px;
+  }
+
+  .alltime-number {
+    font-family: var(--font-mono);
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  .alltime-unit {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-left: 4px;
+  }
+
+  .alltime-meter {
+    margin-top: 14px;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  .alltime-meter-fill {
+    height: 100%;
+    width: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, rgba(255, 122, 69, 0.25), var(--accent));
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div id="state-loading">
+    <div class="loader-glow" aria-hidden="true"></div>
+    <p class="loader-label">応援データを読み込み中…</p>
+  </div>
+
+  <div id="state-error" hidden>
+    <div class="error-icon" aria-hidden="true">!</div>
+    <h1>データを表示できませんでした</h1>
+    <p id="error-message">このリンクは無効か、有効期限が切れています。アプリを開いてもう一度お試しください。</p>
+  </div>
+
+  <div id="state-content">
+    <header class="fan-header">
+      <div id="team-logo-slot"></div>
+      <div>
+        <p class="eyebrow" id="team-name">—</p>
+        <p class="nickname" id="nickname">—</p>
+        <p class="oshi-line" id="oshi-line"></p>
+      </div>
+    </header>
+
+    <section class="block">
+      <h2>直近の応援</h2>
+      <div class="bars" id="bars-container"></div>
+    </section>
+
+    <section class="block">
+      <h2>通算応援量</h2>
+      <div class="alltime-card">
+        <div>
+          <span class="alltime-number" id="alltime-number">0</span>
+          <span class="alltime-unit">応援強度・累計</span>
+        </div>
+        <div class="alltime-meter"><div class="alltime-meter-fill"></div></div>
+      </div>
+    </section>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  // API本体（geturl等と同一のapi.cheerstick.comサブドメイン）
+  // app.cheerstick.com から呼ぶためAPI側でCORS許可が必要（実装メモ参照）
+  var API_BASE = 'https://api.cheerstick.com';
+
+  var els = {
+    loading: document.getElementById('state-loading'),
+    error: document.getElementById('state-error'),
+    errorMessage: document.getElementById('error-message'),
+    content: document.getElementById('state-content'),
+    teamLogoSlot: document.getElementById('team-logo-slot'),
+    teamName: document.getElementById('team-name'),
+    nickname: document.getElementById('nickname'),
+    oshiLine: document.getElementById('oshi-line'),
+    bars: document.getElementById('bars-container'),
+    alltimeNumber: document.getElementById('alltime-number'),
+  };
+
+  function showError(message) {
+    els.loading.hidden = true;
+    els.content.classList.remove('visible');
+    els.error.hidden = false;
+    if (message) els.errorMessage.textContent = message;
+  }
+
+  function showContent() {
+    els.loading.hidden = true;
+    els.error.hidden = true;
+    els.content.classList.add('visible');
+  }
+
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString('ja-JP');
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('ja-JP', {
+      month: 'numeric', day: 'numeric', weekday: 'short'
+    }).format(d);
+  }
+
+  function renderHeader(data) {
+    if (data.team) {
+      var img = document.createElement('img');
+      img.className = 'team-logo';
+      img.src = data.team.logo_url || '';
+      img.alt = data.team.name || 'チームロゴ';
+      img.onerror = function () { img.style.display = 'none'; };
+      els.teamLogoSlot.appendChild(img);
+      els.teamName.textContent = data.team.name;
+    } else {
+      var ph = document.createElement('div');
+      ph.className = 'team-logo placeholder';
+      ph.textContent = '—';
+      els.teamLogoSlot.appendChild(ph);
+      els.teamName.textContent = '応援チーム未選択';
+    }
+
+    els.nickname.textContent = data.nickname || '（ニックネーム未登録）';
+
+    if (data.player) {
+      var num = data.player.number ? '#' + data.player.number + ' ' : '';
+      els.oshiLine.textContent = '推し: ' + num + data.player.name;
+    } else {
+      els.oshiLine.textContent = '推し未選択';
+    }
+  }
+
+  function renderBars(recentEvents) {
+    els.bars.innerHTML = '';
+
+    if (!recentEvents || recentEvents.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'bars-empty';
+      empty.textContent = 'まだ応援データがありません';
+      els.bars.appendChild(empty);
+      return;
+    }
+
+    var maxVal = Math.max.apply(null, recentEvents.map(function (e) {
+      return e.intensity_total || 0;
+    }), 1);
+
+    // 表示は時系列順（古い→新しい）に左から並べる
+    var ordered = recentEvents.slice().reverse();
+
+    ordered.forEach(function (ev) {
+      var item = document.createElement('div');
+      item.className = 'bar-item';
+
+      var track = document.createElement('div');
+      track.className = 'bar-track';
+
+      var stick = document.createElement('div');
+      stick.className = 'bar-stick';
+      var pct = Math.max(6, Math.round((ev.intensity_total / maxVal) * 100));
+      stick.style.height = pct + '%';
+
+      track.appendChild(stick);
+
+      var value = document.createElement('div');
+      value.className = 'bar-value';
+      value.textContent = formatNumber(ev.intensity_total);
+
+      var title = document.createElement('div');
+      title.className = 'bar-title';
+      title.textContent = ev.title || '試合';
+
+      var date = document.createElement('div');
+      date.className = 'bar-date';
+      date.textContent = formatDate(ev.date);
+
+      item.appendChild(track);
+      item.appendChild(value);
+      item.appendChild(title);
+      item.appendChild(date);
+
+      els.bars.appendChild(item);
+    });
+  }
+
+  function renderAllTime(total) {
+    els.alltimeNumber.textContent = formatNumber(total);
+  }
+
+  function render(data) {
+    renderHeader(data);
+    renderBars(data.recent_events);
+    renderAllTime(data.all_time_intensity_total);
+    showContent();
+  }
+
+  function init() {
+    var params = new URLSearchParams(window.location.search);
+    var token = params.get('token');
+
+    if (!token) {
+      showError('リンクが正しくありません。アプリからもう一度アクセスしてください。');
+      return;
+    }
+
+    fetch(API_BASE + '/api/v1/webview/reference?token=' + encodeURIComponent(token))
+      .then(function (res) {
+        if (!res.ok) {
+          throw new Error('HTTP_' + res.status);
+        }
+        return res.json();
+      })
+      .then(render)
+      .catch(function (err) {
+        console.error('reference fetch failed:', err);
+        showError('このリンクは無効か、有効期限が切れています。アプリを開いてもう一度お試しください。');
+      });
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>

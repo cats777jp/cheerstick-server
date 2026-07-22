@@ -181,6 +181,60 @@ async function setDeviceTarget(macAddress, targetId) {
   );
 }
 
+/**
+ * データ参照機能：デバイスID（devices.id）からプロフィール（ニックネーム・チーム・推し）を取得。
+ * メールアドレスは参照ページに出さないため、SELECTしない。
+ */
+async function getDeviceReferenceProfile(deviceId) {
+  const { rows } = await db.query(
+    `SELECT d.mac_address, u.display_name AS nickname,
+            o.name AS team_name, o.logo_url AS team_logo_url,
+            t.name AS player_name, t.image_url AS player_image_url, t.number AS player_number
+     FROM devices d
+     LEFT JOIN users u ON d.owner_user_id = u.id
+     LEFT JOIN organizations o ON d.selected_organization_id = o.id
+     LEFT JOIN targets t ON d.current_target_id = t.id
+     WHERE d.id = $1`,
+    [deviceId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * データ参照機能：デバイスの直近イベント別の応援量集計（新しい順、limit件）を取得。
+ */
+async function getRecentEventCheerTotals(deviceId, limit) {
+  const { rows } = await db.query(
+    `SELECT cl.event_id, e.title, e.starts_at,
+            SUM(cl.intensity) AS total_intensity,
+            SUM(cl.duration_ms) AS total_duration_ms,
+            COUNT(*) AS cheer_count
+     FROM cheer_logs cl
+     JOIN events e ON cl.event_id = e.id
+     WHERE cl.device_id = $1
+     GROUP BY cl.event_id, e.title, e.starts_at
+     ORDER BY e.starts_at DESC
+     LIMIT $2`,
+    [deviceId, limit]
+  );
+  return rows;
+}
+
+/**
+ * データ参照機能：デバイスの全期間累計応援量を取得。
+ */
+async function getAllTimeCheerTotal(deviceId) {
+  const { rows } = await db.query(
+    `SELECT SUM(intensity) AS total_intensity,
+            SUM(duration_ms) AS total_duration_ms,
+            COUNT(*) AS total_cheer_count
+     FROM cheer_logs
+     WHERE device_id = $1`,
+    [deviceId]
+  );
+  return rows[0];
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -190,4 +244,7 @@ module.exports = {
   listTargetsByOrganization,
   setDeviceOrganization,
   setDeviceTarget,
+  getDeviceReferenceProfile,
+  getRecentEventCheerTotals,
+  getAllTimeCheerTotal,
 };

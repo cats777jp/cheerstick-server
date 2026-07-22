@@ -166,9 +166,104 @@
   .select-item .sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
   .hidden { display: none !important; }
+
+  /* ---------- 起動時スプラッシュ（接続確認〜ステータス判定） ---------- */
+  #entrySplash {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px;
+    text-align: center;
+    background: var(--bg);
+    transition: opacity 0.4s ease;
+  }
+  #entrySplash.fade-out {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .glow-capsule {
+    width: 18px;
+    height: 56px;
+    border-radius: 9px;
+    background: linear-gradient(180deg, var(--team-color), rgba(255, 255, 255, 0.05));
+    box-shadow: 0 0 20px var(--team-color);
+    animation: splashPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes splashPulse {
+    0%, 100% { opacity: 0.35; transform: scaleY(0.7); }
+    50% { opacity: 1; transform: scaleY(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .glow-capsule { animation: none; opacity: 0.85; }
+  }
+  .splash-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }
+  .splash-error {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .splash-error.visible { display: flex; }
+  .splash-error .error-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--card-bg);
+    border: 1px solid #2a323c;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .splash-error .error-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+  }
+  .splash-error .error-message {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.7;
+    max-width: 28em;
+    margin: 0;
+  }
+  .splash-error .retry-button {
+    margin-top: 4px;
+    padding: 10px 24px;
+    border-radius: 999px;
+    border: 1px solid #2a323c;
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .splash-error .retry-button:active { opacity: 0.8; }
 </style>
 </head>
 <body>
+
+  <div id="entrySplash">
+    <div id="splashConnecting">
+      <div class="glow-capsule" aria-hidden="true"></div>
+      <p class="splash-label" id="splashLabel">接続を確認しています…</p>
+    </div>
+    <div class="splash-error" id="splashError">
+      <div class="error-icon" aria-hidden="true">!</div>
+      <p class="error-title" id="splashErrorTitle">接続できませんでした</p>
+      <p class="error-message" id="splashErrorMessage">通信状態をご確認のうえ、もう一度お試しください。</p>
+      <button class="retry-button" id="splashRetryBtn" type="button">もう一度試す</button>
+    </div>
+  </div>
 
   <div id="statusBar" class="status-bar">接続中...</div>
 
@@ -221,6 +316,42 @@
   const teamLogo = document.getElementById('teamLogo');
   const teamNameEl = document.getElementById('teamName');
 
+  const entrySplash = document.getElementById('entrySplash');
+  const splashConnecting = document.getElementById('splashConnecting');
+  const splashLabel = document.getElementById('splashLabel');
+  const splashError = document.getElementById('splashError');
+  const splashErrorTitle = document.getElementById('splashErrorTitle');
+  const splashErrorMessage = document.getElementById('splashErrorMessage');
+  const splashRetryBtn = document.getElementById('splashRetryBtn');
+
+  // まだ一度もカード（登録／チーム選択／推し選択／完了）を表示していない間は、
+  // 通信エラー等をフルスクリーンのスプラッシュ上に表示する。
+  // 一度でも表示した後は、既存のstatusBar（画面上部の小さなテキスト）で
+  // 再接続状況を知らせる（今まで通りの挙動）。
+  let hasShownContent = false;
+
+  function showSplashConnecting(label) {
+    entrySplash.classList.remove('fade-out');
+    entrySplash.style.display = 'flex';
+    splashError.classList.remove('visible');
+    splashConnecting.style.display = 'flex';
+    splashLabel.textContent = label || '接続を確認しています…';
+  }
+
+  function showSplashError(title, message) {
+    entrySplash.classList.remove('fade-out');
+    entrySplash.style.display = 'flex';
+    splashConnecting.style.display = 'none';
+    splashError.classList.add('visible');
+    if (title) splashErrorTitle.textContent = title;
+    if (message) splashErrorMessage.textContent = message;
+  }
+
+  function hideSplash() {
+    entrySplash.classList.add('fade-out');
+    window.setTimeout(() => { entrySplash.style.display = 'none'; }, 400);
+  }
+
   const nameFormCard = document.getElementById('nameFormCard');
   const teamSelectCard = document.getElementById('teamSelectCard');
   const playerSelectCard = document.getElementById('playerSelectCard');
@@ -249,8 +380,7 @@
   }
 
   if (!deviceId) {
-    statusBar.textContent = 'エラー：MACアドレス(id)が指定されていません';
-    statusBar.classList.add('error');
+    showSplashError('起動できませんでした', 'デバイス情報を取得できませんでした。アプリを再起動してください。');
     return;
   }
 
@@ -263,13 +393,29 @@
 
   let socket;
   let reconnectTimer = null;
+  let reconnectAttempts = 0;
+
+  // ランダム要素を含む再接続待機時間を計算する。
+  // 同時多発切断（Wi-Fi/基地局の瞬断等）が起きた際、数百〜数千台が
+  // 一斉に同じタイミングでリトライして負荷が集中する「リトライストーム」を
+  // 避けるため、基準時間に±のばらつきを持たせ、失敗が続く場合は
+  // 間隔を段階的に広げる（上限あり）。
+  function nextReconnectDelay() {
+    const base = Math.min(2000 * Math.pow(1.5, reconnectAttempts), 10000); // 2s → 最大10s
+    const jitter = base * 0.5 * (Math.random() * 2 - 1); // ±50%のランダム幅
+    return Math.max(1000, Math.round(base + jitter));
+  }
 
   function connect() {
+    if (!hasShownContent) {
+      showSplashConnecting('接続を確認しています…');
+    }
     statusBar.textContent = '接続中...';
     statusBar.classList.remove('error');
     socket = new WebSocket(wsUrl);
 
     socket.addEventListener('open', () => {
+      reconnectAttempts = 0;
       statusBar.textContent = '';
       send({ type: 'connect', id: deviceId });
     });
@@ -293,9 +439,17 @@
     });
 
     socket.addEventListener('close', () => {
+      if (!hasShownContent) {
+        // 初回接続がまだ成立していない間は、無限リトライをスプラッシュの裏で
+        // 繰り返すのではなく、状況を明示してユーザー操作でリトライさせる
+        showSplashError('接続できませんでした', '通信状態をご確認のうえ、もう一度お試しください。');
+        return;
+      }
       statusBar.textContent = '接続が切れました。再接続しています...';
       statusBar.classList.add('error');
-      reconnectTimer = setTimeout(connect, 2000);
+      const delay = nextReconnectDelay();
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(connect, delay);
     });
 
     socket.addEventListener('error', () => {
@@ -366,7 +520,23 @@
   }
 
   function renderConnect(msg) {
-    const { status, user, team, member, teams, targets } = msg;
+    const { status, user, team, member, teams, targets, message } = msg;
+
+    // category_id未設定デバイス等、そもそもカードを出せないケース。
+    // 以前は分岐が無く画面が真っ黒になっていたため、ここで明示的にハンドリングする。
+    if (status === 'error') {
+      hideAllCards();
+      showSplashError(
+        'ご利用いただけません',
+        message || 'サポートまでお問い合わせください。'
+      );
+      return;
+    }
+
+    if (!hasShownContent) {
+      hasShownContent = true;
+      hideSplash();
+    }
 
     if (team) {
       teamLogo.src = team.logo_url;
@@ -434,6 +604,10 @@
 
     registerBtn.disabled = true;
     send({ type: 'register', id: deviceId, name, email });
+  });
+
+  splashRetryBtn.addEventListener('click', () => {
+    connect();
   });
 
   [nameInput, emailInput].forEach((el) => {
