@@ -31,6 +31,7 @@ function buildTeamPayload(row) {
     id: row.org_id,
     name: row.org_name,
     logo_url: row.org_logo_url,
+    color: row.org_color,
   };
 }
 

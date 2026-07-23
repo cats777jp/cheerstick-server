@@ -364,6 +364,19 @@
     background: linear-gradient(90deg, rgba(255, 255, 255, 0.15), var(--team-color));
     box-shadow: 0 0 8px var(--team-color);
   }
+
+  /* ---------- 応援中画面 ---------- */
+  .cheer-count-display {
+    font-size: 64px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 12px 0 20px;
+  }
+  .battery-display, .ble-alert-display {
+    font-size: 13px;
+    color: #ff6b6b;
+    margin: 0 0 16px;
+  }
 </style>
 </head>
 <body>
@@ -434,6 +447,17 @@
         <div class="alltime-meter"><div class="alltime-meter-fill"></div></div>
       </div>
     </div>
+
+    <button id="startCheeringBtn" style="margin-top: 20px;">START</button>
+  </div>
+
+  <!-- 5. 応援中画面 -->
+  <div id="cheeringCard" class="card hidden">
+    <h1>応援中</h1>
+    <div class="cheer-count-display" id="cheerCountDisplay">0</div>
+    <p class="battery-display hidden" id="batteryDisplay">電池残少</p>
+    <p class="ble-alert-display hidden" id="bleAlertDisplay">接続が不安定です。再接続しています…</p>
+    <button id="endCheeringBtn">応援を終了する</button>
   </div>
 
 <script>
@@ -458,6 +482,13 @@
   // 一度でも表示した後は、既存のstatusBar（画面上部の小さなテキスト）で
   // 再接続状況を知らせる（今まで通りの挙動）。
   let hasShownContent = false;
+
+  // 応援中画面で表示中の累計カウント（画面表示用。サーバーへの送信は5回分ずつ）
+  let matchCheerCount = 0;
+
+  // CSSの --team-color 初期値（rgb(0, 90, 170)）と同じ色。teamにcolorが無い場合のフォールバック。
+  const DEFAULT_TEAM_COLOR = '#005AAA';
+  let currentTeamColor = DEFAULT_TEAM_COLOR;
 
   function showSplashConnecting(label) {
     entrySplash.classList.remove('fade-out');
@@ -485,6 +516,13 @@
   const teamSelectCard = document.getElementById('teamSelectCard');
   const playerSelectCard = document.getElementById('playerSelectCard');
   const welcomeCard = document.getElementById('welcomeCard');
+  const cheeringCard = document.getElementById('cheeringCard');
+
+  const startCheeringBtn = document.getElementById('startCheeringBtn');
+  const endCheeringBtn = document.getElementById('endCheeringBtn');
+  const cheerCountDisplay = document.getElementById('cheerCountDisplay');
+  const batteryDisplay = document.getElementById('batteryDisplay');
+  const bleAlertDisplay = document.getElementById('bleAlertDisplay');
 
   const nameInput = document.getElementById('nameInput');
   const emailInput = document.getElementById('emailInput');
@@ -600,7 +638,7 @@
   }
 
   function hideAllCards() {
-    [nameFormCard, teamSelectCard, playerSelectCard, welcomeCard].forEach((c) =>
+    [nameFormCard, teamSelectCard, playerSelectCard, welcomeCard, cheeringCard].forEach((c) =>
       c.classList.add('hidden')
     );
   }
@@ -777,6 +815,9 @@
       teamLogo.classList.remove('hidden');
       teamNameEl.textContent = team.name;
       teamNameEl.classList.remove('hidden');
+
+      currentTeamColor = team.color || DEFAULT_TEAM_COLOR;
+      document.documentElement.style.setProperty('--team-color', currentTeamColor);
     } else {
       teamLogo.classList.add('hidden');
       teamNameEl.classList.add('hidden');
@@ -849,11 +890,145 @@
     connect();
   });
 
+  startCheeringBtn.addEventListener('click', () => {
+    hideAllCards();
+    cheeringCard.classList.remove('hidden');
+    matchCheerCount = 0;
+    cheerCountDisplay.textContent = '0';
+  });
+
+  endCheeringBtn.addEventListener('click', () => {
+    window.CheerStickBridge && window.CheerStickBridge.sendEnd &&
+      window.CheerStickBridge.sendEnd({ stat: 'end' });
+
+    hideAllCards();
+    welcomeCard.classList.remove('hidden');
+  });
+
   [nameInput, emailInput].forEach((el) => {
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') registerBtn.click();
     });
   });
+
+  // ---------- 応援中画面：LED制御ロジック ----------
+  const VIBRATION_THRESHOLD = 25;
+  const MAX_INTENSITY = 21;
+  // 強度0のときも完全消灯にはせず、各成分をこの値まで下限とする
+  // （旧仕様の「10 + count*20」で消灯に見えすぎないようにしていた考え方を踏襲）
+  const LED_MIN_COMPONENT = 10;
+
+  // HEX文字列（#RRGGBB）をr/g/bに分解する
+  function hexToRgb(hex) {
+    const normalized = (hex || '').replace('#', '');
+    return {
+      r: parseInt(normalized.substring(0, 2), 16),
+      g: parseInt(normalized.substring(2, 4), 16),
+      b: parseInt(normalized.substring(4, 6), 16),
+    };
+  }
+
+  // 軸1本（加速度の配列）のうち、絶対値がVIBRATION_THRESHOLDを超える要素数を数える
+  function countOverThreshold(axisArray) {
+    return (axisArray || []).filter((v) => Math.abs(v) > VIBRATION_THRESHOLD).length;
+  }
+
+  // 旧仕様準拠：x/y/z各軸で閾値超過した要素数を合算し、MAX_INTENSITYに丸めたものを
+  // 「応援強度」とする。
+  function analyzeVibrationData(accel) {
+    if (!accel) return 0;
+    const total =
+      countOverThreshold(accel.x) + countOverThreshold(accel.y) + countOverThreshold(accel.z);
+    return Math.min(total, MAX_INTENSITY);
+  }
+
+  // 応援強度（0〜21）を「明るさ」として、currentTeamColor（HEX）をその強さで
+  // スケーリングしたr/g/bを返す。強度0でも完全消灯にはせず、各成分に
+  // LED_MIN_COMPONENTの下限を設ける。
+  function computeLedColor(accel) {
+    const intensity = analyzeVibrationData(accel);
+    const brightness = intensity / MAX_INTENSITY;
+    const { r, g, b } = hexToRgb(currentTeamColor);
+    const scale = (component) => Math.max(LED_MIN_COMPONENT, Math.round(component * brightness));
+    return { r: scale(r), g: scale(g), b: scale(b) };
+  }
+
+  // BLE切断検知：accelが全軸ゼロ、かつvolt/rssiもゼロというパターン
+  function isBleDisconnectPayload(payload) {
+    const allZero = (arr) => Array.isArray(arr) && arr.length > 0 && arr.every((v) => v === 0);
+    const accel = payload.accel || {};
+    return (
+      allZero(accel.x) && allZero(accel.y) && allZero(accel.z) &&
+      payload.volt === 0 && payload.rssi === 0
+    );
+  }
+
+  const BATCH_SIZE = 5;
+  const BATTERY_LOW_THRESHOLD = 3.0;
+
+  let cheerBatchCount = 0;
+  let cheerBatchSum = 0;
+  let cheerBatchStartedAt = null;
+
+  // Vanstoneへ提示する仮称: window.onCheerStickData
+  // ネイティブアプリ側から加速度センサー等の生データを受け取るエントリポイント。
+  // payload: { num, accel: { x:[...], y:[...], z:[...] }, volt, rssi }
+  window.onCheerStickData = function (payload) {
+    if (!payload) return;
+
+    // a. 応援中画面が表示されていない間は何もしない
+    if (cheeringCard.classList.contains('hidden')) return;
+
+    // b. BLE切断検知。サーバー通知（type: "ble_disconnect"）は将来対応とし、
+    //    今回はまずクライアント側の表示のみ行う。
+    if (isBleDisconnectPayload(payload)) {
+      bleAlertDisplay.classList.remove('hidden');
+      window.CheerStickBridge && window.CheerStickBridge.sendLED &&
+        window.CheerStickBridge.sendLED({ LED: [0, 0, 0], stat: 'BleRetry' });
+      return;
+    }
+
+    // c. 切断でなければアラート表示を戻す
+    bleAlertDisplay.classList.add('hidden');
+
+    // d. 応援強度を算出
+    const intensity = analyzeVibrationData(payload.accel);
+
+    // e. 受信5回ごとにまとめてカウント表示更新・サーバー送信
+    if (cheerBatchCount === 0) {
+      cheerBatchStartedAt = Date.now();
+    }
+    cheerBatchCount += 1;
+    cheerBatchSum += intensity;
+
+    if (cheerBatchCount >= BATCH_SIZE) {
+      matchCheerCount += cheerBatchSum;
+      cheerCountDisplay.textContent = formatNumber(matchCheerCount);
+
+      send({
+        type: 'count',
+        id: deviceId,
+        value: cheerBatchSum,
+        duration_ms: Date.now() - cheerBatchStartedAt,
+      });
+
+      cheerBatchCount = 0;
+      cheerBatchSum = 0;
+      cheerBatchStartedAt = null;
+    }
+
+    // f. LED値を計算して送信
+    const led = computeLedColor(payload.accel);
+    window.CheerStickBridge && window.CheerStickBridge.sendLED &&
+      window.CheerStickBridge.sendLED({ LED: led, stat: 'OK' });
+
+    // g. 電池残量チェック
+    if (typeof payload.volt === 'number' && payload.volt <= BATTERY_LOW_THRESHOLD) {
+      batteryDisplay.classList.remove('hidden');
+    } else {
+      batteryDisplay.classList.add('hidden');
+    }
+  };
 
   connect();
 })();

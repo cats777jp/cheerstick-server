@@ -30,7 +30,8 @@ async function findDeviceWithProfile(macAddress) {
       t.metadata                 AS target_metadata,
       o.id                       AS org_id,
       o.name                     AS org_name,
-      o.logo_url                 AS org_logo_url
+      o.logo_url                 AS org_logo_url,
+      o.color                    AS org_color
     FROM devices d
     LEFT JOIN users u         ON u.id = d.owner_user_id
     LEFT JOIN targets t       ON t.id = d.current_target_id
