@@ -182,6 +182,18 @@ async function setDeviceTarget(macAddress, targetId) {
 }
 
 /**
+ * データ参照機能（トークン無効時）：MACアドレスからdevices.idのみを取得（ホワイトリスト照合用）。
+ * メールアドレス等の個人情報は含めない。
+ */
+async function getDeviceIdByMac(macAddress) {
+  const { rows } = await db.query(
+    `SELECT id AS device_id FROM devices WHERE mac_address = $1`,
+    [macAddress]
+  );
+  return rows[0] || null;
+}
+
+/**
  * データ参照機能：デバイスID（devices.id）からプロフィール（ニックネーム・チーム・推し）を取得。
  * メールアドレスは参照ページに出さないため、SELECTしない。
  */
@@ -244,6 +256,7 @@ module.exports = {
   listTargetsByOrganization,
   setDeviceOrganization,
   setDeviceTarget,
+  getDeviceIdByMac,
   getDeviceReferenceProfile,
   getRecentEventCheerTotals,
   getAllTimeCheerTotal,

@@ -19,6 +19,7 @@ const cheerQueries = require('../db/cheerstickQueries');
 const { generateReferenceToken } = require('../utils/referenceToken');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ENABLE_REFERENCE_TOKEN = process.env.ENABLE_REFERENCE_TOKEN === 'true';
 
 function buildTeamPayload(row) {
   if (!row || !row.org_id) return null;
@@ -76,8 +77,12 @@ async function buildConnectResponse(macAddress) {
   }
 
   if (row) {
-    const token = generateReferenceToken(row.device_id, row.mac_address);
-    payload.reference_url = `https://app.cheerstick.com/reference.html?token=${token}`;
+    if (ENABLE_REFERENCE_TOKEN) {
+      const token = generateReferenceToken(row.device_id, row.mac_address);
+      payload.reference_url = `https://app.cheerstick.com/reference.html?token=${token}`;
+    } else {
+      payload.reference_url = `https://app.cheerstick.com/reference.html?id=${encodeURIComponent(row.mac_address)}`;
+    }
   }
 
   return payload;

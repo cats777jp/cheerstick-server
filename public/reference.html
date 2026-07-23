@@ -27,6 +27,9 @@
 
   * { box-sizing: border-box; }
 
+  /* hidden属性を確実に効かせる（IDセレクタのdisplay指定に負けないよう!importantで上書き） */
+  [hidden] { display: none !important; }
+
   html, body {
     margin: 0;
     padding: 0;
@@ -162,6 +165,38 @@
     font-family: var(--font-display);
     font-size: 11px;
     color: var(--text-tertiary);
+  }
+
+  .oshi-photo {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  .oshi-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  .oshi-line {
+    display: flex;
+    align-items: center;
   }
 
   .fan-header .eyebrow {
@@ -344,7 +379,7 @@
       <div>
         <p class="eyebrow" id="team-name">—</p>
         <p class="nickname" id="nickname">—</p>
-        <p class="oshi-line" id="oshi-line"></p>
+        <p class="oshi-line" id="oshi-line-wrap"><span id="oshi-photo-slot"></span><span id="oshi-line-text"></span></p>
       </div>
     </header>
 
@@ -381,7 +416,8 @@
     teamLogoSlot: document.getElementById('team-logo-slot'),
     teamName: document.getElementById('team-name'),
     nickname: document.getElementById('nickname'),
-    oshiLine: document.getElementById('oshi-line'),
+    oshiPhotoSlot: document.getElementById('oshi-photo-slot'),
+    oshiLineText: document.getElementById('oshi-line-text'),
     bars: document.getElementById('bars-container'),
     alltimeNumber: document.getElementById('alltime-number'),
   };
@@ -412,6 +448,14 @@
     }).format(d);
   }
 
+  var AVATAR_COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#8338ec', '#3a86ff', '#ff6b6b'];
+  function colorFor(id) {
+    var h = 0;
+    var str = String(id || '');
+    for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  }
+
   function renderHeader(data) {
     if (data.team) {
       var img = document.createElement('img');
@@ -431,12 +475,36 @@
 
     els.nickname.textContent = data.nickname || '（ニックネーム未登録）';
 
+    els.oshiPhotoSlot.innerHTML = '';
+
     if (data.player) {
       var num = data.player.number ? '#' + data.player.number + ' ' : '';
-      els.oshiLine.textContent = '推し: ' + num + data.player.name;
+      els.oshiLineText.textContent = '推し: ' + num + data.player.name;
+
+      if (data.player.image_url) {
+        var oshiImg = document.createElement('img');
+        oshiImg.className = 'oshi-photo';
+        oshiImg.src = data.player.image_url;
+        oshiImg.alt = data.player.name || '推し';
+        oshiImg.onerror = function () {
+          oshiImg.remove();
+          els.oshiPhotoSlot.appendChild(makeOshiAvatar(data.player));
+        };
+        els.oshiPhotoSlot.appendChild(oshiImg);
+      } else {
+        els.oshiPhotoSlot.appendChild(makeOshiAvatar(data.player));
+      }
     } else {
-      els.oshiLine.textContent = '推し未選択';
+      els.oshiLineText.textContent = '推し未選択';
     }
+  }
+
+  function makeOshiAvatar(player) {
+    var avatar = document.createElement('span');
+    avatar.className = 'oshi-avatar';
+    avatar.style.background = colorFor(player.name);
+    avatar.textContent = (player.name || '?').charAt(0);
+    return avatar;
   }
 
   function renderBars(recentEvents) {
@@ -506,13 +574,19 @@
   function init() {
     var params = new URLSearchParams(window.location.search);
     var token = params.get('token');
+    var id = params.get('id');
 
-    if (!token) {
+    var query;
+    if (token) {
+      query = 'token=' + encodeURIComponent(token);
+    } else if (id) {
+      query = 'id=' + encodeURIComponent(id);
+    } else {
       showError('リンクが正しくありません。アプリからもう一度アクセスしてください。');
       return;
     }
 
-    fetch(API_BASE + '/api/v1/webview/reference?token=' + encodeURIComponent(token))
+    fetch(API_BASE + '/api/v1/webview/reference?' + query)
       .then(function (res) {
         if (!res.ok) {
           throw new Error('HTTP_' + res.status);

@@ -248,6 +248,122 @@
     cursor: pointer;
   }
   .splash-error .retry-button:active { opacity: 0.8; }
+
+  /* ---------- 応援データ参照（完了画面に埋め込み表示） ---------- */
+  .cheer-stats {
+    margin-top: 20px;
+  }
+  .stats-heading {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    margin: 0 0 10px;
+    text-align: left;
+  }
+  .cheer-stats .bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    background: #0b0f14;
+    border: 1px solid #2a323c;
+    border-radius: 12px;
+    padding: 20px 14px 14px;
+    margin-bottom: 20px;
+  }
+  .cheer-stats .bar-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .cheer-stats .bar-track {
+    width: 100%;
+    height: 96px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .cheer-stats .bar-stick {
+    width: 13px;
+    border-radius: 7px;
+    background: linear-gradient(180deg, var(--team-color), rgba(255, 255, 255, 0.15));
+    box-shadow: 0 0 12px var(--team-color);
+    position: relative;
+    min-height: 6px;
+  }
+  .cheer-stats .bar-stick::after {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    background: var(--team-color);
+    box-shadow: 0 0 14px 3px var(--team-color);
+  }
+  .cheer-stats .bar-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .cheer-stats .bar-title {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
+    line-height: 1.3;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cheer-stats .bar-date {
+    font-size: 9.5px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+  .cheer-stats .bars-empty {
+    width: 100%;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 16px 0;
+  }
+  .alltime-card {
+    background: #0b0f14;
+    border: 1px solid #2a323c;
+    border-radius: 12px;
+    padding: 16px 18px;
+    text-align: left;
+  }
+  .alltime-number {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .alltime-unit {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 4px;
+  }
+  .alltime-meter {
+    margin-top: 10px;
+    height: 6px;
+    border-radius: 3px;
+    background: #1c232c;
+    overflow: hidden;
+  }
+  .alltime-meter-fill {
+    height: 100%;
+    width: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.15), var(--team-color));
+    box-shadow: 0 0 8px var(--team-color);
+  }
 </style>
 </head>
 <body>
@@ -303,6 +419,19 @@
         <p class="oshi-name" id="oshiName"></p>
         <p class="oshi-position" id="oshiPosition"></p>
         <p class="oshi-data" id="oshiData"></p>
+      </div>
+    </div>
+
+    <div id="cheerStatsSection" class="cheer-stats hidden">
+      <h2 class="stats-heading">直近の応援</h2>
+      <div class="bars" id="recentBars"></div>
+      <h2 class="stats-heading">通算応援量</h2>
+      <div class="alltime-card">
+        <div>
+          <span class="alltime-number" id="allTimeNumber">0</span>
+          <span class="alltime-unit">応援強度・累計</span>
+        </div>
+        <div class="alltime-meter"><div class="alltime-meter-fill"></div></div>
       </div>
     </div>
   </div>
@@ -371,6 +500,13 @@
   const oshiName = document.getElementById('oshiName');
   const oshiPosition = document.getElementById('oshiPosition');
   const oshiData = document.getElementById('oshiData');
+
+  const cheerStatsSection = document.getElementById('cheerStatsSection');
+  const recentBars = document.getElementById('recentBars');
+  const allTimeNumber = document.getElementById('allTimeNumber');
+
+  // reference.htmlと同じAPI（api.cheerstick.comサブドメイン）
+  const API_BASE = 'https://api.cheerstick.com';
 
   const AVATAR_COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#8338ec', '#3a86ff', '#ff6b6b'];
   function colorFor(id) {
@@ -519,6 +655,104 @@
     return div.innerHTML;
   }
 
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString('ja-JP');
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('ja-JP', {
+      month: 'numeric', day: 'numeric', weekday: 'short'
+    }).format(d);
+  }
+
+  // reference_url（.../reference.html?token=xxx または ?id=xxx）から
+  // token/idを取り出し、JSONを返すAPI（api.cheerstick.com側）を直接叩くための
+  // クエリ文字列を組み立てる。tokenがあればtoken方式、なければid方式。
+  function extractReferenceQuery(referenceUrl) {
+    try {
+      const u = new URL(referenceUrl);
+      const token = u.searchParams.get('token');
+      const id = u.searchParams.get('id');
+      if (token) return 'token=' + encodeURIComponent(token);
+      if (id) return 'id=' + encodeURIComponent(id);
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderRecentBars(recentEvents) {
+    recentBars.innerHTML = '';
+
+    if (!recentEvents || recentEvents.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'bars-empty';
+      empty.textContent = 'まだ応援データがありません';
+      recentBars.appendChild(empty);
+      return;
+    }
+
+    const maxVal = Math.max.apply(null, recentEvents.map((e) => e.intensity_total || 0).concat([1]));
+    const ordered = recentEvents.slice().reverse(); // 古い→新しい
+
+    ordered.forEach((ev) => {
+      const item = document.createElement('div');
+      item.className = 'bar-item';
+
+      const track = document.createElement('div');
+      track.className = 'bar-track';
+
+      const stick = document.createElement('div');
+      stick.className = 'bar-stick';
+      const pct = Math.max(6, Math.round((ev.intensity_total / maxVal) * 100));
+      stick.style.height = pct + '%';
+      track.appendChild(stick);
+
+      const value = document.createElement('div');
+      value.className = 'bar-value';
+      value.textContent = formatNumber(ev.intensity_total);
+
+      const title = document.createElement('div');
+      title.className = 'bar-title';
+      title.textContent = ev.title || '試合';
+
+      const date = document.createElement('div');
+      date.className = 'bar-date';
+      date.textContent = formatDate(ev.date);
+
+      item.appendChild(track);
+      item.appendChild(value);
+      item.appendChild(title);
+      item.appendChild(date);
+      recentBars.appendChild(item);
+    });
+  }
+
+  function loadCheerStats(referenceUrl) {
+    const query = extractReferenceQuery(referenceUrl);
+    if (!query) return;
+
+    cheerStatsSection.classList.remove('hidden');
+
+    fetch(API_BASE + '/api/v1/webview/reference?' + query)
+      .then((res) => {
+        if (!res.ok) throw new Error('HTTP_' + res.status);
+        return res.json();
+      })
+      .then((data) => {
+        renderRecentBars(data.recent_events);
+        allTimeNumber.textContent = formatNumber(data.all_time_intensity_total);
+      })
+      .catch(() => {
+        // 応援データの取得に失敗しても、完了画面自体は表示済みのため
+        // このセクションだけ静かに非表示に戻す（画面全体を壊さない）
+        cheerStatsSection.classList.add('hidden');
+      });
+  }
+
   function renderConnect(msg) {
     const { status, user, team, member, teams, targets, message } = msg;
 
@@ -562,6 +796,11 @@
     } else if (status === 'complete') {
       welcomeCard.classList.remove('hidden');
       welcomeName.textContent = user.name;
+
+      cheerStatsSection.classList.add('hidden');
+      if (msg.reference_url) {
+        loadCheerStats(msg.reference_url);
+      }
 
       if (member) {
         if (member.image_url) {

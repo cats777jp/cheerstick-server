@@ -2,3 +2,12 @@ node_modules/
 .env
 *.log
 .claude/
+
+# 引継ぎドキュメント類はclaude.ai側で管理するため、リポジトリには含めない
+*.zip
+cheerstick-deployment-guide.md
+cheerstick-handover-*.md
+websocket-category-implementation.md
+Csv import category spec.md
+V-VAREN-LOGO.png
+ViVi-kun.png
