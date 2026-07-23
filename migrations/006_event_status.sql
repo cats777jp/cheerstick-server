@@ -16,10 +16,10 @@ COMMENT ON CONSTRAINT events_status_check ON events IS
 
 -- 応援量カウント機能：デバイスの selected_organization_id から
 -- 「現在live中の試合があるか」を検索する際のインデックス
-CREATE INDEX idx_events_status ON events (organization_id, status);
+CREATE INDEX idx_events_org_status ON events (organization_id, status);
 
 -- =============================================================
 -- ロールバック用（実行する場合は別途）
 -- =============================================================
--- DROP INDEX IF EXISTS idx_events_status;
+-- DROP INDEX IF EXISTS idx_events_org_status;
 -- ALTER TABLE events DROP CONSTRAINT IF EXISTS events_status_check;
