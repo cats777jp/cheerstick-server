@@ -5,6 +5,7 @@ const userRouter = require('./user');
 const gameRouter = require('./game');
 const cheerRouter = require('./cheer');
 const webviewRouter = require('./webview');
+const adminRouter = require('./admin');
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/user', userRouter);
 router.use('/game', gameRouter);
 router.use('/cheer', cheerRouter);
 router.use('/webview', webviewRouter);
+router.use('/admin', adminRouter);
 
 module.exports = router;

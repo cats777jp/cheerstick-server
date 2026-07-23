@@ -13,6 +13,10 @@
 //   select_team : HTML -> Server { type: "select_team", id, organization_id }
 //   set_oshi    : HTML -> Server { type: "set_oshi", id, target_id }
 //   （いずれも応答は type: "connect" の最新状態）
+//   count       : HTML -> Server { type: "count", id, value, duration_ms }
+//                 応援量カウント。選択中チームにstatus='live'の公式試合があれば
+//                 cheer_logsへ記録する。無ければDB保存はスキップ（クライアント側表示のみ）。
+//                 応答なし。
 
 const { WebSocketServer } = require('ws');
 const cheerQueries = require('../db/cheerstickQueries');
@@ -161,6 +165,36 @@ class CheerWebSocketServer {
               }
               await cheerQueries.setDeviceTarget(id, targetId);
               this.send(ws, await buildConnectResponse(id));
+              break;
+            }
+
+            case 'count': {
+              const { id, value, duration_ms: durationMs } = msg;
+              if (!id || value == null) {
+                return this.send(ws, {
+                  type: 'error',
+                  message: 'id and value are required',
+                });
+              }
+
+              const row = await cheerQueries.findDeviceWithProfile(id);
+              if (row && row.selected_organization_id) {
+                const liveEvent = await cheerQueries.findLiveEventForOrganization(
+                  row.selected_organization_id
+                );
+                if (liveEvent) {
+                  await cheerQueries.insertCheerLog({
+                    deviceId: row.device_id,
+                    userId: row.owner_user_id,
+                    eventId: liveEvent.id,
+                    targetId: row.current_target_id,
+                    intensity: value,
+                    durationMs: durationMs || 0,
+                  });
+                }
+                // 公式試合が無い場合はDB保存をスキップ（クライアント側表示のみ）。
+              }
+              // レスポンス不要。
               break;
             }
 

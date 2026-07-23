@@ -247,6 +247,54 @@ async function getAllTimeCheerTotal(deviceId) {
   return rows[0];
 }
 
+/**
+ * 応援量カウント機能：指定organizationで現在status='live'のイベントを1件取得。
+ * 無ければnull（公式試合外のためDB保存をスキップする判定に使う）。
+ */
+async function findLiveEventForOrganization(organizationId) {
+  const { rows } = await db.query(
+    `SELECT id, title, starts_at
+     FROM events
+     WHERE organization_id = $1 AND status = 'live'
+     ORDER BY starts_at DESC
+     LIMIT 1`,
+    [organizationId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * 応援量カウント機能：応援ログ（cheer_logs）へ1件INSERTする。
+ */
+async function insertCheerLog({ deviceId, userId, eventId, targetId, intensity, durationMs }) {
+  await db.query(
+    `INSERT INTO cheer_logs (device_id, user_id, event_id, target_id, intensity, duration_ms)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [deviceId, userId, eventId, targetId, intensity, durationMs || 0]
+  );
+}
+
+// 006_event_status.sql のCHECK制約と一致させる許可値
+const EVENT_STATUSES = ['scheduled', 'live', 'paused', 'finished', 'cancelled'];
+
+/**
+ * 管理用：イベントの試合状態(status)を更新。
+ * EVENT_STATUSES以外の値は拒否する（DBのCHECK制約より前にアプリ側で弾く）。
+ */
+async function updateEventStatus(eventId, status) {
+  if (!EVENT_STATUSES.includes(status)) {
+    const err = new Error(`invalid status: ${status}`);
+    err.code = 'INVALID_STATUS';
+    throw err;
+  }
+
+  const { rows } = await db.query(
+    `UPDATE events SET status = $1 WHERE id = $2 RETURNING id, status`,
+    [status, eventId]
+  );
+  return rows[0] || null;
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -260,4 +308,7 @@ module.exports = {
   getDeviceReferenceProfile,
   getRecentEventCheerTotals,
   getAllTimeCheerTotal,
+  findLiveEventForOrganization,
+  insertCheerLog,
+  updateEventStatus,
 };
