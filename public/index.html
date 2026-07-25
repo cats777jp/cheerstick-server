@@ -40,6 +40,14 @@
     border: 3px solid var(--team-color);
     margin-bottom: 8px;
   }
+  #teamLogoAvatar {
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    border: 3px solid var(--team-color);
+    margin-bottom: 8px;
+    font-size: 28px;
+  }
   .team-name {
     font-size: 14px;
     color: var(--text-muted);
@@ -397,6 +405,7 @@
   <div id="statusBar" class="status-bar">接続中...</div>
 
   <img id="teamLogo" class="team-logo hidden" alt="team logo">
+  <div id="teamLogoAvatar" class="avatar hidden"></div>
   <div id="teamName" class="team-name hidden"></div>
 
   <!-- 1. 未登録時：ニックネーム＋メールアドレス登録フォーム -->
@@ -432,6 +441,7 @@
         <p class="oshi-name" id="oshiName"></p>
         <p class="oshi-position" id="oshiPosition"></p>
         <p class="oshi-data" id="oshiData"></p>
+        <p class="oshi-data hidden" id="oshiProfileText"></p>
       </div>
     </div>
 
@@ -467,6 +477,7 @@
 
   const statusBar = document.getElementById('statusBar');
   const teamLogo = document.getElementById('teamLogo');
+  const teamLogoAvatar = document.getElementById('teamLogoAvatar');
   const teamNameEl = document.getElementById('teamName');
 
   const entrySplash = document.getElementById('entrySplash');
@@ -538,6 +549,7 @@
   const oshiName = document.getElementById('oshiName');
   const oshiPosition = document.getElementById('oshiPosition');
   const oshiData = document.getElementById('oshiData');
+  const oshiProfileText = document.getElementById('oshiProfileText');
 
   const cheerStatsSection = document.getElementById('cheerStatsSection');
   const recentBars = document.getElementById('recentBars');
@@ -811,8 +823,16 @@
     }
 
     if (team) {
-      teamLogo.src = team.logo_url;
-      teamLogo.classList.remove('hidden');
+      if (team.logo_url) {
+        teamLogo.src = team.logo_url;
+        teamLogo.classList.remove('hidden');
+        teamLogoAvatar.classList.add('hidden');
+      } else {
+        teamLogoAvatar.textContent = (team.name || '?').charAt(0);
+        teamLogoAvatar.style.background = colorFor(team.id);
+        teamLogoAvatar.classList.remove('hidden');
+        teamLogo.classList.add('hidden');
+      }
       teamNameEl.textContent = team.name;
       teamNameEl.classList.remove('hidden');
 
@@ -820,6 +840,7 @@
       document.documentElement.style.setProperty('--team-color', currentTeamColor);
     } else {
       teamLogo.classList.add('hidden');
+      teamLogoAvatar.classList.add('hidden');
       teamNameEl.classList.add('hidden');
     }
 
@@ -858,6 +879,13 @@
         oshiPosition.textContent =
           member.type === 'mascot' ? 'マスコット' : (member.number ? `背番号 ${member.number}` : (member.type || ''));
         oshiData.textContent = (member.metadata && member.metadata.description) || '';
+
+        if (member.profile_text) {
+          oshiProfileText.textContent = member.profile_text;
+          oshiProfileText.classList.remove('hidden');
+        } else {
+          oshiProfileText.classList.add('hidden');
+        }
       }
     }
   }

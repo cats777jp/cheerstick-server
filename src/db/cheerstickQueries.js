@@ -28,6 +28,7 @@ async function findDeviceWithProfile(macAddress) {
       t.image_url                AS target_image_url,
       t.number                   AS target_number,
       t.metadata                 AS target_metadata,
+      t.profile_text             AS target_profile_text,
       o.id                       AS org_id,
       o.name                     AS org_name,
       o.logo_url                 AS org_logo_url,

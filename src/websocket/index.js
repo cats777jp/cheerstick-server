@@ -44,6 +44,7 @@ function buildMemberPayload(row) {
     image_url: row.target_image_url,
     number: row.target_number,
     metadata: row.target_metadata,
+    profile_text: row.target_profile_text,
   };
 }
 
