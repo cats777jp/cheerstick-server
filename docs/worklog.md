@@ -4,6 +4,74 @@
 
 ---
 
+## 2026-07-25 商用リリース前セキュリティ対応2件（管理API IP制限・所有者上書き防止）
+
+### 実施したこと
+- 作業指示書（`cheerstick-task-20260725-security.md`）に基づき、リリース前必須の
+  セキュリティ対応2件を実施
+- **作業1：管理APIへのnginx IPアドレス制限**
+  - 本番EC2で `/etc/nginx/sites-available` をバックアップ（`sites-available.bak_20260725_080501`）
+  - `cheerstick-api`（`api.cheerstick.com`）に `location /api/v1/admin/` ブロックを追加し
+    `allow 49.156.217.121; deny all;` でKMT様オフィス固定IPのみ許可
+  - `nginx -t` 成功を確認後 `systemctl reload nginx`
+  - EC2上のcurlで管理APIが403（正しい挙動）、`geturl`/`app.cheerstick.com`等の通常機能が
+    無影響であることを確認
+- **作業2：デバイス所有者の上書き防止（TOFU方式）**
+  - `registerDeviceOwner()`（`src/db/cheerstickQueries.js`）のUPDATE文に
+    `AND (owner_user_id IS NULL OR owner_user_id = $1)` を追加し、別ユーザーによる
+    上書きを`rowCount === 0`で検出、`DEVICE_ALREADY_REGISTERED`エラーとして投げる
+  - `src/websocket/index.js` の既存エラーメッセージ分岐（`CATEGORY_MISMATCH`等と同じ書き方）に
+    `DEVICE_ALREADY_REGISTERED`を追加
+  - フロントエンド（`public/index.html`）は既存の`type:'error'`ハンドラ（`formError`表示・
+    `registerBtn`再有効化）がそのまま流用できるため、変更不要と判断
+- `docs/spec.md`・`docs/runbook.md` に両作業の内容を追記（別コミット）
+
+### 変更したファイル
+- `src/db/cheerstickQueries.js`, `src/websocket/index.js`（コミット `113a7f9`）
+- `docs/spec.md`, `docs/runbook.md`（コミット `cf04aab`）
+- 本番 `/etc/nginx/sites-available/cheerstick-api`（git管理外、EC2上で直接編集）
+
+### 判明した事実 / 想定と違ったこと
+- ローカル環境にPostgreSQL/Dockerが無く、指示書の「作業2-5：ローカルでの動作テスト」を
+  実DBに対しては実施できなかった。代わりに`db.query`をインメモリでモックした
+  ロジック検証スクリプトで、指示書記載の4シナリオ（新規登録／同一ユーザー再登録／
+  別ユーザー上書き拒否／既存デバイスの回帰確認）すべてPASSを確認した。
+  **実DB・実際のPostgres制約（一意制約等）に対する検証ではない**ため、
+  本番反映後は実機での動作確認を推奨する
+- 作業指示書のエラー応答例（`{type:"register", status:"error", code:...}`）は
+  既存のエラー応答形式（`{type:"error", message}`）と異なる独自形式だったが、
+  指示書自身が「既存の実装の書き方に合わせる」ことを優先するよう指示していたため、
+  既存形式を採用した
+- `docs/spec.md`の4.2メッセージ種別表に、現行コードには存在しない`set_name`・`broadcast`
+  というtypeが残っていることに気づいた（削除はせず注記のみ追加）
+- 本番nginxの`sites-enabled`に`cheerstick-ws`（ws.cheerstick.com設定）が実在し稼働中と確認。
+  ローカルリポジトリの未追跡ファイル`cheerstick-ws`との関係は未確認のまま
+
+### 次回への申し送り（優先度順）
+1. Vanstoneへブリッジ仕様（`window.onCheerStickData` 等）を提示・合意
+   → 唯一の社外依存。往復に日数がかかるため最優先で発信
+   - 送付後、先方の合意を得られ次第 `ENABLE_REFERENCE_TOKEN=true` へ切替
+   - 切替時は `REFERENCE_TOKEN_SECRET` のローテーションを必ず同時に行う
+2. 今回対応した2件は暫定対応であり、以下は今回スコープ外として残っている
+   （作業指示書に明記された「今回はやらない」項目）
+   - `geturl` のホワイトリスト検証（現在DBを見ずに常にリダイレクトしている）
+   - `geturl` 専用のレート制限、未登録MACアクセスのログ記録
+   - `device_owner_history` テーブル（登録履歴の記録）
+   - Cookieによるブラウザ紐付け（WebViewの挙動検証が必要なため、リリース後）
+3. 2,000〜20,000本規模の負荷試験（未実施）とWebSocketハートビート実装
+4. 静的ファイル2箇所デプロイ問題の恒久対応（nginx root統一）
+5. `docs/archive/` へ仕様書PDF・旧引継ぎ書v14・監査書を格納
+6. untracked の `cheerstick-ws` / `nodered-backup/` / `*.bak_*` の要否判断
+   （`cheerstick-ws` は本番nginxの実設定ファイルと同名。関連の有無を要確認）
+7. `docs/spec.md` のエンドポイントパス表記・WebSocketメッセージ種別表を実装に合わせて修正
+
+### 未解決のまま残した課題
+- 管理APIのIP制限はnginx側の暫定対応。アプリケーションレベルの認証は未実装のまま
+- 本番DBでの実機動作確認（4シナリオ）は未実施（ローカルはモックテストのみ）
+- KMT様オフィスからの管理API疎通確認（403以外が返ること）は未実施（要ユーザー確認）
+
+---
+
 ## 2026-07-25 reference機能（署名付きトークン）実装状況調査
 
 ### 実施したこと
