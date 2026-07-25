@@ -74,11 +74,17 @@ GET /webviewrefer/?id=<MACアドレス>
 | type | 内容 |
 |---|---|
 | `connect` | 接続確立 |
-| `set_name` | 名前設定 |
+| `set_name` | 名前設定（※現行コードでは未確認。`register` の誤記の可能性あり／次回要精査） |
+| `register` | ニックネーム＋メールアドレス登録（実装済み・2026-07-25確認）。TOFU方式：未登録デバイス、または登録済みと同一ユーザーのみ更新を許可。別ユーザーによる上書きは `DEVICE_ALREADY_REGISTERED` エラーで拒否（`src/db/cheerstickQueries.js` registerDeviceOwner） |
 | `set_oshi` | 推し選手設定 |
 | `count` | 応援量送信（後述） |
-| `broadcast` | 試合状態通知（stat: start / stop） |
+| `broadcast` | 試合状態通知（stat: start / stop）（※現行コードでは未確認／次回要精査） |
 | `select_team` | チーム選択（CATEGORY_MISMATCH検証あり／※生存確認要） |
+
+**所有者の誤登録・譲渡対応**：TOFU方式のため、一度登録されたデバイスは別ユーザーが
+`register` できない。出荷検査時の誤登録、中古譲渡、メールアドレス変更などで所有者を
+リセットする必要がある場合は、`docs/runbook.md` の「デバイス所有者リセット手順」を参照
+（本番DBを直接操作するため、必ずSELECTでの事前確認とセットで実行する）。
 
 ### 4.3 応援量カウント（2026-07-23 実装）
 
@@ -203,8 +209,13 @@ CHECK制約により以下のみ許可：`scheduled` / `live` / `paused` / `fini
 ```
 PATCH /api/v1/admin/events/:id/status
   body: { status }
-  ⚠️ 認証なし。本番公開前に認証必須。現状は誰でも試合状態を操作できる。
-     URLを外部に一切共有しないこと。
+  ⚠️ アプリケーションレベルの認証は引き続きなし。
+  ✅ 2026-07-25、nginx側で `/api/v1/admin/` パスにIPアドレス制限を追加済み
+     （KMT様オフィス固定IP: 49.156.217.121。VPN経由時も同一IPで到達する構成のみ許可）。
+     運用者が現時点でKMT様お一人であるため、正式なログイン機構より単純なIP制限を
+     暫定対応として採用。複数人運用・外部からの操作が必要になった時点でBasic認証等へ
+     移行を検討する（設定箇所は docs/runbook.md 参照）。
+     URLを外部に一切共有しないこと（IP制限のみでは共有時のリスクは残るため）。
 ```
 
 ## 9. フロントエンド（public/index.html）
@@ -249,3 +260,4 @@ LED色計算の両方に反映（以前は固定値ハードコードだった�
 | 2026-07-25 | 初版作成 | handover v14 および監査結果を統合。以後はこのファイルを正本とする |
 | 2026-07-25 | 第6章（カテゴリー機能）を「生存確認が必要」から「実装済み」へ更新 | コードリーディングにより、categoriesテーブル・listOrganizations(categoryId)・computeStatus()のcategory_id必須チェック・setDeviceOrganizationのCATEGORY_MISMATCH検証の4点が現行コードに存在し、実装コミットd75d8f1以降削除されていないことを確認。本番DBへのmigration 004適用状況のみ未確認として残す |
 | 2026-07-25 | 3.3の再有効化手順に「REFERENCE_TOKEN_SECRETの再生成」ステップを追加 | コードレビューで`reference_url`（WebSocket connect応答・REST /webview/reference）が既に実装済みであることを確認。有効化時に本番の秘密鍵をローテーションする運用が未文書化だったため、実行はせず手順のみ記録。現在の`REFERENCE_TOKEN_SECRET`の値は一度チャットへ露出したため、必ずローテーションする旨を理由として明記 |
+| 2026-07-25 | 8章の管理API記述にnginx IPアドレス制限（本番反映済み）を追記、4.2に`register`のTOFU仕様と所有者リセット手順への参照を追加 | 商用リリース前の必須セキュリティ対応2件（管理APIのIP制限、デバイス所有者の上書き防止）を実施。管理APIのアプリケーションレベル認証は引き続き未実装のため、その旨は既存記述を残したまま維持し追記のみとした。`register`の実装調査で`set_name`/`broadcast`という現行コードに存在しないtypeがテーブルに残っていることに気づいたため、削除はせず「次回要精査」の注記を追加した |

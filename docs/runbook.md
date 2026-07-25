@@ -107,6 +107,84 @@ pm2 restart cheerstick-server --update-env
 
 ---
 
+## 管理API アクセス制限（nginx IPアドレス制限・2026-07-25対応）
+
+`PATCH /api/v1/admin/events/:id/status` はアプリケーションレベルの認証を持たないため、
+nginx側で `/api/v1/admin/` パスへのアクセス元IPを制限している。
+
+```
+設定ファイル : /etc/nginx/sites-available/cheerstick-api（api.cheerstick.com）
+設定箇所     : server { ... } 内、location / より前の location /api/v1/admin/ ブロック
+許可IP       : 49.156.217.121（KMT様オフィス固定IP。VPN経由時も同一IPで到達する構成）
+```
+
+```nginx
+location /api/v1/admin/ {
+    allow 49.156.217.121;
+    deny  all;
+
+    proxy_pass         http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header   Host              $host;
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header   X-Forwarded-Proto $scheme;
+}
+```
+
+`/api/v1/webview/`・WebSocket・`app.cheerstick.com` には一切影響しない
+（`location /api/v1/admin/` のみに限定されるため）。
+
+### オフィスのIPアドレスが変わった場合
+
+```bash
+sudo cp -a /etc/nginx/sites-available /etc/nginx/sites-available.bak_$(date +%Y%m%d_%H%M%S)
+sudo vi /etc/nginx/sites-available/cheerstick-api   # allow 行のIPを書き換え
+sudo nginx -t                                        # 必ず成功を確認
+sudo systemctl reload nginx
+```
+
+`nginx -t` が失敗した場合は reload せず、バックアップから復旧すること。
+
+### 運用上の注意
+
+- 現在の運用者はKMT様お一人のみを前提とした暫定対応。複数人での運用や
+  外部からの操作が必要になった時点で、Basic認証や正式なログイン機構への
+  移行を検討する（`docs/spec.md` 8章参照）
+- 動作確認時、EC2上のcurlは許可IPに含まれないため `403` が返るのが正常。
+  実際の疎通確認はKMT様のオフィス（またはVPN経由）から行うこと
+
+---
+
+## デバイス所有者リセット手順（2026-07-25対応：TOFU方式の上書き防止に伴う追加）
+
+`register`（WebSocket）は2026-07-25よりTOFU方式に変更され、一度所有者が設定された
+デバイスは別ユーザーが登録できない（`DEVICE_ALREADY_REGISTERED` エラーで拒否）。
+以下のケースでは所有者を手動でリセットする必要がある。
+
+- 出荷検査時に誤って登録してしまった場合
+- 中古・譲渡でデバイスの持ち主が変わる場合
+- ユーザーがメールアドレスを変更した場合
+
+**本番DBを直接変更するため、必ず対象をSELECTで確認してから実行すること。**
+
+```sql
+-- 1. 対象デバイスの現在の所有者を確認（本人確認とセットで）
+SELECT d.mac_address, d.owner_user_id, u.email, u.display_name, d.registered_at
+FROM devices d
+LEFT JOIN users u ON u.id = d.owner_user_id
+WHERE d.mac_address = '<MACアドレス>';
+
+-- 2. 確認後、所有者をリセット（本人確認のうえ、手動で実行すること）
+UPDATE devices SET owner_user_id = NULL, registered_at = NULL
+ WHERE mac_address = '<MACアドレス>';
+```
+
+リセット後は当該デバイスが`register`時に「未登録」として扱われ、次に`register`した
+ユーザーが新たな所有者として確定する。
+
+---
+
 ## 確認コマンド集
 
 ```bash
