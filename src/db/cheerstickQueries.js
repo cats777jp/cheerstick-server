@@ -84,17 +84,27 @@ async function findOrCreateUserByEmail(email, displayName) {
  * デバイスにユーザーを紐づける（ニックネーム＋メール登録の確定処理）。
  * デバイス行が無ければ作成してから紐づける。
  * ※チーム・推しの選択はこの時点では行わない（別ステップ）。
+ *
+ * TOFU方式：未登録デバイス、または既に同一ユーザーが登録済みの場合のみ更新する。
+ * 別ユーザーが既に登録済みのデバイスへの上書きはWHERE句で弾く（rowCount === 0）。
  */
 async function registerDeviceOwner(macAddress, email, displayName) {
   await ensureDevice(macAddress);
   const userId = await findOrCreateUserByEmail(email, displayName);
 
-  await db.query(
+  const { rowCount } = await db.query(
     `UPDATE devices
      SET owner_user_id = $1, registered_at = NOW()
-     WHERE mac_address = $2`,
+     WHERE mac_address = $2
+       AND (owner_user_id IS NULL OR owner_user_id = $1)`,
     [userId, macAddress]
   );
+
+  if (rowCount === 0) {
+    const err = new Error('device is already registered to a different user');
+    err.code = 'DEVICE_ALREADY_REGISTERED';
+    throw err;
+  }
 
   return userId;
 }

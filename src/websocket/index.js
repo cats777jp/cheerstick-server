@@ -209,6 +209,8 @@ class CheerWebSocketServer {
               ? '選択中のチームに属さない対象です'
               : err.code === 'CATEGORY_MISMATCH'
               ? '選択できないチームです。'
+              : err.code === 'DEVICE_ALREADY_REGISTERED'
+              ? 'このデバイスは既に別のユーザーが登録済みです'
               : 'internal server error';
           this.send(ws, { type: 'error', message });
         }
