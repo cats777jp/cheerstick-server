@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-07-25 カテゴリー機能生存確認・Elastic IP割当・Cowork導入
+
+### 実施したこと
+- ドキュメント体制の整備（`docs/` 3分割、`CLAUDE.md`、`/handover` スキル、git管理化）
+- カテゴリー機能の生存確認
+- Elastic IP 割当・Route53更新・再起動テスト
+- Cowork（デスクトップ）導入と役割分担の決定
+
+### 判明した事実 / 想定と違ったこと
+- カテゴリー機能は `d75d8f1` で実装済み、以降削除されていない。
+  本番DBにも `categories` テーブル、`organizations`/`devices` の `category_id` が
+  外部キー制約つきで実在。マルチスポーツ対応は本機能で実現済み。
+- 引継ぎ書からの記述消失は、`.gitignore` に `.claude/` が含まれ
+  「引継ぎドキュメントはclaude.ai側で管理」する方針だったことが根本原因。
+  差分が取れないため消失に誰も気づけなかった。今回この方針を転換した。
+- 未コミットの3ファイルは改行コード(CRLF/LF)の差異のみで、内容変更はなかった。
+- Cowork は読み取り・調査・ファイル編集は可能だが、FUSE経由のため
+  `.git/index.lock` が残り git 書き込みができない。git操作はClaude Codeが担当する。
+
+### 次回への申し送り（優先度順）
+1. Vanstoneへブリッジ仕様（`window.onCheerStickData` 等）を提示・合意
+   → 唯一の社外依存。往復に日数がかかるため最優先で発信
+2. 管理API `PATCH /api/v1/admin/events/:id/status` に認証を追加（現在無認証で公開中）
+3. 2,000〜20,000本規模の負荷試験（未実施）とWebSocketハートビート実装
+4. 静的ファイル2箇所デプロイ問題の恒久対応（nginx root統一）
+5. `docs/archive/` へ仕様書PDF・旧引継ぎ書v14・監査書を格納
+6. untracked の `cheerstick-ws` / `nodered-backup/` / `*.bak_*` の要否判断
+
+### 未解決のまま残した課題
+- EC2のNameタグが `cheerstick-api-server` のままで実態とずれている
+- 選手データの実データ化、CSVインポート、Grafana、管理画面
+- チームカラーの正式HEX値（暫定 `#005AAA`）
+
+---
+
 ## 2026-07-25 ドキュメント運用体制のコミット・push
 
 ### 実施したこと

@@ -8,10 +8,9 @@
 
 ```
 EC2インスタンス : i-04576698e7325bddb
-パブリックIP    : 18.179.62.192
-                  ⚠️ Elastic IP 未割当。停止・起動でIPが変わり、Route53の
-                     4レコードが全滅する。最優先で対応すること（手順は後述）
-SSH             : ssh -i C:\AWS\cheerstick-key\cheerstick-key.pem ubuntu@18.179.62.192
+パブリックIP    : 52.196.49.126（Elastic IP、2026-07-25割当。Nameタグ: cheerstick-production）
+                  ※旧IP 18.179.62.192 は割当解除済み。再起動でもIP不変を確認済み
+SSH             : ssh -i C:\AWS\cheerstick-key\cheerstick-key.pem ubuntu@52.196.49.126
 ```
 
 ### 稼働プロセス
@@ -95,15 +94,15 @@ pm2 restart cheerstick-server --update-env
 
 ---
 
-## Elastic IP 割当手順（未実施・最優先）
+## Elastic IP 割当（対応済み・2026-07-25）
 
 ```
-1. EC2コンソールで Elastic IP を新規割当
-2. インスタンス i-04576698e7325bddb へ関連付け
-3. IPが変わった場合、Route53 の4レコードを更新
-   （api / app / ws / admin .cheerstick.com、TTL 300のため反映は早い）
-4. DNS反映後、4ドメインすべてで疎通確認
-5. インスタンスを再起動してもIPが変わらないことを確認
+1. EC2コンソールで Elastic IP 52.196.49.126 を新規割当
+2. インスタンス i-04576698e7325bddb へ関連付け（Nameタグ: cheerstick-production）
+3. Route53 の api / app / ws レコードを新IPへ更新（admin は未設定のため対象外）
+4. DNS反映後、疎通確認
+5. インスタンス再起動テストでIP不変を確認、pm2の自動復帰も確認
+   （このタイミングでカーネルが 6.17.0-1017-aws → 6.17.0-1019-aws に更新された）
 ```
 
 ---
