@@ -1,0 +1,12 @@
+# 改行コードをLFに統一する。
+# 本番はLinux(EC2)であり、Windowsローカル環境での編集時にCRLFへ変換されると
+# git diff にノイズが乗り、docs/ の削除行監視（CLAUDE.md運用ルール）の妨げになるため、
+# 2026-07-25 に導入。core.autocrlf の設定に関わらずこの指定が優先される。
+* text=auto eol=lf
+
+# バイナリファイルは改行変換の対象外
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.gif binary
