@@ -20,6 +20,10 @@ BLE応援スティックの応援熱量を可視化するIoTクラウドサー�
 | `docs/runbook.md` | 環境・接続情報・手順 | 上書き可。ただし変更時は必ず理由を1行添える |
 | `docs/worklog.md` | セッション作業記録 | **追記のみ。過去エントリの編集・削除は禁止** |
 
+検討中・未実装の設計案は `docs/proposals/` に置く。実装済みの `docs/spec.md`
+とは明確に区別すること。実装が完了した項目は `docs/spec.md` へ統合し、
+`docs/proposals/` 側は更新または削除する。
+
 ### セッション開始時に必ず行うこと
 
 1. `docs/spec.md` と `docs/runbook.md` を読む
