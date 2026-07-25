@@ -4,6 +4,66 @@
 
 ---
 
+## 2026-07-25 プロフィール枠実装（Phase 1調査で前提が覆り、縮小版で実施）
+
+### 実施したこと
+- 作業指示書（`cheerstick-task-20260725-profile-frame.md`）のPhase 1調査を実施し、
+  結果を報告。指示書の3つの想定（静的ファイル直書き／選手テーブル無し／WebSocket応答に
+  画像URL無し）がいずれも実態と異なる（`organizations.logo_url`・`targets.image_url`・
+  WebSocket応答の画像URLは既に実装済み）ことが判明したため、指示書自身の分岐基準に従い
+  実装前に報告し、指示を仰いだ
+- ユーザー承認を得て、縮小版のPhase 2として以下のみ実施：
+  1. `migrations/008_target_profile_text.sql`：`targets.profile_text`（nullable）を追加
+  2. `public/index.html`：`teamLogo.src = team.logo_url`の直書きにnullチェックを追加。
+     `logo_url`が無い場合、既存の推し選手と同じパターン（頭文字＋色のアバター、
+     `#teamLogoAvatar`）にフォールバックするよう修正
+  3. `profile_text`をWebSocket `connect`応答の`member.profile_text`として返却するよう
+     `src/db/cheerstickQueries.js`・`src/websocket/index.js`を修正。フロントに
+     `#oshiProfileText`表示行を追加（値が無ければ行ごと非表示）
+  4. `object-fit`変更（`contain`化）はユーザーの判断で撤回。既存の`cover`を維持
+- 本番へマイグレーション適用・デプロイ・動作確認まで実施（詳細は「判明した事実」参照）
+- `docs/spec.md`に6.1「`targets`テーブルの設計」・9.1「プロフィール表示の空枠仕様」を新設
+
+### 変更したファイル
+- `migrations/008_target_profile_text.sql`（新規）
+- `src/db/cheerstickQueries.js`, `src/websocket/index.js`, `public/index.html`
+  （コミット `b17ee37`）
+- `docs/spec.md`（コミット `a5dda4b`）
+- 本番DB（`cheerstick_production`）：`profile_text`列追加、動作確認用の使い捨てテスト
+  デバイス（`AA:BB:CC:DD:EE:01`）を作成・削除（後片付け済み）
+
+### 判明した事実 / 想定と違ったこと
+- `organizations.logo_url`・`targets.image_url`は初期スキーマ（migration 001）から
+  既に存在し、フロントも既にDB値を動的に描画していた（ハードコードされた画像ファイル名は
+  コード中に存在しなかった）。V・ファーレン長崎ロゴ・ヴィヴィくんの画像も、既に
+  `https://app.cheerstick.com/images/...`として本番配信されており、「移行」は実質不要だった
+- `targets`は「選手テーブル」ではなく、`type`列（player/team/mascot/artist/unit等）で
+  汎用管理する1テーブル設計。作業指示書はこれを把握しておらず誤った前提を書いていた
+- WebSocketの新規デバイス（`connect`のみ実行、`category_id`未設定）は`status:'error'`に
+  なり`select_team`が`CATEGORY_MISMATCH`で拒否されることを動作確認中に再確認（想定通りの
+  既存挙動。動作確認スクリプトでは対象デバイスに`category_id`を手動設定して回避した）
+- デプロイ後、本番WebSocketで実際に確認：
+  - 新規・チーム未選択状態：`team: null`、`status: 'unregistered'`（teamLogo/teamLogoAvatar
+    とも非表示のパスを通過、エラーなし）
+  - 既存の登録済みデバイス（`AA:BB:CC:DD:EE:FF`）：`team.logo_url`・`member.image_url`とも
+    従来どおり返却され、新規`member.profile_text: null`も正しく追加されている（回帰なし）
+  - サンプル選手A選択：`member.image_url: null`, `member.profile_text: null`を確認
+    （空枠の既存メカニズムが引き続き機能）
+- フロントのDOM描画自体（実ブラウザでの見た目）は本セッションでは確認できていない。
+  WebSocket応答の内容とJSのnullチェックロジック（コードレビュー＋構文チェック）による
+  確認にとどまる
+
+### 次回への申し送り
+- 前回までの申し送り（Vanstoneブリッジ仕様提示が最優先、他継続項目）は変わらず
+- 実ブラウザでの目視確認（既存デバイスでロゴ・ヴィヴィくん表示が崩れないこと、
+  スマートフォン幅375pxでの空枠レイアウト）は未実施。可能なタイミングで確認を推奨
+
+### 未解決のまま残した課題
+- フロントの実ブラウザでの目視確認（375px幅含む）が未実施
+- `organizations`にも同様のtype汎用管理があるかは今回未調査（`targets`のみ確認）
+
+---
+
 ## 2026-07-25 TOFU方式の本番DB実地テスト・デプロイ完了
 
 ### 実施したこと
