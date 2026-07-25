@@ -52,7 +52,11 @@ GET /webviewrefer/?id=<MACアドレス>
 - `.env` の `ENABLE_REFERENCE_TOKEN=false`
 - 現在はMACアドレス直指定方式（`?id=MAC`）で稼働
 - 無効化理由：アプリ側（Vanstone・サーリューション）との調整未完了
-- 再有効化：`.env` を `true` に変更 → `pm2 restart cheerstick-server --update-env`
+- 再有効化手順：
+  1. `openssl rand -hex 32` で新しい `REFERENCE_TOKEN_SECRET` を生成し、本番 `.env` の値を差し替える
+     （理由：現在の値は一度チャットへ露出したため、有効化時に必ずローテーションする）
+  2. `.env` の `ENABLE_REFERENCE_TOKEN` を `true` に変更
+  3. `pm2 restart cheerstick-server --update-env`
 - email はトークンの有無に関わらず除外（SQLで元々SELECTしない設計）
 
 ## 4. WebSocket 仕様
@@ -244,3 +248,4 @@ LED色計算の両方に反映（以前は固定値ハードコードだった�
 |---|---|---|
 | 2026-07-25 | 初版作成 | handover v14 および監査結果を統合。以後はこのファイルを正本とする |
 | 2026-07-25 | 第6章（カテゴリー機能）を「生存確認が必要」から「実装済み」へ更新 | コードリーディングにより、categoriesテーブル・listOrganizations(categoryId)・computeStatus()のcategory_id必須チェック・setDeviceOrganizationのCATEGORY_MISMATCH検証の4点が現行コードに存在し、実装コミットd75d8f1以降削除されていないことを確認。本番DBへのmigration 004適用状況のみ未確認として残す |
+| 2026-07-25 | 3.3の再有効化手順に「REFERENCE_TOKEN_SECRETの再生成」ステップを追加 | コードレビューで`reference_url`（WebSocket connect応答・REST /webview/reference）が既に実装済みであることを確認。有効化時に本番の秘密鍵をローテーションする運用が未文書化だったため、実行はせず手順のみ記録。現在の`REFERENCE_TOKEN_SECRET`の値は一度チャットへ露出したため、必ずローテーションする旨を理由として明記 |

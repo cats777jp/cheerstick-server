@@ -4,6 +4,47 @@
 
 ---
 
+## 2026-07-25 reference機能（署名付きトークン）実装状況調査
+
+### 実施したこと
+- reference機能（署名付きトークン）の実装状況をコード調査（コード変更なし）
+- 有効化時の追加手順（`REFERENCE_TOKEN_SECRET`再生成）を `docs/spec.md` の
+  再有効化手順へ反映
+- 調査結果と申し送りを本エントリとして記録
+
+### 変更したファイル
+- `docs/spec.md`（3.3再有効化手順にシークレット再生成ステップと理由を追加、変更履歴に追記）
+- `docs/worklog.md`（本エントリ）
+
+### 判明した事実 / 想定と違ったこと
+- reference機能は JWT(HS256)、TTL 7d、ペイロードは `{device_id, mac}`、email非含有
+- WebSocket `connect` 応答への `reference_url` 組み込みは実装済み
+  （`src/websocket/index.js`、トークン有効/無効の両モードに対応）
+- 本番 `.env` に `REFERENCE_TOKEN_SECRET` 設定済みを確認
+- `docs/spec.md` のエンドポイントパス表記が実装と不一致
+  （`/geturl/` → 実装は `/api/v1/webview/geturl`、`/webviewrefer/` → 実装は
+  `/api/v1/webview/reference`）。仕様書PDF由来の誤記と判明。次回修正予定
+
+### 次回への申し送り（優先度順・下記1は前回エントリの内容を補足）
+1. Vanstoneへブリッジ仕様（`window.onCheerStickData` 等）を提示・合意
+   → 唯一の社外依存。往復に日数がかかるため最優先で発信
+   - 本日、ブリッジ仕様書とセキュリティ方針の回答をサーリューション経由で送付予定
+   - 先方の合意後、`ENABLE_REFERENCE_TOKEN=true` への切替を実施する
+   - 切替時は `REFERENCE_TOKEN_SECRET` のローテーションを必ず同時に行う
+2. 管理API `PATCH /api/v1/admin/events/:id/status` に認証を追加（現在無認証で公開中）
+3. 2,000〜20,000本規模の負荷試験（未実施）とWebSocketハートビート実装
+4. 静的ファイル2箇所デプロイ問題の恒久対応（nginx root統一）
+5. `docs/archive/` へ仕様書PDF・旧引継ぎ書v14・監査書を格納
+6. untracked の `cheerstick-ws` / `nodered-backup/` / `*.bak_*` の要否判断
+7. `docs/spec.md` のエンドポイントパス表記を実装に合わせて修正
+   （`/geturl/` → `/api/v1/webview/geturl` 等）
+
+### 未解決のまま残した課題
+- 上記7のパス表記修正は、意図的な省略表記か単純な誤記か切り分けが必要なため
+  本セッションでは修正せず記録のみに留めた
+
+---
+
 ## 2026-07-25 カテゴリー機能生存確認・Elastic IP割当・Cowork導入
 
 ### 実施したこと
