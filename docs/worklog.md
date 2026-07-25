@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-07-25 ドキュメント運用体制のコミット・push
+
+### 実施したこと
+- 前セッションで作成済みだった `.gitattributes` / `.gitignore` 変更 / `CLAUDE.md` ・
+  `SETUP.md` ・ `docs/` ・ `.claude/`（いずれも未コミットのworking tree状態）を、
+  ユーザー指示に沿って3つの単独コミットに分割してコミット
+  1. `3962fd0` chore: テキストファイルの改行コードをLFに統一（`.gitattributes` のみ）
+  2. `d87db8c` chore: 引継ぎドキュメントをgit管理対象に変更（`.gitignore` のみ）
+  3. `840e36d` docs: 引継ぎドキュメント体制を整備（`CLAUDE.md`/`SETUP.md`/`docs/`/`.claude/`）
+- `cheerstick-ws` / `nodered-backup/` / `*.bak_*` は指示通り触れず未追跡のまま残した
+- `feature/reference-data` を `origin` にpush（upstream未設定だったため `-u` で新規設定）
+
+### 変更したファイル
+- `.gitattributes`（新規）／ `.gitignore`（改行コード運用ルールのコメント更新）
+- `CLAUDE.md` / `SETUP.md` / `docs/spec.md` / `docs/runbook.md` / `docs/worklog.md` / `.claude/skills/handover/SKILL.md`（コミット確定のみ、内容は前セッションで作成済み）
+
+### 判明した事実 / 想定と違ったこと
+- `git add --renormalize .` は `-u` を暗黙に含むため、未追跡の新規ファイル（`.gitattributes` 自体）は
+  ステージされない。別途 `git add .gitattributes` が必要だった。
+- 最初のコミットでパス指定を忘れ、事前にステージ済みだった `.gitignore` の変更が
+  `.gitattributes` のコミットに混入する事故を起こした。push前だったため
+  `git reset --soft HEAD~1` で取り消し、パス指定付きで正しくコミットし直した。
+  （教訓：複数コミットに分割する際は、必ず `git commit -- <path>` でコミット対象を明示する）
+
+### 次回への申し送り
+- 上記の分割コミットにより本セッションの申し送り事項に変化なし。下の優先度リストを参照。
+
+### 未解決のまま残した課題
+- 特になし（本セッションはコミット整理・pushのみ。下記の既存課題は継続）
+
+---
+
 ## 2026-07-25 ドキュメント運用体制の整備
 
 ### 実施したこと
