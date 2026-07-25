@@ -183,6 +183,25 @@ psql -U cheerstick -d cheerstick_production -c "SELECT filename FROM schema_migr
 > 初回リリースはV・ファーレン長崎単独のため、新ジャンル追加の実地検証は8月リリース後でも間に合う。
 > ただし本番DBへのmigration適用状況の確認（上記コマンド）は先に済ませておくこと。
 
+### 6.1 `targets` テーブルの設計（選手専用テーブルではない）
+
+**注意：`targets` は「選手テーブル」ではなく、`type` 列で選手・チーム・マスコット・
+アーティスト等を汎用的に管理する1つのテーブル。**（過去の作業指示書で「選手テーブル」と
+誤って前提を書いたことがあるため、ここに明記する。）
+
+```sql
+targets (
+  id, organization_id, name, type,   -- type: player / team / mascot / artist / unit 等
+  image_url, number, metadata JSONB, profile_text, is_active, created_at
+)
+```
+
+- `organization_id` で所属する組織（チーム等）に紐づく
+- `type = 'mascot'` のヴィヴィくん、`type = 'player'` のサンプル選手A/B/C は、いずれも
+  同じ`targets`テーブルの行（種別が違うだけ）
+- `metadata` はJSONBで種別固有の追加属性を柔軟に格納可能（例: `{"position":"FW"}`）。
+  定型のプロフィール文表示には `profile_text` 列（8.1参照）を使う
+
 ## 7. データベース
 
 PostgreSQL、EC2上に直接インストール（RDSではなく最小コスト構成）。
@@ -198,6 +217,7 @@ DB: `cheerstick_production` / ユーザー: `cheerstick`
 005_add_cheer_logs_device_event_index.sql
 006_event_status.sql                （events.status へ CHECK制約）
 007_organization_color.sql          （organizations.color 列）
+008_target_profile_text.sql         （targets.profile_text 列、2026-07-25適用）
 ```
 
 ### events.status
@@ -234,6 +254,37 @@ PATCH /api/v1/admin/events/:id/status
 LED色計算の両方に反映（以前は固定値ハードコードだった）
 ```
 
+### 9.1 チーム・選手プロフィールの表示構造（空枠仕様、2026-07-25実装）
+
+**前提：`organizations.logo_url`（チームロゴ）と `targets.image_url`（選手・マスコット
+写真）は元々存在しており、`connect`応答の`team.logo_url` / `member.image_url`として
+既にDBから動的に描画されていた（静的ファイル直書きではない）。2026-07-25に追加したのは
+`targets.profile_text`列と、値が無い場合の表示崩れ対策のみ。**
+
+| 項目 | DB列 | 値がある場合 | 値が無い場合（空枠） |
+|---|---|---|---|
+| チームロゴ | `organizations.logo_url` | `<img id="teamLogo">`（84px円形、`object-fit:cover`） | `#teamLogoAvatar`（同サイズ円形、チーム名頭文字＋色アバター） |
+| 推し写真 | `targets.image_url` | `<img id="oshiPhoto">`（56px角丸、`object-fit:cover`） | `#oshiAvatar`（同サイズ、名前頭文字＋色アバター） |
+| 推しプロフィール文 | `targets.profile_text`（2026-07-25追加） | `#oshiProfileText`に表示 | 行ごと非表示（空行を残さない） |
+
+- `object-fit`は当初`contain`案もあったが、チームロゴは円形バッジのデザインのため
+  `cover`のまま維持する方針に確定（`contain`だと余白が生まれ不自然なため）
+- 頭文字＋色のアバターフォールバックは`colorFor(id)`関数（既存）を流用し、
+  チームロゴ・推し写真で共通のパターンにしている
+- サンプル選手A/B/C（`image_url = NULL`）は、この空枠の実例として既に本番DBに存在する
+
+**今後、画像・氏名・プロフィールを追加する場合：**
+アプリのデプロイ・コード変更は不要。対象行を本番DBで`UPDATE`するだけで、次回`connect`
+応答から反映される。
+```sql
+UPDATE organizations SET logo_url = '<画像URL>' WHERE id = '<organization_id>';
+UPDATE targets SET image_url = '<画像URL>', profile_text = '<プロフィール文>'
+  WHERE id = '<target_id>';
+```
+画像ファイル自体は `/var/www/cheerstick-app/images/` 配下に配置し、
+`https://app.cheerstick.com/images/...` のURLを上記UPDATEで指定する
+（`migrations/002_device_target_and_seed.sql`のシードデータと同じ配置方式）。
+
 ### 未対応
 
 - BLE切断時のサーバー通知（`type: "ble_disconnect"`）は見送り。クライアント側表示のみ
@@ -261,3 +312,4 @@ LED色計算の両方に反映（以前は固定値ハードコードだった�
 | 2026-07-25 | 第6章（カテゴリー機能）を「生存確認が必要」から「実装済み」へ更新 | コードリーディングにより、categoriesテーブル・listOrganizations(categoryId)・computeStatus()のcategory_id必須チェック・setDeviceOrganizationのCATEGORY_MISMATCH検証の4点が現行コードに存在し、実装コミットd75d8f1以降削除されていないことを確認。本番DBへのmigration 004適用状況のみ未確認として残す |
 | 2026-07-25 | 3.3の再有効化手順に「REFERENCE_TOKEN_SECRETの再生成」ステップを追加 | コードレビューで`reference_url`（WebSocket connect応答・REST /webview/reference）が既に実装済みであることを確認。有効化時に本番の秘密鍵をローテーションする運用が未文書化だったため、実行はせず手順のみ記録。現在の`REFERENCE_TOKEN_SECRET`の値は一度チャットへ露出したため、必ずローテーションする旨を理由として明記 |
 | 2026-07-25 | 8章の管理API記述にnginx IPアドレス制限（本番反映済み）を追記、4.2に`register`のTOFU仕様と所有者リセット手順への参照を追加 | 商用リリース前の必須セキュリティ対応2件（管理APIのIP制限、デバイス所有者の上書き防止）を実施。管理APIのアプリケーションレベル認証は引き続き未実装のため、その旨は既存記述を残したまま維持し追記のみとした。`register`の実装調査で`set_name`/`broadcast`という現行コードに存在しないtypeがテーブルに残っていることに気づいたため、削除はせず「次回要精査」の注記を追加した |
+| 2026-07-25 | 6.1「targetsテーブルの設計」を新設、9.1「プロフィール表示の空枠仕様」を新設、マイグレーション一覧に008を追加 | 「チーム・推し選手プロフィールの枠」実装の作業指示書を調査したところ、`organizations.logo_url`・`targets.image_url`・WebSocket応答への画像URLはいずれも既に実装済みであり、指示書の前提（静的ファイル直書き、選手専用テーブル、画像URL未実装）と大きく異なることが判明。指示書自身の分岐基準に従い一度報告し、縮小版のスコープ（`targets.profile_text`列の追加とnull安全性の穴埋めのみ）で実施した。あわせて`targets`が選手専用ではなくtype列による汎用管理テーブルである設計を明記し、今後同じ誤認が起きないようにした |
