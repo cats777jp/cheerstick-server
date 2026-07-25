@@ -1,9 +1,9 @@
 node_modules/
 .env
 *.log
-.claude/
 
-# 引継ぎドキュメント類はclaude.ai側で管理するため、リポジトリには含めない
+# 引継ぎドキュメント類は2026-07-25よりリポジトリ管理へ移行（docs/ + CLAUDE.md + .claude/skills/）。
+# git管理外にした結果、実装済み機能の記述が差分に残らず消失に気づけない事故が過去に起きたため。
 *.zip
 cheerstick-deployment-guide.md
 cheerstick-handover-*.md
