@@ -185,6 +185,34 @@ UPDATE devices SET owner_user_id = NULL, registered_at = NULL
 
 ---
 
+## デモ用デバイスの登録（審査・デモンストレーション用、is_demo方式・未実行）
+
+`migrations/009_add_device_is_demo.sql`（2026-07-27作成、本番未適用）で`devices.is_demo`列を
+追加した後、以下のSQLでデモ用デバイスを1件投入する想定。デモ用デバイスも本番デバイスと
+同様に通常どおりDBへ状態を保持し、書き込み処理は本番デバイスと同一。`is_demo`は応援量の
+集計・ランキング・ダッシュボードから除外するための目印としてのみ使う（`docs/spec.md`参照）。
+
+category_idは本番の`categories`テーブルから確認済み（2026-07-27、SELECTのみ実行）。
+
+```sql
+-- category_id確認（実行済み）
+SELECT id, name FROM categories ORDER BY name;
+--                  id                  |  name
+-- --------------------------------------+---------
+--  10000000-0000-0000-0000-000000000001 | Jリーグ
+
+-- デモ用デバイス登録（2026-07-27時点で未実行。009適用後に実行すること）
+INSERT INTO devices (mac_address, category_id, is_demo, owner_user_id)
+VALUES (
+  'DE:M0:00:00:00:01',
+  '10000000-0000-0000-0000-000000000001',  -- categories.id = Jリーグ
+  true,
+  NULL
+);
+```
+
+---
+
 ## 確認コマンド集
 
 ```bash
