@@ -4,6 +4,66 @@
 
 ---
 
+## 2026-07-27 migrations/009本番適用・デモ用デバイス登録・動作確認
+
+### 実施したこと
+- ユーザー確認のうえ、`migrations/009_add_device_is_demo.sql`を本番へ適用：
+  1. ローカルの本日分コミット（`b599ee3`〜`061e74e`）を`git push origin
+     feature/reference-data`でGitHubへ反映
+  2. 本番（`/home/ubuntu/cheerstick-server-new`）で`git pull`（`b17ee37..061e74e`）
+  3. 本番で`node src/db/migrate.js`を実行し、`009_add_device_is_demo.sql`のみAPPLY
+     （001〜008はSKIP、想定通り）
+  4. 適用後、`schema_migrations`に`009`が記録されたこと、`\d devices`で
+     `is_demo boolean NOT NULL DEFAULT false`列が追加されたことを確認
+- `docs/runbook.md`記載のデモ用デバイス登録SQLを、MACアドレスが
+  `DE:AD:BE:EF:00:01`になっていることを実行前に確認したうえで本番実行（`INSERT 0 1`）。
+  登録内容：`id=c35a42c5-4fc1-419a-b0e7-f6b143b37854`,
+  `mac_address=DE:AD:BE:EF:00:01`, `status=active`,
+  `category_id=10000000-0000-0000-0000-000000000001`（Jリーグ）, `is_demo=true`,
+  `owner_user_id=NULL`
+- デモ用デバイスの動作確認（`register`以降は未実施、指示範囲内）：
+  1. `GET /api/v1/webview/geturl?id=DE:AD:BE:EF:00:01` → `200 OK`、
+     `https://app.cheerstick.com/index.html?id=DE%3AAD%3ABE%3AEF%3A00%3A01`への
+     meta refreshリダイレクトHTMLを正常に確認
+  2. WebSocket `wss://ws.cheerstick.com/cheer`へ
+     `{"type":"connect","id":"DE:AD:BE:EF:00:01"}`を送信し、以下の応答を受信：
+     ```json
+     {"type":"connect","status":"unregistered","user":null,"team":null,"member":null,"reference_url":"https://app.cheerstick.com/reference.html?id=DE%3AAD%3ABE%3AEF%3A00%3A01"}
+     ```
+
+### 変更したファイル
+- 本番DB：`schema_migrations`に`009`追加、`devices.is_demo`列追加、
+  デモ用デバイス1件（`DE:AD:BE:EF:00:01`）を新規登録（テスト後の削除は無し。
+  デモ用として継続利用する想定のため）
+- GitHub / 本番リポジトリ：`git pull`により`061e74e`まで反映（コードのdiffなし、
+  ドキュメントとmigrations/009のみ）
+- `docs/worklog.md`（本エントリ）
+- コード（`src/`配下）の変更なし
+
+### 判明した事実 / 想定と違ったこと
+- `status`は`"error"`から`"unregistered"`へ改善し、category_id未設定による
+  異常系（第6章・11章参照）を脱したことを確認した
+- **`teams`（チーム選択肢）は今回の確認では返っていない。** これは不具合ではなく
+  `computeStatus()`（`src/websocket/index.js`）の仕様通りの挙動：`teams`は
+  `status === 'team_selection'`のときのみ付与され、そのためには`owner_user_id`が
+  設定済み（＝`register`実行済み）である必要がある。今回のデモ用デバイスは
+  `owner_user_id = NULL`のまま登録し、指示によりconnectまでしか確認していないため、
+  `status`は`unregistered`で止まっており想定通り。`teams`を実際に確認するには
+  次回`register`を送信する必要がある
+
+### 次回への申し送り
+- デモ用デバイスで`register`〜`select_team`〜`set_oshi`〜`count`までの一連の
+  動作確認（`teams`/`targets`が正しく返るか、`is_demo=true`でも通常デバイスと
+  同一の経路で状態遷移すること）はまだ未実施
+- `is_demo`を参照する集計・ランキング・ダッシュボードの実装は引き続き未着手
+- 前回までの申し送り（MACなりすまし対応、Vanstoneブリッジ仕様提示等）に継続
+
+### 未解決のまま残した課題
+- 前回エントリから変わらず継続。加えて、デモ用デバイスの`register`以降の
+  動作確認が未実施のまま残っている
+
+---
+
 ## 2026-07-27 spec.md 3.2章に旧記述への打ち消し・参照ポインタを追加
 
 ### 実施したこと
