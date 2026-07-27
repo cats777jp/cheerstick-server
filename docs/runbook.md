@@ -202,9 +202,12 @@ SELECT id, name FROM categories ORDER BY name;
 --  10000000-0000-0000-0000-000000000001 | Jリーグ
 
 -- デモ用デバイス登録（2026-07-27時点で未実行。009適用後に実行すること）
+-- MACアドレスは2026-07-27にDE:M0:00:00:00:01からDE:AD:BE:EF:00:01へ変更済み
+-- （"M0"は16進数として不正なため、MAC形式バリデーションで弾かれる懸念を回避。
+-- DE:AD:BE:EF:00:01はローカル管理アドレスで実機と衝突しない）
 INSERT INTO devices (mac_address, category_id, is_demo, owner_user_id)
 VALUES (
-  'DE:M0:00:00:00:01',
+  'DE:AD:BE:EF:00:01',
   '10000000-0000-0000-0000-000000000001',  -- categories.id = Jリーグ
   true,
   NULL
