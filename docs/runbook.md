@@ -13,6 +13,8 @@ EC2インスタンス : i-04576698e7325bddb
 SSH             : ssh -i C:\AWS\cheerstick-key\cheerstick-key.pem ubuntu@52.196.49.126
 ```
 
+**SSH秘密鍵（`.pem`）はリポジトリ内に置かない。** 正本は `C:\AWS\cheerstick-key\` に保管する（2026-07-27、誤ってリポジトリ直下に置かれていたため`.gitignore`に`*.pem`/`*.key`を追加）。
+
 ### 稼働プロセス
 
 ```
