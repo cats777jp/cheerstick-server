@@ -136,6 +136,22 @@ pm2 restart cheerstick-server
 **恒久対応（未実施）**：nginx の root を `cheerstick-server-new/public/` に統一するか、
 デプロイスクリプトでコピーを自動化する。
 
+### 画像・素材の反映（2026-07-27対応：assets/images/ 新設に伴う追加）
+
+**`assets/images/` が正本。** 配信先 `/var/www/cheerstick-app/images/` へは
+必ずここからコピーすること。**直接 `scp` 等で配信先へ配置しないこと。**
+（正本を経由しない配置を続けると、`assets/images/` との内容乖離が発生し、
+`git pull` しても配信内容が更新されない状態に陥る）
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+sudo cp -r assets/images/. /var/www/cheerstick-app/images/
+```
+
+新しい画像を追加する場合も同様に、まずローカルで `assets/images/` 配下へ
+配置してコミット・pushし、本番では上記コマンドで反映する。
+
 ### 環境変数を変更した場合
 
 ```bash
