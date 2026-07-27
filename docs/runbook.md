@@ -15,6 +15,54 @@ SSH             : ssh -i C:\AWS\cheerstick-key\cheerstick-key.pem ubuntu@52.196.
 
 **SSH秘密鍵（`.pem`）はリポジトリ内に置かない。** 正本は `C:\AWS\cheerstick-key\` に保管する（2026-07-27、誤ってリポジトリ直下に置かれていたため`.gitignore`に`*.pem`/`*.key`を追加）。
 
+### GitHub連携（Deploy Key・2026-07-27対応）
+
+**リポジトリは Private。Public へ戻さない。**
+
+GitHubリポジトリ `cats777jp/cheerstick-server` を Private 化したことで、本番EC2からの
+`git pull`（HTTPS・認証情報なし）が認証エラーになった。そのため本番EC2専用の
+**Deploy Key（読み取り専用、SSH）** を発行し、これ経由で `pull` する構成にした。
+
+```
+鍵の場所（EC2上）  : ~/.ssh/github_deploy_key（秘密鍵）/ ~/.ssh/github_deploy_key.pub（公開鍵）
+GitHub側の登録先   : リポジトリ Settings → Deploy keys
+                     "Allow write access" は必ずオフ（読み取り専用）
+リモートURL        : git@github.com:cats777jp/cheerstick-server.git（HTTPSから変更済み）
+```
+
+`~/.ssh/config`（EC2上）:
+
+```
+Host github.com
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_deploy_key
+    IdentitiesOnly yes
+```
+
+**`cheerstick-key.pem`（AWS EC2接続用）とは別物。** 混同しないこと。秘密鍵の内容は
+本ドキュメントに記載しない。
+
+疎通確認：
+
+```bash
+ssh -T git@github.com   # "Hi cats777jp/cheerstick-server! ...shell access..." が出れば正常
+                         # 終了コード1は仕様（shellを提供しないため）。失敗ではない
+git fetch origin
+```
+
+#### 鍵を再発行する場合
+
+1. EC2上で新しい鍵ペアを生成する（既存ファイルを上書きしないよう別名にするか、
+   事前に `~/.ssh/github_deploy_key*` をバックアップする）
+   ```bash
+   ssh-keygen -t ed25519 -C "cheerstick-production-deploy-key" -f ~/.ssh/github_deploy_key -N ""
+   ```
+2. `cat ~/.ssh/github_deploy_key.pub` の内容をGitHub Deploy keysへ登録
+   （新規追加でよい。旧鍵は登録解除してから削除する）
+3. `~/.ssh/config` の `IdentityFile` が新しい鍵を指していることを確認
+4. `ssh -T git@github.com` → `git fetch origin` で疎通確認
+
 ### 稼働プロセス
 
 ```
