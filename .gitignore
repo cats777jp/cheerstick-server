@@ -15,3 +15,7 @@ websocket-category-implementation.md
 Csv import category spec.md
 /V-VAREN-LOGO.png
 /ViVi-kun.png
+
+# 手動バックアップ・調査用の一時ファイルはリポジトリ管理外とする
+*.bak_*
+/nodered-backup/
