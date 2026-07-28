@@ -1,0 +1,1398 @@
+<!DOCTYPE html>
+<!-- saved from url=(0040)http://157.120.32.31/html/index.html?id= -->
+<html lang="ja"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>WebView Multi-Platform Test</title>
+    <style>
+        /*
+         レイアウト意図:
+         - カードを縦に積む単一カラム構成で、デバッグ時に情報の流れを上から追いやすくする
+         - 横幅が狭い端末でも崩れにくい余白とサイズにする
+         色分け意図:
+         - 通常情報は青系、結果は緑系、終了操作は赤系で意味を視覚的に分離する
+         モバイル考慮:
+         - タップしやすい余白・角丸・ボタン高さを確保し、入力欄は幅100%で誤操作を減らす
+        */
+
+        /* ページ全体: 読みやすい余白と明るい背景でカード内容を視認しやすくする */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            padding: 20px;
+            background: #f0f2f5;
+            color: #1c1e21;
+        }
+
+        /* 情報カード: 角丸と影でセクションを分離し、スクロール時の認知負荷を下げる */
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin: 12px 0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        /* 見出し: 主要テーマを青で強調し、本文との階層差を明確にする */
+        h2 {
+            margin-top: 0;
+            color: #1a73e8;
+        }
+
+        /* ラベル: 情報の補助テキストなので彩度を抑えて主値より目立たせない */
+        .label {
+            color: #65676b;
+            font-size: 0.9em;
+            margin-bottom: 4px;
+        }
+
+        /* 値表示: 実データを目立たせるため太字 + 青系で表示 */
+        .value {
+            font-size: 0.5em;
+            font-weight: bold;
+            color: #007AFF;
+            word-break: break-all;
+        }
+
+        /* 受信値表示: 改行をそのまま見せるため、整形済みテキストを表示する */
+        #received {
+            white-space: pre-wrap;
+        }
+
+        /* 結果表示: 正常処理の印象を持たせるため緑系で色分け */
+        .result {
+            font-size: 0.9em;
+            font-weight: bold;
+            color: #34a853;
+        }
+
+        /* プラットフォームバッジ: 一目で環境判別できるよう小型チップ形状にする */
+        .platform-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        /* iOS判別色: Apple系UIに寄せた青系 */
+        .ios {
+            background: #007AFF;
+            color: white;
+        }
+
+        /* Android判別色: Androidブランドを想起しやすい緑系 */
+        .android {
+            background: #3DDC84;
+            color: #073042;
+        }
+
+        /* 不明環境: 注意喚起しすぎない中立色 */
+        .unknown {
+            background: #999;
+            color: white;
+        }
+
+        /* ログ領域: 等幅フォント + 高さ制限で時系列確認をしやすくする */
+        .log {
+            font-family: monospace;
+            font-size: 0.8em;
+            background: #eee;
+            padding: 8px;
+            border-radius: 4px;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+
+        /* 終了ボタン: 破壊的/終了操作を赤で明確化し、横幅いっぱいで押しやすくする */
+        .btn-end {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            margin: 12px 0;
+            background: #e53935;
+            color: white;
+            font-size: 1.1em;
+            font-weight: bold;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+        }
+
+        /* 押下時: フィードバックとして濃い赤に変化 */
+        .btn-end:active {
+            background: #b71c1c;
+        }
+
+        /* テスト入力グリッド:
+           - 画面幅がある時は複数列で一覧性を上げる
+           - 狭い画面では自動的に列数を減らし、横スクロールを回避する */
+        .test-grid {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        }
+
+        /* 入力1項目のまとまり: ラベルと入力の関係を縦並びで明確にする */
+        .test-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        /* 入力ラベル: 小さめ太字で補助情報として読みやすくする */
+        .test-field label {
+            font-size: 0.85em;
+            color: #65676b;
+            font-weight: bold;
+        }
+
+        /* 入力欄共通:
+           - 幅100%でモバイルでも扱いやすい
+           - 角丸と適度な余白でタップ精度を確保 */
+        .test-field input,
+        .test-field textarea {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #d0d7de;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font: inherit;
+            background: #fff;
+        }
+
+        /* テキストエリア: 複数データの貼り付けを想定し、縦方向のみリサイズ可 */
+        .test-field textarea {
+            min-height: 92px;
+            resize: vertical;
+            font-family: monospace;
+        }
+
+        /* テストアクション群: 折り返し許可で小画面でもボタンが潰れないようにする */
+        .test-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        /* テスト実行ボタン: 通常操作を示す青系で統一 */
+        .btn-test {
+            padding: 2px 4px;
+            margin-top: 2px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            background: #1a73e8;
+        }
+
+        /* 補助ボタン: 主ボタンより優先度を下げるため中間色 */
+        .btn-test.secondary {
+            background: #5f6368;
+        }
+
+        /* 押下時の視覚フィードバック */
+        .btn-test:active {
+            filter: brightness(0.92);
+        }
+
+        /* チーム情報: 上部に目立たせて表示 */
+        .team-info {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 12px 0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            text-align: center;
+            display: none;
+        }
+
+        .team-info.active {
+            display: block;
+        }
+
+        .team-info img {
+            max-width: 200px;
+            height: auto;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+        }
+
+        .team-name {
+            font-size: 1.4em;
+            font-weight: bold;
+            color: #1a73e8;
+            margin-bottom: 8px;
+        }
+
+        /* 名前登録ステータス: 入力ガイド用に標準本文サイズへ調整 */
+        .name-register-status {
+            margin-top: 8px;
+            font-size: 0.9em;
+            color: #1a73e8;
+        }
+
+        /* ユーザー名登録の登録名は見やすさ優先で2倍表示 */
+        #registered-name-row {
+            font-size: 1em;
+        }
+
+        /* 応援量カウントの数値は視認性を優先して3倍表示 */
+        #cheer-count-display {
+            font-size: 3em;
+            line-height: 1;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 画面タイトル（Bridge通信テスト用） -->
+    <h2>WebView Bridge Test</h2>
+    
+    <!-- user.name 未登録時のみ表示する名前入力フォーム -->
+    <div class="card" id="name-register-card" style="display:none;">
+        <div class="label">ユーザー名登録</div>
+        <div class="value" id="registered-name-row" style="display:none;">登録名: <span id="registered-name-display">—</span></div>
+        <div class="test-field" id="name-register-form">
+            <label for="name-input">name</label>
+            <input id="name-input" type="text" maxlength="32" placeholder="ニックネームを入力">
+        </div>
+        <div class="test-actions" id="name-register-actions">
+            <button class="btn-test" id="btn-name-register" type="button">名前を送信</button>
+        </div>
+        <div class="name-register-status" id="name-register-status">名前を入力して送信してください。</div>
+    </div>
+        
+    <!-- 試合状態と応援量カウントを上部に表示 -->
+    <div class="card" id="match-count-card">
+        <div class="label">試合状態 / 応援量カウント</div>
+        <div class="value">状態: <span id="match-status-display">デバイステスト (STOP)</span></div>
+        <div class="value">応援量: <span id="cheer-count-display">0</span></div>
+    </div>
+
+    <!-- チーム情報（WebSocketから受信した team.name と user.team_id の画像を表示） -->
+    <div class="team-info" id="team-info">
+        <img id="team-image" src="http://157.120.32.31/html/index.html?id=" alt="team-logo">
+        <div class="team-name" id="team-name-display">—</div>
+    </div>
+
+    <!-- WebSocketから受信した oshi 情報を表示 -->
+    <div class="card" id="oshi-card" style="display:none;">
+        <div class="label" id="oshi-label">推し選択</div>
+        <div id="oshi-container"></div>
+        <div id="oshi-display"></div>
+    </div>
+
+    <!-- ネイティブアプリへ終了通知(stat:end)を送るボタン -->
+    <button class="btn-end" id="btn-end">終了</button>
+   
+    <!-- 実行環境(iOS/Android/その他)を表示するバッジ。JS側で自動更新される -->
+    <div id="platform-indicator" class="platform-badge unknown">Platform: Browser / Unknown</div>
+
+    <!-- URLクエリ(?id=...)から取得したMACアドレス相当の識別子を表示 -->
+    <div class="card">
+        <div class="label">MACアドレス (?id=)</div>
+        <div class="value" id="mac-address-display">—</div>
+    </div>
+
+    <!-- receiveFromAppを手動テストするための入力フォーム -->
+    <div class="card">
+        <div class="label">受信データのテスト入力</div>
+        <div class="test-grid">
+            <!-- 連番または受信シーケンス番号 -->
+            <div class="test-field">
+                <label for="test-num">num</label>
+                <input id="test-num" type="number" value="1">
+            </div>
+
+            <!-- 電圧値。低下時の挙動確認にも利用 -->
+            <div class="test-field">
+                <label for="test-volt">volt</label>
+                <input id="test-volt" type="number" step="0.01" value="3.20">
+            </div>
+
+            <!-- 受信電波強度(RSSI)。通常は負値 -->
+            <div class="test-field">
+                <label for="test-rssi">rssi</label>
+                <input id="test-rssi" type="number" value="-45">
+            </div>
+
+            <!-- X軸加速度。カンマ区切りで複数サンプルを入力 -->
+            <div class="test-field">
+                <label for="test-accel-x">accel.x</label>
+                <input id="test-accel-x" type="text" value="0, 0, 30, 0, 0">
+            </div>
+
+            <!-- Y軸加速度。カンマ区切りで複数サンプルを入力 -->
+            <div class="test-field">
+                <label for="test-accel-y">accel.y</label>
+                <input id="test-accel-y" type="text" value="0, 0, 0, 0, 0">
+            </div>
+
+            <!-- Z軸加速度。カンマ区切りで複数サンプルを入力 -->
+            <div class="test-field">
+                <label for="test-accel-z">accel.z</label>
+                <input id="test-accel-z" type="text" value="0, 0, 0, 0, 0">
+            </div>
+        </div>
+
+        <!-- テスト実行系ボタン群 -->
+        <div class="test-actions">
+            <!-- 現在の入力値で receiveFromApp を呼び出す -->
+            <button class="btn-test" id="btn-test-run" type="button">receiveFromAppで実行</button>
+
+            <!-- BLE切断通知相当のサンプル値を一括設定 -->
+            <button class="btn-test secondary" id="btn-test-sample" type="button">切断サンプルを入れる</button>
+        </div>
+    </div>
+
+    <!-- ネイティブアプリから受信した生JSON文字列を表示 -->
+    <div class="card">
+        <div class="label">アプリから受信した値 (count)</div>
+        <div class="value" id="received">—</div>
+    </div>
+
+    <!-- WebViewで計算した返却データ(LED/stat)を表示 -->
+    <div class="card">
+        <div class="label">RGB計算結果 (→アプリへ返送)</div>
+        <div class="result" id="result">—</div>
+    </div>
+
+    <!-- イベントログ表示領域。通信状況やエラー確認に使う -->
+    <div class="card">
+        <div class="label">Debug Log</div>
+        <div class="log" id="log">Debug Log is output to browser console.</div>
+    </div>
+ 
+    <script>
+        // 画面に表示する主要DOM要素を最初に参照しておく
+        // 毎回getElementByIdを呼ばずに済み、コードも読みやすくなる
+        const platformIndicator = document.getElementById('platform-indicator');
+        const logArea = document.getElementById('log');
+        const matchStatusDisplay = document.getElementById('match-status-display');
+        const cheerCountDisplay = document.getElementById('cheer-count-display');
+        const nameRegisterCard = document.getElementById('name-register-card');
+        const nameInput = document.getElementById('name-input');
+        const nameRegisterStatus = document.getElementById('name-register-status');
+        const nameRegisterForm = document.getElementById('name-register-form');
+        const nameRegisterActions = document.getElementById('name-register-actions');
+        const registeredNameRow = document.getElementById('registered-name-row');
+        const registeredNameDisplay = document.getElementById('registered-name-display');
+
+        // WebSocketの接続先URL // 動的に絶対パスを生成
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host; 
+        // window.WS_URL を外部から上書きできるようにしておくと、環境切り替えが容易
+        window.WS_URL = `${protocol}//${host}/nodered/wss/cheer`;;
+        const WS_URL = window.WS_URL || 'ws://localhost:8080';
+
+        // URLクエリから機器ID(MACアドレス相当)を取得
+        // 例: webview.html?id=AA:BB:CC:DD:EE:FF
+        const queryParams = new URLSearchParams(window.location.search);
+        const queryId = queryParams.get('id') || '';
+        const cacheBuster = String(Date.now());
+        const macAddressDisplay = document.getElementById('mac-address-display');
+
+        // 画像など静的リソースのキャッシュを避けるため、読み込みごとにクエリを付与
+        function withCacheBuster(path) {
+            if (!path) {
+                return path;
+            }
+            const separator = path.indexOf('?') >= 0 ? '&' : '?';
+            return path + separator + 'v=' + cacheBuster;
+        }
+
+        // WebSocket関連の状態管理
+        let ws = null;
+        let wsReconnectDelay = 1000;
+        const WS_RECONNECT_DELAY_MAX = 30000;
+
+        // サーバーから受け取る現在色（初期値は緑）
+        let currentColor = [0, 255, 0];
+
+        // サーバーから受け取るチームID（画像パス用）
+        let currentTeamId = null;
+
+        // 直近で受信したメンバー一覧（推し変更時の再選択に利用）
+        let lastMemberMap = null;
+
+        // 現在表示中の推し選手（キャンセルで元画面に戻すため保持）
+        let currentFavoriteMember = null;
+
+        // サーバーから受け取る現在ステータス（start/stop）
+        // 試合状態の判定専用。ネイティブアプリ向けレスポンス(stat)とは分離して扱う
+        let currentStat = 'stop';
+
+        // 応援量カウント管理
+        let matchCheerCount = 0;
+        let testWindowCheerCount = 0;
+        let initialCheerSumApplied = false;
+        let receiveSinceLastFlush = 0;
+        const RECEIVE_FLUSH_BATCH_SIZE = 5;
+
+        // 先頭追記形式でログ表示する
+        // 画面内ではなくブラウザコンソールへ出力する
+        function addLog(msg) {
+            const time = new Date().toLocaleTimeString();
+            console.log(`[${time}] ${msg}`);
+        }
+
+        // WebSocket送受信の生データをDebug Logへ出力
+        function addWebSocketPayloadLog(direction, payloadText) {
+            addLog('WS ' + direction + ': ' + payloadText);
+        }
+
+        // HTML特殊文字をエスケープ
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, function (m) {
+                return map[m];
+            });
+        }
+
+        // oshi詳細表示用のHTMLを生成
+        function buildOshiInfoHtml(oshiItem, includeSetButton) {
+            const imagePath = currentTeamId ? '../../html/img_members/' + currentTeamId + '/' + oshiItem.id + '.jpg' : '';
+            const imageHtml = imagePath ? '<img src="' + withCacheBuster(imagePath) + '" alt="' + escapeHtml(oshiItem.name) + '" style="max-width: 200px; height: auto; border-radius: 8px; margin-bottom: 12px;">' : '';
+            let html = '<div style="margin-top: 12px; padding: 12px; background: #f5f5f5; border-radius: 8px;">' +
+                imageHtml +
+                '<div style="margin-bottom: 8px;"><span style="display: inline-block; font-weight: bold; font-size: 1.1em; background: #e8f0fe; border-radius: 6px; padding: 4px 8px;">' + escapeHtml(oshiItem.name) + '</span></div>' +
+                //'<div><strong>ID:</strong> ' + oshiItem.id + '</div>' +
+                '<div><strong>ポジション:</strong> ' + escapeHtml(oshiItem.position) + '</div>' +
+                '<div><strong>生年月日:</strong> ' + escapeHtml(oshiItem.day) + '</div>' +
+                '<div><strong>投票結果:</strong> ' + escapeHtml(oshiItem.result) + '</div>' +
+                '<div style="margin-top: 10px; white-space: pre-wrap; word-wrap: break-word; font-size: 0.9em;">' +
+                escapeHtml(oshiItem.data) +
+                '</div>';
+
+            if (includeSetButton) {
+                html += '<button class="btn-test" type="button" id="btn-set-player" style="margin-top: 12px;">この選手を設定</button>';
+            }
+
+            html += '</div>';
+            return html;
+        }
+
+        // oshi選択肢クリック時に詳細情報を表示
+        function displayOshiInfo(oshiItem, anchorButton) {
+            const oshiDisplay = document.getElementById('oshi-display');
+            const html = buildOshiInfoHtml(oshiItem, true);
+            oshiDisplay.innerHTML = html;
+
+            const setPlayerButton = document.getElementById('btn-set-player');
+            if (setPlayerButton) {
+                setPlayerButton.addEventListener('click', function () {
+                    sendSetPlayerToWebSocket(oshiItem.id);
+                    renderFavoriteMember(oshiItem);
+                });
+            }
+
+            // 押したボタンの直下へ詳細表示を移動
+            if (anchorButton && anchorButton.parentNode) {
+                oshiDisplay.style.marginTop = '8px';
+                anchorButton.insertAdjacentElement('afterend', oshiDisplay);
+            }
+
+            addLog('Selected oshi: ' + oshiItem.name);
+        }
+
+        // 選手設定をWebSocketへ送信
+        // type=set_oshi, id=MACアドレス, oshi_id=選手ID を送る
+        function sendSetPlayerToWebSocket(playerId) {
+            const payload = {
+                type: 'set_oshi',
+                id: queryId,
+                oshi_id: playerId,
+                ts: Date.now()
+            };
+            const setMessage = JSON.stringify(payload);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(setMessage);
+                addWebSocketPayloadLog('send', setMessage);
+                addLog('Sent player set via WebSocket: oshi_id=' + String(playerId));
+                return true;
+            }
+
+            addLog('WebSocket not connected. player set was not sent: oshi_id=' + String(playerId));
+            return false;
+        }
+
+        // 名前カード表示を制御
+        function setNameRegisterVisibility(visible) {
+            nameRegisterCard.style.display = visible ? 'block' : 'none';
+        }
+
+        // 名前の登録状態に応じてカード表示を切り替える
+        function setNameRegisterMode(registeredName) {
+            const hasName = String(registeredName || '').trim() !== '';
+            setNameRegisterVisibility(true);
+
+            if (hasName) {
+                registeredNameDisplay.textContent = registeredName;
+                registeredNameRow.style.display = 'block';
+                nameRegisterForm.style.display = 'none';
+                nameRegisterActions.style.display = 'none';
+                nameRegisterStatus.textContent = '名前は登録済みです。';
+                return;
+            }
+
+            registeredNameDisplay.textContent = '—';
+            registeredNameRow.style.display = 'none';
+            nameRegisterForm.style.display = 'flex';
+            nameRegisterActions.style.display = 'flex';
+            nameRegisterStatus.textContent = '名前を入力して送信してください。';
+        }
+
+        // 名前登録をWebSocketへ送信
+        // type=set_name, id=MACアドレス, name=入力名 を送る
+        function sendNameToWebSocket(name) {
+            const trimmedName = String(name || '').trim();
+            if (!trimmedName) {
+                nameRegisterStatus.textContent = '名前を入力してください。';
+                addLog('Name registration blocked: empty name');
+                return false;
+            }
+
+            const payload = {
+                type: 'set_name',
+                id: queryId,
+                name: trimmedName,
+                ts: Date.now()
+            };
+            const nameMessage = JSON.stringify(payload);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(nameMessage);
+                addWebSocketPayloadLog('send', nameMessage);
+                nameRegisterStatus.textContent = '送信しました。登録反映を待っています...';
+                addLog('Sent user name via WebSocket: ' + trimmedName);
+                return true;
+            }
+
+            nameRegisterStatus.textContent = 'WebSocket未接続のため送信できません。';
+            addLog('WebSocket not connected. name was not sent: ' + trimmedName);
+            return false;
+        }
+
+        // 受信した user.name をもとに入力フォームの表示を切り替える
+        function syncNameRegisterByUser(incomingUser) {
+            if (!incomingUser || typeof incomingUser !== 'object') {
+                return;
+            }
+
+            const incomingName = String(incomingUser.name || '').trim();
+            if (incomingName === '') {
+                setNameRegisterMode('');
+                return;
+            }
+
+            setNameRegisterMode(incomingName);
+            nameInput.value = incomingName;
+            addLog('User name is already registered: ' + incomingName);
+        }
+
+        // 初回読込み時、試合中(start)なら user.cheer_sum を表示カウントへ反映
+        function syncCheerSumByUser(incomingUser) {
+            if (initialCheerSumApplied || !incomingUser || typeof incomingUser !== 'object') {
+                return;
+            }
+
+            if (currentStat !== 'start') {
+                return;
+            }
+
+            const parsedCheerSum = Number(incomingUser.cheer_sum);
+            if (Number.isNaN(parsedCheerSum) || parsedCheerSum < 0) {
+                return;
+            }
+
+            matchCheerCount = Math.trunc(parsedCheerSum);
+            initialCheerSumApplied = true;
+            updateCheerStatusDisplay();
+            addLog('Applied initial cheer_sum: ' + String(matchCheerCount));
+        }
+
+        // 名前送信ボタン/Enterキーの共通処理
+        function submitUserNameRegistration() {
+            sendNameToWebSocket(nameInput.value);
+        }
+
+        // 受信 payload から member 一覧を取り出す
+        function getMemberMapFromPayload(data) {
+            if (data && data.member && typeof data.member === 'object') {
+                return data.member;
+            }
+
+            return null;
+        }
+
+        // member一覧からID一致の選手を探す
+        function findMemberById(memberMap, memberId) {
+            if (!memberMap || typeof memberMap !== 'object') {
+                return null;
+            }
+
+            const target = String(memberId);
+            const keys = Object.keys(memberMap);
+            for (let i = 0; i < keys.length; i++) {
+                const item = memberMap[keys[i]];
+                if (item && String(item.id) === target) {
+                    return item;
+                }
+            }
+
+            return null;
+        }
+
+        // メンバー選択一覧を描画
+        function renderMemberSelection(memberMap, options) {
+            const viewOptions = options || {};
+            const showCancel = Boolean(viewOptions.showCancel);
+            const oshiCard = document.getElementById('oshi-card');
+            const oshiLabel = document.getElementById('oshi-label');
+            const oshiContainer = document.getElementById('oshi-container');
+            const oshiDisplay = document.getElementById('oshi-display');
+
+            oshiLabel.textContent = '推し選択';
+            oshiContainer.innerHTML = '<div class="test-actions" style="flex-direction: column; gap: 16px; padding: 16px; margin: 12px 0;">';
+
+            if (showCancel) {
+                oshiContainer.innerHTML += '<button class="btn-test secondary" id="btn-cancel-oshi-select" style="width: 100%; padding: 6px; font-size: 1em;">キャンセル</button>';
+            }
+
+            oshiDisplay.innerHTML = '';
+
+            Object.keys(memberMap).forEach(function (key) {
+                const oshiItem = memberMap[key];
+                const buttonId = 'oshi-btn-' + key;
+                const html = '<button class="btn-test" id="' + buttonId + '" style="width: 100%; padding: 6px; font-size: 1em;">' +
+                    escapeHtml(String(oshiItem.name || '')) + ' (' + escapeHtml(String(oshiItem.position || '')) + ')' +
+                    '</button>';
+                oshiContainer.innerHTML += html;
+
+                setTimeout(function () {
+                    const btn = document.getElementById(buttonId);
+                    if (btn) {
+                        btn.addEventListener('click', function () {
+                            displayOshiInfo(oshiItem, btn);
+                        });
+                    }
+                }, 0);
+            });
+
+            oshiContainer.innerHTML += '</div>';
+
+            if (showCancel) {
+                setTimeout(function () {
+                    const cancelButton = document.getElementById('btn-cancel-oshi-select');
+                    if (!cancelButton) {
+                        return;
+                    }
+
+                    cancelButton.addEventListener('click', function () {
+                        if (typeof viewOptions.onCancel === 'function') {
+                            viewOptions.onCancel();
+                        }
+                    });
+                }, 0);
+            }
+
+            oshiCard.style.display = 'block';
+        }
+
+        // あなたの推し表示を描画
+        function renderFavoriteMember(memberItem) {
+            const oshiCard = document.getElementById('oshi-card');
+            const oshiLabel = document.getElementById('oshi-label');
+            const oshiContainer = document.getElementById('oshi-container');
+            const oshiDisplay = document.getElementById('oshi-display');
+
+            currentFavoriteMember = {
+                id: memberItem.id,
+                name: memberItem.name || '',
+                position: memberItem.position || '',
+                day: memberItem.day || '',
+                result: memberItem.result || '',
+                data: memberItem.data || ''
+            };
+
+            oshiLabel.textContent = 'あなたの推し';
+            oshiContainer.innerHTML = '<div class="test-actions" style="padding: 0 0 8px 0; margin: 0;">' +
+                '<button class="btn-test secondary" id="btn-change-player" type="button">推し選手を変更</button>' +
+                '</div>';
+            // 選択ボタン下へ移動した詳細DOMをカード直下へ戻してから描画する
+            if (oshiDisplay.parentNode !== oshiCard) {
+                oshiCard.appendChild(oshiDisplay);
+            }
+            oshiDisplay.style.marginTop = '0';
+            oshiDisplay.innerHTML = buildOshiInfoHtml({
+                id: currentFavoriteMember.id,
+                name: currentFavoriteMember.name,
+                position: currentFavoriteMember.position,
+                day: currentFavoriteMember.day,
+                result: currentFavoriteMember.result,
+                data: currentFavoriteMember.data
+            }, false);
+
+            const changeButton = document.getElementById('btn-change-player');
+            if (changeButton) {
+                changeButton.addEventListener('click', function () {
+                    if (!lastMemberMap) {
+                        addLog('Member list is not available. Cannot open selection view.');
+                        return;
+                    }
+
+                    renderMemberSelection(lastMemberMap, {
+                        showCancel: true,
+                        onCancel: function () {
+                            if (currentFavoriteMember) {
+                                renderFavoriteMember(currentFavoriteMember);
+                            }
+                        }
+                    });
+                    addLog('Opened member selection for change');
+                });
+            }
+
+            oshiCard.style.display = 'block';
+        }
+
+        // カンマ区切り文字列を数値配列へ変換
+        // 変換できない値は除外して安全に処理する
+        function parseNumberList(value) {
+            return value
+                .split(',')
+                .map(function (item) {
+                    return Number(item.trim());
+                })
+                .filter(function (item) {
+                    return !Number.isNaN(item);
+                });
+        }
+
+        // クエリIDを画面に表示（未指定時はダッシュ）
+        function updateMacAddressDisplay() {
+            macAddressDisplay.textContent = queryId || '—';
+        }
+
+        // 試合状態と応援量の表示を更新
+        function updateCheerStatusDisplay() {
+            if (currentStat === 'start') {
+                matchStatusDisplay.textContent = '試合中 (START)';
+                cheerCountDisplay.textContent = String(matchCheerCount);
+                return;
+            }
+
+            matchStatusDisplay.textContent = 'デバイステスト (STOP)';
+            cheerCountDisplay.textContent = String(testWindowCheerCount);
+        }
+
+        // stat の許容値を検証して小文字へ正規化
+        function normalizeStat(value) {
+            if (typeof value !== 'string') {
+                return null;
+            }
+
+            const normalized = value.toLowerCase();
+            if (normalized === 'start' || normalized === 'stop') {
+                return normalized;
+            }
+
+            return null;
+        }
+
+        // team_id を比較しやすい形へ正規化する
+        function normalizeTeamId(value) {
+            if (typeof value === 'undefined' || value === null || value === '') {
+                return null;
+            }
+
+            const parsedTeamId = Number(value);
+            return Number.isNaN(parsedTeamId) ? null : parsedTeamId;
+        }
+
+        // 受信した team_id が現在のチームと一致するか確認する
+        function isSameTeamId(incomingTeamId) {
+            const normalizedIncomingTeamId = normalizeTeamId(incomingTeamId);
+            const normalizedCurrentTeamId = normalizeTeamId(currentTeamId);
+
+            if (normalizedIncomingTeamId === null || normalizedCurrentTeamId === null) {
+                return false;
+            }
+
+            return normalizedIncomingTeamId === normalizedCurrentTeamId;
+        }
+
+        // 5秒ごとの応援量処理
+        // start: 積算カウントを送信、stop: カウントをリセットのみ
+        function flushCheerCountByStat() {
+            if (currentStat === 'start') {
+                sendCountToWebSocket(matchCheerCount);
+                return;
+            }
+
+            testWindowCheerCount = 0;
+            updateCheerStatusDisplay();
+            addLog('STOP mode: reset cheer count (not sent)');
+        }
+
+        // ネイティブ受信回数ベースで5回ごとに処理を実行
+        function flushCheerCountByReceiveBatch() {
+            receiveSinceLastFlush += 1;
+            if (receiveSinceLastFlush < RECEIVE_FLUSH_BATCH_SIZE) {
+                return;
+            }
+
+            receiveSinceLastFlush = 0;
+            flushCheerCountByStat();
+        }
+
+        // WebSocketで受け取った stat を更新する
+        // ここで更新する stat は試合状態の管理専用で、ネイティブ向け送信には使わない
+        function updateStatFromWebSocket(nextStat, source, incomingTeamId) {
+            const normalizedStat = normalizeStat(nextStat);
+            if (!normalizedStat) {
+                addLog('Ignored invalid stat from ' + source + ': ' + String(nextStat));
+                return;
+            }
+
+            if (!isSameTeamId(incomingTeamId)) {
+                addLog('Ignored stat from ' + source + ' because team_id does not match: ' + String(incomingTeamId));
+                return;
+            }
+
+            if (currentStat === normalizedStat) {
+                return;
+            }
+
+            currentStat = normalizedStat;
+            addLog('Updated stat from ' + source + ': ' + currentStat);
+
+            if (currentStat === 'start') {
+                matchCheerCount = 0;
+                addLog('START mode: cumulative cheer count reset');
+            } else {
+                testWindowCheerCount = 0;
+                addLog('STOP mode: test cheer count reset');
+            }
+
+            updateCheerStatusDisplay();
+        }
+
+        // JSONオブジェクトをキー:値の改行形式へ整形する
+        // ネストしたオブジェクトや配列も読みやすい形で展開する
+        function formatKeyValuePairs(value, indentLevel) {
+            const indent = '  '.repeat(indentLevel || 0);
+
+            if (value === null) {
+                return indent + 'null';
+            }
+
+            if (Array.isArray(value)) {
+                return indent + '[ ' + value.map(function (item) {
+                    if (item !== null && typeof item === 'object') {
+                        return '\n' + formatKeyValuePairs(item, (indentLevel || 0) + 1);
+                    }
+
+                    return String(item);
+                }).join(', ') + ' ]';
+            }
+
+            if (typeof value !== 'object') {
+                return indent + String(value);
+            }
+
+            const lines = [];
+            Object.keys(value).forEach(function (key) {
+                const item = value[key];
+
+                if (item !== null && typeof item === 'object') {
+                    lines.push(indent + key + ':');
+                    lines.push(formatKeyValuePairs(item, (indentLevel || 0) + 1));
+                } else {
+                    lines.push(indent + key + ': ' + String(item));
+                }
+            });
+
+            return lines.join('\n');
+        }
+
+        // テスト入力欄から、ネイティブアプリ受信データ相当のJSONを構築
+        function buildTestPayload() {
+            const payload = {
+                num: Number(document.getElementById('test-num').value),
+                volt: Number(document.getElementById('test-volt').value),
+                rssi: Number(document.getElementById('test-rssi').value),
+                accel: {
+                    x: parseNumberList(document.getElementById('test-accel-x').value),
+                    y: parseNumberList(document.getElementById('test-accel-y').value),
+                    z: parseNumberList(document.getElementById('test-accel-z').value)
+                }
+            };
+
+            return payload;
+        }
+
+        // 画面入力を使って receiveFromApp を手動実行する
+        // 実機なしでもWebView側ロジックを確認できる
+        function runReceiveFromAppTest() {
+            const payload = buildTestPayload();
+            const jsonString = JSON.stringify(payload);
+            addLog('Test input sent to receiveFromApp');
+            receiveFromApp(jsonString);
+        }
+
+        // BLE切断通知のサンプル値をフォームへ設定
+        // 切断時分岐のテストをすぐ行えるようにする
+        function loadDisconnectSample() {
+            document.getElementById('test-num').value = '0';
+            document.getElementById('test-volt').value = '0.0';
+            document.getElementById('test-rssi').value = '0';
+            document.getElementById('test-accel-x').value = '0';
+            document.getElementById('test-accel-y').value = '0';
+            document.getElementById('test-accel-z').value = '0';
+        }
+
+        // WebSocket接続の初期化
+        // 切断時は指数バックオフで自動再接続する
+        function initWebSocket() {
+            if (!('WebSocket' in window)) {
+                addLog('WebSocket is not supported in this browser.');
+                return;
+            }
+
+            try {
+                ws = new WebSocket(WS_URL);
+
+                // 接続成功時: 再接続間隔を初期化し、接続通知(type=connect)を送信
+                ws.addEventListener('open', function () {
+                    wsReconnectDelay = 1000;
+                    addLog('WebSocket connected: ' + WS_URL);
+                    const macPayload = {
+                        type: 'connect',
+                        id: queryId,
+                        ts: Date.now()
+                    };
+                    const connectMessage = JSON.stringify(macPayload);
+                    ws.send(connectMessage);
+                    addWebSocketPayloadLog('send', connectMessage);
+                    addLog('Sent MAC address: ' + macPayload.id);
+                });
+
+                // 切断時: 次回接続までの待機時間を徐々に伸ばして再接続
+                ws.addEventListener('close', function () {
+                    addLog('WebSocket closed. Reconnecting in ' + (wsReconnectDelay / 1000) + 's...');
+                    setTimeout(function () {
+                        wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_DELAY_MAX);
+                        initWebSocket();
+                    }, wsReconnectDelay);
+                });
+
+                // エラー詳細はブラウザ実装で差があるため、ここでは発生事実を記録
+                ws.addEventListener('error', function () {
+                    addLog('WebSocket error');
+                });
+
+                // 受信時: まず画面へ表示し、color配列が来たときだけ現在色を更新
+                ws.addEventListener('message', function (event) {
+                    try {
+                        addWebSocketPayloadLog('receive', String(event.data));
+                        const data = JSON.parse(event.data);
+                        const incomingType = typeof data.type === 'string' ? data.type : '';
+                        const incomingUser = data.user && typeof data.user === 'object' ? data.user : null;
+                        const incomingTeam = data.team && typeof data.team === 'object' ? data.team : null;
+                        const incomingMembers = getMemberMapFromPayload(data);
+
+                        // broadcastメッセージのstat(start/stop)を直接反映
+                        if (incomingType === 'broadcast' && typeof data.stat !== 'undefined') {
+                            updateStatFromWebSocket(data.stat, 'broadcast.stat', data.team_id);
+                        }
+
+                        if (incomingMembers) {
+                            lastMemberMap = incomingMembers;
+                        }
+
+                        // user.name が空のときだけ入力フォームを表示
+                        if (incomingUser && typeof incomingUser.name !== 'undefined') {
+                            syncNameRegisterByUser(incomingUser);
+                        }
+
+                        // user.team_id は画像パス解決に使うため最優先で保持
+                        if (incomingUser && typeof incomingUser.team_id !== 'undefined') {
+                            currentTeamId = incomingUser.team_id;
+                        }
+
+                        // team.color を優先して反映
+                        if (incomingTeam && Array.isArray(incomingTeam.color) && incomingTeam.color.length === 3) {
+                            currentColor = incomingTeam.color;
+                            addLog('Received color via team.color: ' + JSON.stringify(currentColor));
+                        }
+
+                        // team.stat を試合状況として反映
+                        if (incomingTeam && typeof incomingTeam.stat !== 'undefined') {
+                            updateStatFromWebSocket(incomingTeam.stat, 'team.stat', currentTeamId);
+                        }
+
+                        // 初回読込み時、試合中(start)なら user.cheer_sum を応援量表示へ反映
+                        if (incomingUser && typeof incomingUser.cheer_sum !== 'undefined') {
+                            syncCheerSumByUser(incomingUser);
+                        }
+
+                        // user.oshi_id で member 表示を分岐
+                        if (incomingUser && typeof incomingUser.oshi_id !== 'undefined' && incomingMembers) {
+                            const oshiId = Number(incomingUser.oshi_id);
+                            if (oshiId === 0) {
+                                addLog('user.oshi_id=0 - displaying member selection');
+                                renderMemberSelection(incomingMembers);
+                            } else {
+                                const favorite = findMemberById(incomingMembers, oshiId);
+                                if (favorite) {
+                                    addLog('user.oshi_id=' + String(oshiId) + ' - displaying favorite member');
+                                    renderFavoriteMember(favorite);
+                                } else {
+                                    addLog('Favorite member not found. fallback to selection list. oshi_id=' + String(oshiId));
+                                    renderMemberSelection(incomingMembers);
+                                }
+                            }
+                        }
+
+                        // team表示
+                        if (incomingTeam && incomingTeam.name) {
+                            const teamInfo = document.getElementById('team-info');
+                            const teamImage = document.getElementById('team-image');
+                            const teamNameDisplay = document.getElementById('team-name-display');
+
+                            // 画像パスの構築
+                            const imagePath = currentTeamId !== null ? '../../html/img_teams/' + currentTeamId + '.jpg' : '';
+                            if (imagePath) {
+                                teamImage.src = withCacheBuster(imagePath);
+                            }
+                            teamImage.alt = incomingTeam.name;
+
+                            // チーム名を表示
+                            teamNameDisplay.textContent = incomingTeam.name;
+
+                            // チーム情報カードを表示
+                            teamInfo.classList.add('active');
+
+                            addLog('Received team info: ' + incomingTeam.name + ' (ID: ' + String(currentTeamId) + ')');
+                        }
+                    } catch (e) {
+                        addLog('WebSocket message parse error: ' + e.message);
+                    }
+                });
+            } catch (e) {
+                addLog('WebSocket init error: ' + e.message);
+            }
+        }
+
+        // countをWebSocketへ送信
+        // start時の積算値を5秒ごとに送信する
+        function sendCountToWebSocket(count) {
+            const payload = {
+                type: 'count',
+                id: queryId,
+                count: count,
+                stat: currentStat,
+                ts: Date.now()
+            };
+            const countMessage = JSON.stringify(payload);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(countMessage);
+                addWebSocketPayloadLog('send', countMessage);
+                addLog('Sent count via WebSocket: ' + count);
+                return true;
+            } else {
+                addLog('WebSocket not connected. count=' + count);
+                return false;
+            }
+        }
+
+        // BLE切断通知をWebSocketへ送信
+        // ネイティブ再接続の監視やサーバー側可視化に利用する
+        function sendBleDisconnectToWebSocket(consecutive) {
+            const payload = {
+                type: 'ble_disconnect',
+                id: queryId,
+                consecutive: consecutive,
+                ts: Date.now()
+            };
+            const disconnectMessage = JSON.stringify(payload);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(disconnectMessage);
+                addWebSocketPayloadLog('send', disconnectMessage);
+                addLog('Sent BLE disconnect via WebSocket: consecutive=' + payload.consecutive);
+                return true;
+            }
+
+            addLog('WebSocket not connected. BLE disconnect message was not sent.');
+            return false;
+        }
+
+        // BLE復帰通知をWebSocketへ送信
+        // 切断状態から正常データ受信へ戻ったことをサーバーへ知らせる
+        function sendBleRecoveredToWebSocket(recoveredInfo) {
+            const payload = {
+                type: 'ble_recovered',
+                id: queryId,
+                num: recoveredInfo.num,
+                volt: recoveredInfo.volt,
+                rssi: recoveredInfo.rssi,
+                accel: recoveredInfo.accel,
+                ts: Date.now()
+            };
+            const recoveredMessage = JSON.stringify(payload);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(recoveredMessage);
+                addWebSocketPayloadLog('send', recoveredMessage);
+                addLog('Sent BLE recovered via WebSocket');
+                return true;
+            }
+
+            addLog('WebSocket not connected. BLE recovered message was not sent.');
+            return false;
+        }
+
+        // 加速度データの解析
+        // 各軸でしきい値(絶対値25)を超えた回数を合算し、最大21に丸める
+        function analyzeVibrationData(accel) {
+            let count = 0;
+
+            for (const el of accel.x) {
+                if (Math.abs(el) > 25) {
+                    count++;
+                }
+            }
+
+            for (const el of accel.y) {
+                if (Math.abs(el) > 25) {
+                    count++;
+                }
+            }
+
+            for (const el of accel.z) {
+                if (Math.abs(el) > 25) {
+                    count++;
+                }
+            }
+
+            return Math.min(count, 21);
+        }
+
+        // WebViewブリッジの存在有無でプラットフォームを判定し、バッジ表示を更新
+        function updatePlatformUI() {
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.myBridge) {
+                platformIndicator.textContent = "Platform: iOS (WebKit)";
+                platformIndicator.className = "platform-badge ios";
+                return "ios";
+            } else if (window.androidBridge) {
+                platformIndicator.textContent = "Platform: Android (WebMessageListener)";
+                platformIndicator.className = "platform-badge android";
+                return "android";
+            } else {
+                platformIndicator.textContent = "Platform: Browser / Unknown";
+                platformIndicator.className = "platform-badge unknown";
+                return "unknown";
+            }
+        }
+
+        // アプリへJSON文字列を送る統一関数
+        // iOS/Androidそれぞれのブリッジ呼び出し差分をここに集約する
+        function sendMessageToApp(messageObject) {
+            const jsonString = JSON.stringify(messageObject);
+            document.getElementById('result').textContent = jsonString;
+            addLog("sendMessageToApp: " + jsonString);
+            const platform = updatePlatformUI();
+
+            if (platform === "ios") {
+                window.webkit.messageHandlers.myBridge.postMessage(jsonString);
+                addLog("Sent to iOS: " + jsonString);
+            } else if (platform === "android") {
+                window.androidBridge.postMessage(jsonString);
+                addLog("Sent to Android: " + jsonString);
+            } else {
+                addLog("No bridge found to send: " + jsonString);
+            }
+        }
+
+        // BLE切断通知の連続回数
+        // 一定回数を超えた場合にユーザーへ警告を表示する
+        let disconnectCount = 0;
+        let bleWasDisconnected = false;
+
+        // アプリ (Swift / Kotlin) から呼び出される関数
+        // ネイティブ側から受信したJSONを解析し、LED指示を返す
+        function receiveFromApp(jsonString) {
+            addLog("receiveFromApp: " + jsonString);
+
+            try {
+                const data = JSON.parse(jsonString);
+                document.getElementById('received').textContent = formatKeyValuePairs(data);
+                const volt = data.volt;
+                const accel = data.accel;
+                const rssi = data.rssi;
+                const num = data.num;
+
+                // BLE切断通知の判定
+                // num/volt/rssiが0、かつ3軸データが各1件のとき切断通知とみなす
+                if (num === 0 && volt === 0.0 && rssi === 0 && accel.x.length + accel.y.length + accel.z.length === 3) {
+                    addLog("BLE disconnected");
+
+                    // 切断時はLED消灯 + BleRetry を返し、ネイティブ側に再接続試行を促す
+                    sendMessageToApp({
+                        "LED": { "r": 0, "g": 0, "b": 0 },
+                        "stat": "BleRetry"
+                    });
+                    disconnectCount++;
+                    bleWasDisconnected = true;
+
+                    // 切断イベントをサーバーへ通知
+                    sendBleDisconnectToWebSocket(disconnectCount);
+
+                    // 切断が連続した場合は端末確認を促す
+                    if (disconnectCount >= 5) {
+                        alert("BLE接続が5回切断されました。デバイスを確認してください。");
+                        disconnectCount = 0;
+                    }
+
+                    // 切断通知は通常解析の対象外
+                    return;
+                }
+
+                // 切断状態から通常データへ戻った最初の1回だけ復帰通知を送る
+                if (bleWasDisconnected) {
+                    sendBleRecoveredToWebSocket({
+                        num: num,
+                        volt: volt,
+                        rssi: rssi,
+                        accel: accel
+                    });
+                    bleWasDisconnected = false;
+                }
+
+                // 正常データ受信時は切断カウンタをリセット
+                disconnectCount = 0;
+
+                // 振動データを解析して強度countを算出
+                const count = analyzeVibrationData(accel);
+
+                // 試合状態に応じて表示カウントを更新
+                if (currentStat === 'start') {
+                    matchCheerCount += count;
+                } else {
+                    testWindowCheerCount += count;
+                }
+                updateCheerStatusDisplay();
+
+                // 5回受信ごとに、startなら送信/stopならクリアを実行
+                flushCheerCountByReceiveBatch();
+
+                // サーバー指定色(currentColor)の有効チャネルだけを点灯し、countに応じてPWM値を計算
+                const r = count * 12 * Math.trunc(currentColor[0] / 255)
+                const g = count * 12 * Math.trunc(currentColor[1] / 255)
+                const b = count * 12 * Math.trunc(currentColor[2] / 255)
+                const led = { "r": r, "g": g, "b": b }
+
+                // 処理結果をアプリに送り返す
+                sendMessageToApp({
+                    "LED": led,
+                    "stat": "OK"
+                });
+
+            } catch (e) {
+                addLog("Error parsing message: " + e.message);
+                document.getElementById('received').textContent = jsonString;
+                console.error('receiveFromApp error:', e);
+            }
+        }
+
+        // 「終了」ボタン押下時はネイティブへ終了通知を送る
+        document.getElementById('btn-end').addEventListener('click', function () {
+            sendMessageToApp({ "stat": "end" });
+        });
+
+        // テスト実行ボタン
+        document.getElementById('btn-test-run').addEventListener('click', runReceiveFromAppTest);
+
+        // 切断サンプル入力ボタン
+        document.getElementById('btn-test-sample').addEventListener('click', loadDisconnectSample);
+
+        // 名前登録送信ボタン
+        document.getElementById('btn-name-register').addEventListener('click', submitUserNameRegistration);
+
+        // 名前入力欄でEnter押下でも送信
+        nameInput.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submitUserNameRegistration();
+            }
+        });
+
+        // 初期化処理: プラットフォーム表示、ID表示、WebSocket接続開始
+        window.onload = function () {
+            updatePlatformUI();
+            updateMacAddressDisplay();
+            updateCheerStatusDisplay();
+            initWebSocket();
+        };
+
+        // Android側ブリッジ注入が遅れるケースに備えて再判定
+        setTimeout(updatePlatformUI, 500);
+        /*
+        ・ネイティブアプリは、Webviewが開いたらバックグラウンドで１秒間隔でBLEで振動データを受信してWebViewに送信する
+        内容
+         payload = {
+                “num":  i++,
+                "accel": {
+                    "x": [ *, *, * , *, *, *, *, *, *, *],
+                    "y": [ *, *, * , *, *, *, *, *, *, *],
+                    "z": [ *, *, * , *, *, *, *, *, *, *],
+                },
+            “volt”: *.**,
+            “rssi”: -** 
+            }
+        
+        WebViewでVoltが終止電圧付近（1.0VX3=3.0V)になったら「電池残少」表示をする
+        
+        ・ネイティブアプリは、WebViewからのLEDのPWMを受信、
+         内容
+         payload = { "LED": { "r": *, "g": *, "b": * }, "stat": “OK” }
+        
+        
+        ・ 終了処理
+        Webviewの終了ボタンを押されたら、以下をネイティブアプリに送信
+         payload = { "stat": “end” }
+        ネイティブアプリは、終了を受信したらアプリを終了する。
+        
+        
+        ・ネイティブアプリでBLEペアリングが切れたら以下をWebViewに送信
+        payload　=  {“num": 0, "accel": { "x" : [0], "y": [0], "z": [0]}, “volt”: 0.0, ”rssi”: 0} 
+        
+        ・WebViewはレスポンス送信
+        ｛LED:[R,G,B], stat：BleRetry｝
+     ネイティブアプリでBLEペアリングを再試行してつながらなかったら
+     {“num": 0, "accel": { "x" : [0], "y": [0], "z": [0]}, “volt”: 0.0, ”rssi”: 0} をWebViewに送信
+        つながったら通常の振動データを送信する
+        数回つながらなかったらWebviewでアラート表示
+        
+*/
+    </script>
+
+
+</body></html>

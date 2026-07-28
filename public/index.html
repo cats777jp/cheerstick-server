@@ -822,6 +822,12 @@
       hideSplash();
     }
 
+    // connect応答にreference_urlが含まれる場合のみ、アプリへ転送する
+    if (msg.reference_url) {
+      window.CheerStickBridge && window.CheerStickBridge.sendData &&
+        window.CheerStickBridge.sendData({ stat: 'connect', url: msg.reference_url });
+    }
+
     if (team) {
       if (team.logo_url) {
         teamLogo.src = team.logo_url;
@@ -925,6 +931,26 @@
     cheerCountDisplay.textContent = '0';
   });
 
+  // ---------- ネイティブアプリ向けブリッジ（送信側） ----------
+  window.CheerStickBridge = {
+    _post: function (obj) {
+      const s = JSON.stringify(obj);
+      // 注意: Androidのブリッジは非同期注入のため、
+      //       起動時に判定を固定せず、送信のたびに判定すること
+      if (window.webkit && window.webkit.messageHandlers
+          && window.webkit.messageHandlers.myBridge) {
+        window.webkit.messageHandlers.myBridge.postMessage(s);
+      } else if (window.androidBridge) {
+        window.androidBridge.postMessage(s);
+      } else {
+        console.warn('[bridge] native bridge not found:', s);
+      }
+    },
+    sendLED:  function (o) { this._post(o); },
+    sendEnd:  function (o) { this._post(o); },
+    sendData: function (o) { this._post(o); }
+  };
+
   endCheeringBtn.addEventListener('click', () => {
     window.CheerStickBridge && window.CheerStickBridge.sendEnd &&
       window.CheerStickBridge.sendEnd({ stat: 'end' });
@@ -1012,7 +1038,7 @@
     if (isBleDisconnectPayload(payload)) {
       bleAlertDisplay.classList.remove('hidden');
       window.CheerStickBridge && window.CheerStickBridge.sendLED &&
-        window.CheerStickBridge.sendLED({ LED: [0, 0, 0], stat: 'BleRetry' });
+        window.CheerStickBridge.sendLED({ LED: { r: 0, g: 0, b: 0 }, stat: 'BleRetry' });
       return;
     }
 
@@ -1055,6 +1081,19 @@
       batteryDisplay.classList.remove('hidden');
     } else {
       batteryDisplay.classList.add('hidden');
+    }
+  };
+
+  // ---------- ネイティブアプリ向けブリッジ（受信側） ----------
+  // アプリ側は receiveFromApp(jsonString) を呼び出す（Vanstone確認済み）。
+  // window.onCheerStickData の入口として、JSON文字列のパースのみ担う。
+  window.receiveFromApp = function (jsonString) {
+    try {
+      const payload = (typeof jsonString === 'string')
+        ? JSON.parse(jsonString) : jsonString;
+      window.onCheerStickData(payload);
+    } catch (e) {
+      console.error('[bridge] parse error:', e, jsonString);
     }
   };
 
