@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>試合管理 | 推しフル管理画面</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --card-bg: #161b22;
+    --border: #2a323d;
+    --text: #f4f6f8;
+    --text-muted: #9aa4af;
+    --accent: #4d8dff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px 16px 60px;
+  }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  h2 { font-size: 15px; color: var(--text-muted); margin: 0 0 12px; }
+
+  .error-bar {
+    display: none;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: #b3261e;
+    color: #fff;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 14px;
+  }
+  .error-bar.visible { display: block; }
+
+  .container { max-width: 900px; margin: 0 auto; }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+
+  /* (A) 記録状態バナー */
+  .record-banner {
+    text-align: center;
+    padding: 28px 16px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+  }
+  .record-banner.live {
+    background: #1b3a24;
+    border: 1px solid #2e7d46;
+  }
+  .record-banner.stopped {
+    background: #2a2f36;
+    border: 1px solid var(--border);
+  }
+  .record-banner .headline {
+    font-size: 28px;
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+  .record-banner.live .headline { color: #4ade80; }
+  .record-banner.stopped .headline { color: var(--text-muted); }
+  .record-banner .detail { font-size: 15px; color: var(--text); }
+  .record-banner .note { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--text-muted); font-weight: normal; font-size: 12px; }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #0b0f14;
+  }
+  .badge.live { background: #4ade80; }
+  .badge.paused { background: #facc15; }
+  .badge.scheduled { background: #9aa4af; }
+  .badge.finished { background: #60a5fa; }
+  .badge.cancelled { background: #f87171; }
+
+  button {
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #1f2733;
+    color: var(--text);
+    cursor: pointer;
+    margin-right: 4px;
+    margin-bottom: 4px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { background: #b3261e; border-color: #b3261e; color: #fff; }
+
+  label { display: block; font-size: 13px; color: var(--text-muted); margin: 10px 0 4px; }
+  input, select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0f141b;
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+    padding: 16px;
+  }
+  .modal-overlay.visible { display: flex; }
+  .modal-box {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .modal-box .actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+
+  .empty-row td { color: var(--text-muted); text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>試合管理</h1>
+  <div id="errorBar" class="error-bar"></div>
+
+  <!-- (A) 現在の記録状態 -->
+  <div id="recordBanner" class="record-banner stopped">
+    <div class="headline">■ 記録停止中</div>
+    <div class="note">応援データは保存されません</div>
+  </div>
+
+  <!-- (C) 新規登録フォーム -->
+  <div class="card">
+    <h2>新規試合登録</h2>
+    <form id="createForm">
+      <label for="createTitle">試合名</label>
+      <input id="createTitle" type="text" required>
+
+      <label for="createOrg">チーム</label>
+      <select id="createOrg" required></select>
+
+      <label for="createStartsAt">開始日時</label>
+      <input id="createStartsAt" type="datetime-local" required>
+
+      <label for="createEndsAt">終了日時（任意）</label>
+      <input id="createEndsAt" type="datetime-local">
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- (B) 試合一覧 -->
+  <div class="card">
+    <h2>試合一覧</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>試合名</th>
+          <th>チーム</th>
+          <th>開始日時</th>
+          <th>状態</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="eventsTableBody">
+        <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- (D) 編集モーダル -->
+<div id="editModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2>試合を編集</h2>
+    <form id="editForm">
+      <input type="hidden" id="editId">
+      <label for="editTitle">試合名</label>
+      <input id="editTitle" type="text" required>
+
+      <label for="editOrg">チーム</label>
+      <select id="editOrg" required></select>
+
+      <label for="editStartsAt">開始日時</label>
+      <input id="editStartsAt" type="datetime-local" required>
+
+      <label for="editEndsAt">終了日時（任意）</label>
+      <input id="editEndsAt" type="datetime-local">
+
+      <div class="actions">
+        <button type="button" id="editCancelBtn">キャンセル</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? '/api/v1/admin'
+    : 'https://api.cheerstick.com/api/v1/admin';
+
+  const errorBar = document.getElementById('errorBar');
+  const recordBanner = document.getElementById('recordBanner');
+  const eventsTableBody = document.getElementById('eventsTableBody');
+
+  const createForm = document.getElementById('createForm');
+  const createOrg = document.getElementById('createOrg');
+
+  const editModalOverlay = document.getElementById('editModalOverlay');
+  const editForm = document.getElementById('editForm');
+  const editOrg = document.getElementById('editOrg');
+  const editCancelBtn = document.getElementById('editCancelBtn');
+
+  const STATUS_LABELS = {
+    live: 'live',
+    paused: 'paused',
+    scheduled: 'scheduled',
+    finished: 'finished',
+    cancelled: 'cancelled',
+  };
+
+  function showError(message) {
+    errorBar.textContent = message;
+    errorBar.classList.add('visible');
+  }
+
+  function clearError() {
+    errorBar.textContent = '';
+    errorBar.classList.remove('visible');
+  }
+
+  // datetime-local (ローカル壁時計時刻) <-> ISO文字列(UTC) の変換。
+  // Dateコンストラクタは "YYYY-MM-DDTHH:mm" 形式をローカル時刻として解釈するため、
+  // toISOString()でそのままUTCへ変換すればタイムゾーンのずれは起きない。
+  function datetimeLocalToIso(value) {
+    if (!value) return null;
+    return new Date(value).toISOString();
+  }
+
+  // サーバーから返るISO文字列を、datetime-local入力欄用の表示形式に変換する。
+  // ローカルのgetter（getHours等）を使い、ブラウザのローカル時刻表現に揃える。
+  function isoToDatetimeLocal(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function formatDisplayDate(value) {
+    if (!value) return '';
+    return new Date(value).toLocaleString('ja-JP', {
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  }
+
+  async function apiFetch(path, options) {
+    let res;
+    try {
+      res = await fetch(API_BASE + path, options);
+    } catch (e) {
+      showError('サーバーに接続できませんでした: ' + e.message);
+      throw e;
+    }
+
+    let body = null;
+    try {
+      body = await res.json();
+    } catch (e) {
+      // レスポンスボディが無い場合もある
+    }
+
+    if (!res.ok) {
+      const err = new Error((body && body.error) || `HTTP ${res.status}`);
+      err.status = res.status;
+      err.body = body;
+      throw err;
+    }
+    return body;
+  }
+
+  function populateOrgSelect(selectEl, organizations) {
+    selectEl.innerHTML = '';
+    organizations.forEach((org) => {
+      const opt = document.createElement('option');
+      opt.value = org.id;
+      opt.textContent = org.name;
+      selectEl.appendChild(opt);
+    });
+  }
+
+  function renderBanner(events) {
+    const liveEvents = events.filter((e) => e.status === 'live');
+
+    if (liveEvents.length > 0) {
+      recordBanner.className = 'record-banner live';
+      recordBanner.innerHTML =
+        '<div class="headline">● 記録中</div>' +
+        liveEvents.map((e) => `<div class="detail">${escapeHtml(e.title)}</div>`).join('');
+    } else {
+      recordBanner.className = 'record-banner stopped';
+      recordBanner.innerHTML =
+        '<div class="headline">■ 記録停止中</div>' +
+        '<div class="note">応援データは保存されません</div>';
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  function actionButtonsFor(event) {
+    const buttons = [];
+    if (event.status === 'scheduled') {
+      buttons.push({ label: '開始', nextStatus: 'live', confirm: false });
+    } else if (event.status === 'live') {
+      buttons.push({ label: '停止', nextStatus: 'paused', confirm: false });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true });
+    } else if (event.status === 'paused') {
+      buttons.push({ label: '再開', nextStatus: 'live', confirm: false });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true });
+    }
+    return buttons;
+  }
+
+  function renderTable(events) {
+    eventsTableBody.innerHTML = '';
+
+    if (events.length === 0) {
+      eventsTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">登録されている試合はありません</td></tr>';
+      return;
+    }
+
+    events.forEach((event) => {
+      const tr = document.createElement('tr');
+
+      const statusLabel = STATUS_LABELS[event.status] || event.status;
+
+      tr.innerHTML = `
+        <td>${escapeHtml(event.title)}</td>
+        <td>${escapeHtml(event.organization_name || '-')}</td>
+        <td>${escapeHtml(formatDisplayDate(event.starts_at))}</td>
+        <td><span class="badge ${escapeHtml(event.status)}">${escapeHtml(statusLabel)}</span></td>
+        <td class="action-cell"></td>
+      `;
+
+      const actionCell = tr.querySelector('.action-cell');
+
+      actionButtonsFor(event).forEach((btnDef) => {
+        const btn = document.createElement('button');
+        btn.textContent = btnDef.label;
+        if (btnDef.confirm) btn.classList.add('danger');
+        btn.addEventListener('click', () => handleStatusChange(event, btnDef));
+        actionCell.appendChild(btn);
+      });
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '編集';
+      editBtn.addEventListener('click', () => openEditModal(event));
+      actionCell.appendChild(editBtn);
+
+      eventsTableBody.appendChild(tr);
+    });
+  }
+
+  async function handleStatusChange(event, btnDef) {
+    if (btnDef.confirm) {
+      const ok = confirm(`「${event.title}」を終了します。この操作は取り消せません。よろしいですか？`);
+      if (!ok) return;
+    }
+
+    try {
+      await apiFetch(`/events/${event.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: btnDef.nextStatus }),
+      });
+      clearError();
+    } catch (e) {
+      if (e.status === 409 && e.body) {
+        const conflict = e.body.conflicting_event;
+        alert(
+          '既に同じチームでlive中の試合があるため開始できません。\n' +
+          (conflict ? `該当試合: ${conflict.title}（id: ${conflict.id}）` : '')
+        );
+      } else {
+        showError('状態の更新に失敗しました: ' + e.message);
+      }
+    } finally {
+      await refreshAll();
+    }
+  }
+
+  function openEditModal(event) {
+    document.getElementById('editId').value = event.id;
+    document.getElementById('editTitle').value = event.title;
+    document.getElementById('editStartsAt').value = isoToDatetimeLocal(event.starts_at);
+    document.getElementById('editEndsAt').value = isoToDatetimeLocal(event.ends_at);
+    editOrg.value = event.organization_id;
+    editModalOverlay.classList.add('visible');
+  }
+
+  function closeEditModal() {
+    editModalOverlay.classList.remove('visible');
+  }
+
+  editCancelBtn.addEventListener('click', closeEditModal);
+
+  editForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('editId').value;
+
+    try {
+      await apiFetch(`/events/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: document.getElementById('editTitle').value.trim(),
+          organization_id: editOrg.value,
+          starts_at: datetimeLocalToIso(document.getElementById('editStartsAt').value),
+          ends_at: datetimeLocalToIso(document.getElementById('editEndsAt').value),
+        }),
+      });
+      clearError();
+      closeEditModal();
+    } catch (e2) {
+      showError('試合の更新に失敗しました: ' + e2.message);
+    } finally {
+      await refreshAll();
+    }
+  });
+
+  createForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    try {
+      await apiFetch('/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: document.getElementById('createTitle').value.trim(),
+          organization_id: createOrg.value,
+          starts_at: datetimeLocalToIso(document.getElementById('createStartsAt').value),
+          ends_at: datetimeLocalToIso(document.getElementById('createEndsAt').value),
+        }),
+      });
+      clearError();
+      createForm.reset();
+    } catch (e2) {
+      showError('試合の登録に失敗しました: ' + e2.message);
+    } finally {
+      await refreshAll();
+    }
+  });
+
+  async function loadOrganizations() {
+    try {
+      const organizations = await apiFetch('/organizations');
+      populateOrgSelect(createOrg, organizations);
+      populateOrgSelect(editOrg, organizations);
+    } catch (e) {
+      showError('チーム一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  async function refreshAll() {
+    try {
+      const events = await apiFetch('/events');
+      renderBanner(events);
+      renderTable(events);
+    } catch (e) {
+      showError('試合一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  loadOrganizations();
+  refreshAll();
+})();
+</script>
+</body>
+</html>

@@ -292,6 +292,10 @@ const EVENT_STATUSES = ['scheduled', 'live', 'paused', 'finished', 'cancelled'];
 /**
  * 管理用：イベントの試合状態(status)を更新。
  * EVENT_STATUSES以外の値は拒否する（DBのCHECK制約より前にアプリ側で弾く）。
+ *
+ * statusを'live'にする場合、同じorganization_idに既にstatus='live'の
+ * 別イベントが無いかを確認する。findLiveEventForOrganizationはLIMIT 1
+ * のため、liveが重複すると応援ログが意図しない試合へ記録されてしまう。
  */
 async function updateEventStatus(eventId, status) {
   if (!EVENT_STATUSES.includes(status)) {
@@ -300,11 +304,135 @@ async function updateEventStatus(eventId, status) {
     throw err;
   }
 
+  if (status === 'live') {
+    const { rows: currentRows } = await db.query(
+      `SELECT organization_id FROM events WHERE id = $1`,
+      [eventId]
+    );
+    const organizationId = currentRows[0] && currentRows[0].organization_id;
+
+    if (organizationId) {
+      const { rows: conflictRows } = await db.query(
+        `SELECT id, title FROM events
+         WHERE organization_id = $1 AND status = 'live' AND id <> $2
+         LIMIT 1`,
+        [organizationId, eventId]
+      );
+      if (conflictRows[0]) {
+        const err = new Error('another event is already live for this organization');
+        err.code = 'LIVE_EVENT_CONFLICT';
+        err.conflict = conflictRows[0];
+        throw err;
+      }
+    }
+  }
+
   const { rows } = await db.query(
     `UPDATE events SET status = $1 WHERE id = $2 RETURNING id, status`,
     [status, eventId]
   );
   return rows[0] || null;
+}
+
+/**
+ * 管理画面：organization_idが実在するか確認する。
+ * 無ければORGANIZATION_NOT_FOUNDを投げる（呼び出し元で400にマッピングする）。
+ */
+async function assertOrganizationExists(organizationId) {
+  const { rows } = await db.query(`SELECT id FROM organizations WHERE id = $1`, [organizationId]);
+  if (!rows[0]) {
+    const err = new Error('organization not found');
+    err.code = 'ORGANIZATION_NOT_FOUND';
+    throw err;
+  }
+}
+
+/**
+ * 管理画面：試合管理API用に全イベントをstarts_at DESCで取得。
+ * organization名もJOINして含める（プルダウン表示は別途listOrganizationsForAdminを使う）。
+ */
+async function listEventsAdmin() {
+  const { rows } = await db.query(
+    `SELECT e.id, e.title, e.organization_id, o.name AS organization_name,
+            e.starts_at, e.ends_at, e.status, e.created_at
+     FROM events e
+     LEFT JOIN organizations o ON o.id = e.organization_id
+     ORDER BY e.starts_at DESC`
+  );
+  return rows;
+}
+
+/**
+ * 管理画面：試合を新規登録する（statusは既定値'scheduled'のまま）。
+ * organization_idが実在しない場合はORGANIZATION_NOT_FOUNDを投げる。
+ */
+async function createEvent({ title, organizationId, startsAt, endsAt }) {
+  await assertOrganizationExists(organizationId);
+
+  const { rows } = await db.query(
+    `INSERT INTO events (organization_id, title, starts_at, ends_at)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, organization_id, title, starts_at, ends_at, status, created_at`,
+    [organizationId, title, startsAt, endsAt || null]
+  );
+  return rows[0];
+}
+
+/**
+ * 管理画面：渡されたフィールドのみを部分更新する。
+ * fieldsに無いキーは更新しない。organizationIdが含まれる場合は実在確認する。
+ * 対象イベントが無い場合、または更新対象フィールドが無い場合はnullを返す
+ * （呼び出し元で404にマッピングする）。
+ */
+async function updateEvent(eventId, fields) {
+  const columnMap = {
+    title: 'title',
+    organizationId: 'organization_id',
+    startsAt: 'starts_at',
+    endsAt: 'ends_at',
+  };
+
+  if (Object.prototype.hasOwnProperty.call(fields, 'organizationId')) {
+    await assertOrganizationExists(fields.organizationId);
+  }
+
+  const setClauses = [];
+  const values = [];
+  let i = 1;
+
+  for (const [key, column] of Object.entries(columnMap)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      setClauses.push(`${column} = $${i}`);
+      values.push(fields[key]);
+      i += 1;
+    }
+  }
+
+  if (setClauses.length === 0) {
+    const { rows } = await db.query(
+      `SELECT id, organization_id, title, starts_at, ends_at, status, created_at
+       FROM events WHERE id = $1`,
+      [eventId]
+    );
+    return rows[0] || null;
+  }
+
+  values.push(eventId);
+  const { rows } = await db.query(
+    `UPDATE events SET ${setClauses.join(', ')}
+     WHERE id = $${i}
+     RETURNING id, organization_id, title, starts_at, ends_at, status, created_at`,
+    values
+  );
+  return rows[0] || null;
+}
+
+/**
+ * 管理画面：試合登録フォームのプルダウン用にid/nameのみ取得。
+ */
+async function listOrganizationsForAdmin() {
+  const { rows } = await db.query(`SELECT id, name FROM organizations ORDER BY name`);
+  return rows;
 }
 
 module.exports = {
@@ -323,4 +451,8 @@ module.exports = {
   findLiveEventForOrganization,
   insertCheerLog,
   updateEventStatus,
+  listEventsAdmin,
+  createEvent,
+  updateEvent,
+  listOrganizationsForAdmin,
 };
