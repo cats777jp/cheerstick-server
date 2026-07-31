@@ -74,14 +74,16 @@ cheerstick-api        pm2 stopped、旧プロトタイプ。削除候補
 
 ### ドメイン・SSL
 
-証明書有効期限：2026-10-19
+| ドメイン | 状態 | 証明書有効期限 |
+|---|---|---|
+| api.cheerstick.com | 稼働中 | 2026-10-19 |
+| app.cheerstick.com | 稼働中 | 2026-10-19 |
+| ws.cheerstick.com | 稼働中 | 2026-10-19 |
+| admin.cheerstick.com | **稼働中（2026-07-31、案B本番反映により新設）** | 2026-10-29 |
 
-| ドメイン | 状態 |
-|---|---|
-| api.cheerstick.com | 稼働中 |
-| app.cheerstick.com | 稼働中 |
-| ws.cheerstick.com | 稼働中 |
-| admin.cheerstick.com | 未設定（Grafana等用、優先度低） |
+> 2026-07-31、`admin.cheerstick.com`を「未設定（Grafana等用、優先度低）」から更新。
+> 管理画面（試合管理）配信用として本番反映されたため（旧記述のGrafana用途とは異なる）。
+> 詳細は下記「管理画面 admin.cheerstick.com（案B）」節を参照。
 
 Route53 Aレコードは4本とも上記パブリックIPを直接指す。TTL 300。
 
@@ -96,9 +98,16 @@ User : cheerstick
 ### 環境変数（.env）
 
 ```
-ALLOWED_ORIGINS=https://app.cheerstick.com   # ワイルドカード許可は解消済み
+ALLOWED_ORIGINS=https://app.cheerstick.com,https://admin.cheerstick.com
+                                              # 2026-07-31、admin.cheerstick.com追加
+                                              # （案B本番反映。ワイルドカード許可は解消済み）
 ENABLE_REFERENCE_TOKEN=false                 # 署名付きトークン、現在無効化中
+ALLOW_PRODUCTION_DB=true                     # 2026-07-31追加。本番誤接続ガード
+                                              # （src/db/productionGuard.js）が要求する変数。
+                                              # 未設定のまま起動するとprocess.exit(1)する
 ```
+
+編集前のバックアップ：`.env.bak_20260731`（EC2上、`/home/ubuntu/cheerstick-server-new/`）
 
 ---
 
@@ -117,19 +126,26 @@ Claude Code起動  : cd C:\Projects\cheerstick-server → claude
 
 ## デプロイ手順
 
-### ⚠️ 静的ファイルは2箇所ある
+### ⚠️ 静的ファイルは2箇所ある（2026-07-31、管理画面にも適用されることを確認）
 
 ```
-/home/ubuntu/cheerstick-server-new/public/index.html   （git管理下）
-/var/www/cheerstick-app/index.html                     （nginxが実際に配信）
+/home/ubuntu/cheerstick-server-new/public/index.html         （git管理下）
+/var/www/cheerstick-app/index.html                            （nginxが実際に配信）
+
+/home/ubuntu/cheerstick-server-new/public/admin/index.html    （git管理下）
+/var/www/cheerstick-admin/index.html                           （nginxが実際に配信、2026-07-31新設）
 ```
 
 **`git checkout` だけでは後者に反映されない。** 過去にこの見落としでデプロイ漏れ発生済み。
+2026-07-31の案B本番反映で管理画面用ディレクトリ（`/var/www/cheerstick-admin/`）を新設したため、
+**同じ問題が管理画面にも当てはまる。** 今後 `public/admin/index.html` を変更した際は、
+`/var/www/cheerstick-admin/` への再コピーを忘れないこと。
 
 ```bash
 cd /home/ubuntu/cheerstick-server-new
 git pull
 sudo cp public/index.html /var/www/cheerstick-app/index.html   # ← 忘れやすい
+sudo cp public/admin/index.html /var/www/cheerstick-admin/     # ← 2026-07-31追加。同様に忘れやすい
 pm2 restart cheerstick-server
 ```
 
@@ -219,6 +235,38 @@ sudo systemctl reload nginx
   移行を検討する（`docs/spec.md` 8章参照）
 - 動作確認時、EC2上のcurlは許可IPに含まれないため `403` が返るのが正常。
   実際の疎通確認はKMT様のオフィス（またはVPN経由）から行うこと
+
+---
+
+## 管理画面 admin.cheerstick.com（案B、2026-07-31本番反映）
+
+`docs/tasks/2026-07-31-planB-deploy.md`（PHASE 1〜6）に従い本番反映済み。
+
+```
+配信元       : /var/www/cheerstick-admin/（新設。git管理下の原本は public/admin/index.html）
+所有者       : ubuntu:ubuntu（手順書は www-data:www-data を想定していたが、
+               既存の /var/www/cheerstick-app/ が ubuntu:ubuntu だったため、
+               それに合わせた。ディレクトリ755、index.html 664）
+nginx設定    : /etc/nginx/sites-available/cheerstick-admin（新規ファイル。
+               既存の cheerstick-api / cheerstick-app / cheerstick-ws は無変更）
+IP制限       : location / の内側に allow 49.156.217.121; deny all;
+               （serverブロック直下に書くと、Certbotのnginxプラグインが
+               証明書更新時に挿入する一時locationにも継承され、
+               初回発行・90日ごとの自動更新の両方が失敗するため）
+証明書       : Certbot nginxプラグイン方式（既存3ドメインと同じ）。
+               admin.cheerstick.com単独の証明書として新規取得（--expand未使用）。
+               有効期限 2026-10-29（他3ドメインとは取得日が異なるため個別）
+API呼び出し  : 絶対URL方式（https://api.cheerstick.com/api/v1/admin）。
+               admin.cheerstick.com自体は静的HTMLの配信のみで、
+               api.cheerstick.comへのプロキシは作成していない
+               （作ると api.cheerstick.com 側のIP制限を迂回する経路になるため）
+```
+
+CORS対応：本番`.env`の`ALLOWED_ORIGINS`に`https://admin.cheerstick.com`を追加済み
+（上記「環境変数（.env）」参照）。2026-07-31、`OPTIONS`によるCORSプリフライトを
+POST/PATCHの両方で確認済み（`204`、`Access-Control-Allow-Origin: https://admin.cheerstick.com`、
+`Access-Control-Allow-Methods`に`POST`/`PATCH`/`DELETE`含む）。ブラウザでの実地確認
+（Consoleエラー無し等）はKMT様が別途実施。
 
 ---
 

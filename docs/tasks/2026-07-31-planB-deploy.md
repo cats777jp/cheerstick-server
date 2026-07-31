@@ -419,3 +419,61 @@ sudo systemctl reload nginx
 
 最も失敗しやすいのは PHASE 6 のCORSだが、原因はほぼ `.env` の記述に限られる。
 `pm2 restart` を伴う修正になる点だけ留意すること。
+
+---
+
+## 実施結果（2026-07-31、Claude Code実施）
+
+**PHASE 1〜6のうち、6-5のみ未実施。** 各PHASEの停止ポイントでユーザー（KMT様）へ
+報告し、指示を得てから次PHASEへ進む形で実施した。詳細は`docs/worklog.md`
+2026-07-31エントリ「案B本番反映（PHASE 1〜6、6-5を除く）」を参照。
+
+### 実施済み
+
+- **PHASE 1**：`.env`編集（`ALLOW_PRODUCTION_DB=true`追記、`ALLOWED_ORIGINS`に
+  `https://admin.cheerstick.com`追加）→ 確認 → `git pull`（`fc2c21b`→`70683f4`）→
+  `npm ci`不要と判断 → `pm2 restart`（`online`、`productionGuard`ブロック無し）→
+  一般API疎通確認（api/app 200、ws 101）。すべて想定通り
+- **PHASE 2**：DNS伝播確認のみ実施（レコード追加はKMT様がRoute53で実施済み）。
+  `dig A admin.cheerstick.com +short`→`52.196.49.126`を確認
+- **PHASE 3**：`/var/www/cheerstick-admin/`新設、`index.html`配置。**所有者は
+  手順書指定の`www-data:www-data`ではなく`ubuntu:ubuntu`を採用**（既存
+  `/var/www/cheerstick-app/`の実際の所有者に合わせた。手順書4章の分岐指示どおり）
+- **PHASE 4**：`/etc/nginx/sites-available/cheerstick-admin`新規作成、IP制限を
+  `location /`内側に配置、`nginx -t`→`reload`。ローカル(VPN)から200、EC2自身から
+  403を確認しIP制限の実効性を実証
+- **PHASE 5**：`sudo certbot --nginx -d admin.cheerstick.com --non-interactive`で
+  単独証明書を新規取得（`--expand`未使用）。5-1確認：443 sslブロック追加・
+  IP制限保持・80→443リダイレクト追加、いずれも手動修正不要で想定通り。
+  有効期限2026-10-29
+- **PHASE 6**：6-1（HTTPS疎通200 OK）・6-4（一般API再確認、影響なし）を実施。
+  6-2はPHASE 4で実証済みとしてスキップ。6-3（CORS、ブラウザでのConsole確認）は
+  KMT様が別途実施する方針とし未実施（代わりにCORSプリフライトを`curl`の
+  `OPTIONS`メソッドでPOST/PATCH双方確認し、`204`・許可ヘッダともに正常と確認済み）
+
+### 未実施：PHASE 6-5（管理画面の書き込み動作確認）
+
+手順書は「KMT様が本番用の初回試合データを実際に登録することをもって書き込み動作の
+確認とする」としていたが、実施の直前に以下のリスクが判明したため見送った。
+
+- 試合の`status`を`finished`にすると、管理画面の操作ボタンが消えて元に戻せない
+  （`actionButtonsFor()`の実装上、`finished`からの遷移先ボタンが存在しない）
+- 現時点でDELETEエンドポイントが未実装（`docs/proposals/admin-delete-endpoint.md`、
+  `docs/spec.md`既知の課題11.3）であり、一度登録・進行させた試合データを
+  本番から除去する手段が無い
+- 上記2点により、本番用の初回試合データを誤って操作した場合、**8/9当日まで
+  復旧不能な状態で一覧に残り続けるリスクがある**と判断
+
+**決定（KMT様判断、2026-07-31）：** 8/9に向けた本番用試合データの登録は、
+DELETE機能の実装・本番反映が完了するまで行わない。DELETE機能は`docs/spec.md`
+既知の課題11.3の追記のとおり、「余裕があれば対応する」改善項目ではなく、
+**8/9試合に向けた前提条件**に格上げされた。
+
+### 次に必要な作業
+
+1. DELETE機能の実装（`docs/proposals/admin-delete-endpoint.md`）
+   - 着手前に`cheer_logs`→`events`の外部キー制約`confdeltype`をstaging環境で確認
+   - staging環境で実装・検証後、単独デプロイとして本番反映
+2. DELETE機能の本番反映後、PHASE 6-5相当の書き込み動作確認
+   （本番用初回試合データの登録、status遷移、日時往復、409競合表示）を改めて実施
+3. PHASE 6-3（CORSのブラウザ実地確認）はKMT様の実施結果待ち

@@ -4,6 +4,101 @@
 
 ---
 
+## 2026-07-31 案B本番反映（PHASE 1〜6、6-5を除く）
+
+### 実施したこと
+- `docs/tasks/2026-07-31-planB-deploy.md`に従い、KMT様の逐次指示のもと
+  案B（`admin.cheerstick.com`新設）を本番反映した。各PHASEごとに停止ポイントで
+  報告し、指示を得てから次へ進む形で実施
+- **PHASE 1（通常デプロイ、11コミットの反映）**
+  1. `.env`をバックアップ（`.env.bak_20260731`）後、`ALLOW_PRODUCTION_DB=true`追記、
+     `ALLOWED_ORIGINS`に`https://admin.cheerstick.com`を追加（カンマ後スペース無しを
+     `cat -A`で確認）
+  2. `git pull origin feature/reference-data`：`fc2c21b`→`70683f4`（Fast-forward）。
+     `public/admin/index.html`の存在を確認
+  3. `package.json`/`package-lock.json`に差分無し、`npm ci`は不要と判断
+  4. `pm2 restart cheerstick-server`：`online`、再起動回数1、`productionGuard`の
+     ブロック無し、`CheerStick server running on port 3000`を確認
+  5. 一般API疎通確認：`api.cheerstick.com/geturl`200、`app.cheerstick.com/index.html`200、
+     `wss://ws.cheerstick.com/cheer`101 Switching Protocols
+- **PHASE 2（DNS伝播確認）**：`dig A admin.cheerstick.com +short`（ローカル`nslookup`・
+  EC2上`dig`の両方）で`52.196.49.126`を確認。DNSレコード追加自体はKMT様がRoute53で実施
+- **PHASE 3（静的ファイル配置）**：`/var/www/cheerstick-admin/`を新設し
+  `public/admin/index.html`をコピー。所有者は手順書指定の`www-data:www-data`ではなく、
+  既存`/var/www/cheerstick-app/`と同じ`ubuntu:ubuntu`に揃えた（手順書の分岐指示に従った判断）
+- **PHASE 4（nginx serverブロック新設）**：`/etc/nginx/sites-available/cheerstick-admin`を
+  新規作成（既存`cheerstick-api`/`cheerstick-app`/`cheerstick-ws`は無変更）。IP制限
+  （`allow 49.156.217.121; deny all;`）を`location /`の内側に配置。`nginx -t`成功後
+  `systemctl reload`（`restart`は不使用、api/app/wsは無停止）。ローカル（VPN経由）から
+  `http://admin.cheerstick.com/`200、EC2自身（許可IP外）から同URL403を確認しIP制限の
+  機能を実証
+- **PHASE 5（SSL証明書取得）**：`sudo certbot --nginx -d admin.cheerstick.com --non-interactive`
+  で新規取得（既存証明書への`--expand`統合はせず、単独証明書として取得）。取得後確認：
+  `443 ssl`ブロック追加、`location /`のIP制限は消えずに保持、80→443リダイレクトブロック追加
+  （既存3ドメインと同一パターン）。`certbot certificates`で`admin.cheerstick.com`の
+  有効期限2026-10-29（89日後）を確認
+- **PHASE 6（動作確認）のうち6-1・6-4を実施**：
+  - 6-1：`https://admin.cheerstick.com/`200 OK
+  - 6-2：スキップ（PHASE 4で既にEC2自身からの403確認により実証済みと判断）
+  - 6-4：`api.cheerstick.com/geturl`200、`app.cheerstick.com/index.html`200
+    （管理画面追加が既存経路に影響していないことを再確認）
+  - 6-3（CORS）・6-5（書き込み動作確認）はKMT様がブラウザで実施する方針としたため未実施
+- 追加確認として、CORSプリフライト（`OPTIONS`メソッド、`Origin: https://admin.cheerstick.com`）を
+  POST・PATCHの両方で実施。いずれも`204`、`Access-Control-Allow-Origin`に
+  `https://admin.cheerstick.com`、`Access-Control-Allow-Methods`にPOST/PATCH/DELETEを
+  含むことを確認。データは作成していない（読み取り専用の疎通確認）
+
+### 【重要】PHASE 6-5（書き込み動作確認）を実施しなかった理由
+- 手順書は「KMT様が本番用の初回試合データを実際に登録することをもって書き込み動作の
+  確認とする」としていたが、実施前に以下のリスクが判明した：
+  - 試合の`status`を`finished`にすると、管理画面の操作ボタンが消えて元に戻せない
+    （`actionButtonsFor()`の実装上、`finished`に対する遷移先ボタンが存在しないため）
+  - 現時点でDELETEエンドポイントが未実装（`docs/spec.md`既知の課題11.3）であり、
+    一度登録・進行させた試合データを本番から除去する手段が無い
+  - 上記2点により、**本番用の初回試合データを誤って操作した場合、8/9当日まで
+    復旧不能な状態で一覧に残り続けるリスクがある**と判断した
+- そのため、**8/9に向けた本番用試合データの登録は、DELETE機能の実装・本番反映が
+  完了するまで行わない**方針とした（KMT様判断、2026-07-31）
+- 代替として、CORSプリフライト（POST/PATCH）を確認し、書き込み系の通信経路自体には
+  問題がないことを実証済み。実際の書き込み（試合登録）の動作確認は、DELETE機能の
+  実装完了後に改めて行う
+
+### 変更したファイル
+- 本番EC2：`.env`編集（`ALLOW_PRODUCTION_DB`追加、`ALLOWED_ORIGINS`更新、
+  バックアップ`.env.bak_20260731`）、`git pull`で`70683f4`まで反映、
+  `/var/www/cheerstick-admin/`新設（`index.html`配置）、
+  `/etc/nginx/sites-available/cheerstick-admin`新規作成・有効化、
+  Let's Encrypt証明書新規取得（`admin.cheerstick.com`）
+- `docs/spec.md`（11.3にDELETE機能が8/9試合の前提条件である旨を追記、変更履歴追記）
+- `docs/runbook.md`（admin.cheerstick.com構成、静的ファイル2箇所問題の管理画面への
+  適用、`.env`記述、CORSプリフライト確認済みの旨を追記）
+- `docs/tasks/2026-07-31-planB-deploy.md`（末尾に実施結果を追記）
+- `docs/worklog.md`（本エントリ）
+- コード（`src/`配下）の変更なし。DBへの書き込みなし
+
+### 判明した事実 / 想定と違ったこと
+- PHASE 3で、手順書が想定していた所有者（`www-data:www-data`）が実際の
+  `/var/www/cheerstick-app/`の所有者（`ubuntu:ubuntu`）と異なっていた。手順書自身の
+  分岐指示（「異なる場合はcheerstick-app側に合わせ、その旨を報告する」）に従い対応
+- PHASE 6-5の準備段階で、`finished`後の不可逆性とDELETE未実装の組み合わせが
+  本番データの復旧不能リスクになることが判明し、8/9向けデータ登録の方針転換に至った
+  （上記「重要」欄参照）
+
+### 次回への申し送り
+- **DELETE機能（`docs/proposals/admin-delete-endpoint.md`）の実装が、8/9試合に向けた
+  ブロッキング項目になった。** staging環境で外部キー制約（`confdeltype`）を確認後、
+  実装・検証し、単独デプロイとして本番反映すること
+- DELETE機能の本番反映が完了した後、PHASE 6-5相当の書き込み動作確認
+  （本番用初回試合データの登録、status遷移、日時往復、409競合表示）を改めて実施すること
+- 6-3（CORS、ブラウザでのConsole/Networkタブ確認）はKMT様が別途実施予定。結果待ち
+- 前回エントリ（DELETE機能設計方針の格納）の申し送りに継続
+
+### 未解決のまま残した課題
+- 前回エントリから変わらず継続。加えて、DELETE機能実装完了までは8/9向け本番データを
+  登録できない状態が新たな制約として加わった
+
+---
+
 ## 2026-07-31 管理画面DELETE機能の設計方針書を格納
 
 ### 実施したこと
