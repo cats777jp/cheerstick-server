@@ -4,6 +4,65 @@
 
 ---
 
+## 2026-07-31 試合の非表示化機能（v2）を本番反映
+
+### 実施したこと
+- `docs/tasks/2026-07-31-hide-endpoint-production.md`の手順に従い、staging実装・
+  検証済み（commit `19baf8f`・`02cb6e6`）の非表示化機能を本番へ反映した。
+  各停止ポイントでKMT様へ報告し、指示を得てから次工程へ進む形で実施
+- **STEP0（前提確認）**：ローカル`02cb6e6`、EC2は`70683f4`（想定より
+  `a9d593c`分古かったがSTEP4のpullでまとめて解消）。本番DB：`hidden_at`列
+  未存在・`events`所有者`cheerstick`、いずれも想定どおり（読み取りのみ）
+- **STEP2（バックアップ）**：`~/backups/cheerstick_production_20260731_083527.sql`
+  （44,484バイト）取得
+- **STEP3（マイグレーション適用）**：`migrations/010_add_events_hidden_at.sql`を
+  本番`cheerstick_production`に適用（`APPLY`）。所有者エラーは発生せず
+  （stagingで発生した所有者問題は本番では無関係）
+- **STEP4（コードデプロイ）**：`git pull`（`70683f4`→`02cb6e6`、Fast-forward）、
+  `package.json`差分なしのため`npm ci`不要、`pm2 restart`→`online`
+  （`unstable restarts: 0`）、一般API（api/app/admin）疎通確認いずれも`200`
+- **STEP5（動作確認・後片付け）**：本番管理APIでテスト試合を1件登録し、
+  非表示化→一覧から消滅→（SQLで一時復元後）`live`化→削除で`409`
+  （`CANNOT_HIDE_LIVE_EVENT`）→`finished`化後に削除で成功、を確認。
+  最後に`cheer_logs`が0件であることを確認したうえで対象を物理削除し、
+  本番`events`テーブルにテストデータが残っていないことを確認
+
+### 変更したファイル
+- 本番EC2：`migrations/010`適用（`events.hidden_at`列追加）、
+  `git pull`で`02cb6e6`まで反映、`pm2 restart`
+- 本番DB：バックアップ取得、テスト試合1件の登録・非表示化・状態変更・
+  物理削除（テストのみ、削除前に`cheer_logs`0件を確認済み）
+- `docs/tasks/2026-07-31-hide-endpoint-production.md`（本番反映の実施手順書。
+  ユーザーより受領し格納、末尾に実施結果を追記）
+- `docs/proposals/production-deploy-plan.md`（非表示化機能の本番反映完了を追記）
+- `docs/worklog.md`（本エントリ）
+
+### 判明した事実 / 想定と違ったこと
+- EC2の本番ディレクトリが、想定していた「案B反映後」の状態より1コミット
+  （`a9d593c`、docs更新のみ）古い状態のままだった。手順書のSTEP3（マイグレーション
+  適用）→STEP4（`git pull`）という順序では、マイグレーションファイル自体が
+  まだEC2に存在せず適用が素通りしてしまう不整合があったため、ユーザー確認のうえ
+  「git pull（コード取得のみ）→マイグレーション適用→package.json差分確認→
+  pm2 restart→疎通確認」の順に整理して実施した
+- テスト試合登録時、作業端末のシェル文字コードの都合でタイトルが文字化けして
+  保存された。IDベースの動作には影響なく、テストデータのため物理削除済み
+- stagingで発生した`events`テーブルの所有者問題（`docs/runbook.md`参照）は、
+  想定どおり本番では発生しなかった（本番の`cheerstick`ロールは元々全テーブルの
+  所有者のため）
+
+### 次回への申し送り
+- 案B PHASE 6-5相当の書き込み動作確認（本番用初回試合データの登録、status遷移、
+  日時往復、409競合表示）を改めて実施すること。**これにより8/9向け本番試合データの
+  登録が可能になる**（`docs/spec.md`11.3参照）
+- `docs/spec.md`11.4（`updateEventStatus`/`updateEvent`が`hidden_at`を
+  チェックしない）・11.5（`routes/events.js`の死んでいるコード）は本番反映後も
+  未対応のまま。対応要否はKMT様の判断待ち
+
+### 未解決のまま残した課題
+- 前回エントリから継続する既知の課題に変わりなし
+
+---
+
 ## 2026-07-31 試合の非表示化機能（v2）をstaging環境で実装・検証（本番未反映）
 
 ### 実施したこと

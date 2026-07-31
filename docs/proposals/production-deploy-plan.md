@@ -184,6 +184,10 @@ EC2上の `/etc/nginx/sites-enabled/cheerstick-ws` と同一内容と推測さ�
      物理DELETE方式（`docs/proposals/admin-delete-endpoint.md`、旧文書・削除済み）は
      `confdeltype='n'`（SET NULL）により応援ログが無言でNULL化される問題が判明し、
      非表示化（論理削除）方式へ設計変更した。参照先ファイル名を上記のとおり変更
+   → **2026-07-31追記：本番反映完了。** `docs/tasks/2026-07-31-hide-endpoint-production.md`
+     の手順で、マイグレーション（`events.hidden_at`列追加）・コードデプロイ・
+     テスト試合での動作確認（非表示化・live拒否・物理削除）まで完了。
+     詳細は`docs/worklog.md`同日エントリ「試合の非表示化機能（v2）を本番反映」参照
 7. 静的ファイル2箇所問題の恒久対応（nginx root統一）
 8. 2チーム対応：選択肢1（1試合＝2レコード）で運用中。
    選択肢2（一括開始/停止機能）はリリース後の改善候補
