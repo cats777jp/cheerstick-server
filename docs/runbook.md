@@ -304,4 +304,7 @@ git log --oneline -1
 
 ## 未確認・保留中のファイル
 
-- `cheerstick-ws`：nginx設定の下書きの可能性。未追跡のまま保留中。内容確認が必要
+- `cheerstick-ws`：**2026-07-31、内容確認済み。** nginx設定の下書きであることを確認した。
+  EC2上の`/etc/nginx/sites-enabled/cheerstick-ws`とdiffを取ったところ、Certbot自動追記分
+  （443 ssl設定・80→443リダイレクトブロック）を除いて内容が一致。ローカル側は
+  Certbot適用前の下書きとして残置されたものと判断できる（実害なし、削除も不要）。

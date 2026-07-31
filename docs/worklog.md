@@ -4,6 +4,75 @@
 
 ---
 
+## 2026-07-31 案B（admin.cheerstick.com新設）の事前確認（読み取りのみ）
+
+### 実施したこと
+- KMT様がユーザー提示の作業指示書（`cheerstick-task-20260731-preflight-check.md`、
+  Downloads内、チャット版Claude作成）に基づき、`docs/proposals/production-deploy-plan.md`
+  2.3節で保留になっていた管理画面配信先の判断（案A/B/C）のうち、
+  **案B（`admin.cheerstick.com`を新設して配信）に決定**した後の事前確認を実施
+- 本番へは一切変更を加えず、読み取り専用の確認とバックアップ取得のみ実施：
+  - `public/admin/index.html`のAPI呼び出し方式の調査（ローカル）
+  - EC2上のnginx設定（`sites-enabled`/`sites-available`一覧、api/app/ws各設定全文）の確認
+  - ローカル未追跡`cheerstick-ws`とEC2上の同名ファイルのdiff
+  - SSL証明書一覧・`authenticator`の値・自動更新設定の確認
+  - 本番`.env`（`ALLOW_PRODUCTION_DB`有無、`DATABASE_URL`）、pm2状態、EC2側git状態の確認
+  - 本番DBバックアップ（`pg_dump`）・`/var/www/cheerstick-app/`バックアップの取得
+  - `/var/www/`配下の既存ディレクトリ確認、Secrets Manager参照有無の確認
+
+### 判明した事実 / 想定と違ったこと
+- **管理画面のAPI呼び出しは本番では絶対URL方式**（`public/admin/index.html`の
+  `API_BASE`が`location.hostname`で分岐し、`localhost`/`127.0.0.1`以外では
+  `https://api.cheerstick.com/api/v1/admin`を使用）。案Bでは`admin.cheerstick.com`と
+  別オリジンになりCORSに抵触する。**対応はコード変更ではなく、本番`.env`の
+  `ALLOWED_ORIGINS`に`https://admin.cheerstick.com`を追加するだけで足りる見込み**
+  （`src/app.js`のcors設定は`ALLOWED_ORIGINS`を参照する実装のため）
+- `admin.cheerstick.com`に該当するnginx設定・SSL証明書は存在しないことを確認
+  （想定通り）
+- ローカル未追跡の`cheerstick-ws`とEC2上の`/etc/nginx/sites-enabled/cheerstick-ws`は、
+  **Certbot自動追記分（443 ssl設定・80→443リダイレクトブロック）を除いて内容が一致**。
+  ローカル側はCertbot適用前の下書きと判断できる（従来「内容確認が必要」としていた
+  保留事項を解消。`docs/runbook.md`側を更新）
+- 証明書の`authenticator`は3ドメインとも**`nginx`**（webroot/standalone/DNS-01ではない）。
+  指示書はwebroot方式を想定した記述だったため、事実の食い違いとして報告に留めた
+- **EC2側は`origin/feature/reference-data`から11コミット遅れ**（`fc2c21b`→`4bd647b`）。
+  管理画面本体（`f24289b`）・本番誤接続ガード（`62de68c`）を含む一連のコミットが
+  未反映で、`public/admin/`はEC2上にまだ存在しない。案Bの前に通常の`git pull`
+  （`docs/proposals/production-deploy-plan.md`2.2節の手順）が前提となる
+- 本番`.env`に`ALLOW_PRODUCTION_DB`は未設定（想定通り、ガードのコードもまだ未反映）
+- pm2 `cheerstick-server`は稼働中・再起動回数0、ログに新規異常なし
+  （既知の課題以外のエラーなし）
+- `/var/www/`配下に管理画面用へ転用できる既存ディレクトリは無い（新設が必要）
+- `src/`・`package.json`にAWS Secrets Manager関連の参照は無く、
+  アプリは`.env`のみを参照していることを確認
+
+### 変更したファイル
+- `docs/worklog.md`（本エントリ）
+- `docs/runbook.md`（`cheerstick-ws`の保留事項を解消・更新）
+- `docs/proposals/production-deploy-plan.md`（2.3節に案B決定の記録を追記）
+- 本番EC2：`~/backups/cheerstick_production_20260731.sql`（DBバックアップ、新規ファイル）、
+  `~/backups/cheerstick-app_20260731/`（`/var/www/cheerstick-app/`のバックアップコピー、
+  新規ディレクトリ）を作成。**既存ファイル・設定への変更は無し**
+- コード（`src/`配下）の変更なし
+
+### 次回への申し送り
+- 案Bの本番反映を進める場合の順序：
+  1. 通常のデプロイ手順（`docs/proposals/production-deploy-plan.md`2.2節、
+     `ALLOW_PRODUCTION_DB`追記→確認→`git pull`→`pm2 restart`の順序厳守）を先に実施
+  2. 本番`.env`の`ALLOWED_ORIGINS`に`https://admin.cheerstick.com`を追加
+  3. `admin.cheerstick.com`用のnginx serverブロック新設（`/`と`/api/`相当の経路両方に
+     IP制限、ただし`/.well-known/acme-challenge/`は除外）、Route53 Aレコード追加（KMT様）、
+     Certbotでの証明書取得
+  4. 管理画面HTML配置先ディレクトリの新設（`/var/www/cheerstick-admin/`等）
+- 上記1〜4はいずれも未実施。実作業はKMT様の指示を得てから着手する
+- `docs/proposals/production-deploy-plan.md`3章「未pushの変更内容」は本セッション時点で
+  すべてpush・EC2未反映のまま。反映後は同章の記載更新が必要
+
+### 未解決のまま残した課題
+- 前回エントリ（TOCTOU、管理APIの認証未実装、MACなりすまし等）から変わらず継続
+
+---
+
 ## 2026-07-30 staging環境構築・管理画面動作確認・TOCTOU実証
 
 ### 実施したこと
