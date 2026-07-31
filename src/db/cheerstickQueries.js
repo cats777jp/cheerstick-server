@@ -235,7 +235,7 @@ async function getRecentEventCheerTotals(deviceId, limit) {
             COUNT(*) AS cheer_count
      FROM cheer_logs cl
      JOIN events e ON cl.event_id = e.id
-     WHERE cl.device_id = $1
+     WHERE cl.device_id = $1 AND e.hidden_at IS NULL
      GROUP BY cl.event_id, e.title, e.starts_at
      ORDER BY e.starts_at DESC
      LIMIT $2`,
@@ -249,11 +249,12 @@ async function getRecentEventCheerTotals(deviceId, limit) {
  */
 async function getAllTimeCheerTotal(deviceId) {
   const { rows } = await db.query(
-    `SELECT SUM(intensity) AS total_intensity,
-            SUM(duration_ms) AS total_duration_ms,
+    `SELECT SUM(cl.intensity) AS total_intensity,
+            SUM(cl.duration_ms) AS total_duration_ms,
             COUNT(*) AS total_cheer_count
-     FROM cheer_logs
-     WHERE device_id = $1`,
+     FROM cheer_logs cl
+     JOIN events e ON cl.event_id = e.id
+     WHERE cl.device_id = $1 AND e.hidden_at IS NULL`,
     [deviceId]
   );
   return rows[0];
@@ -267,7 +268,7 @@ async function findLiveEventForOrganization(organizationId) {
   const { rows } = await db.query(
     `SELECT id, title, starts_at
      FROM events
-     WHERE organization_id = $1 AND status = 'live'
+     WHERE organization_id = $1 AND status = 'live' AND hidden_at IS NULL
      ORDER BY starts_at DESC
      LIMIT 1`,
     [organizationId]
@@ -357,6 +358,7 @@ async function listEventsAdmin() {
             e.starts_at, e.ends_at, e.status, e.created_at
      FROM events e
      LEFT JOIN organizations o ON o.id = e.organization_id
+     WHERE e.hidden_at IS NULL
      ORDER BY e.starts_at DESC`
   );
   return rows;
@@ -435,6 +437,35 @@ async function listOrganizationsForAdmin() {
   return rows;
 }
 
+/**
+ * 管理画面：試合を非表示化する（物理削除ではない。詳細はdocs/proposals/admin-hide-endpoint.md）。
+ *
+ * cheer_logs -> events の外部キー制約がconfdeltype='n'（SET NULL）であり、
+ * 物理削除すると参照するcheer_logs.event_idが無言でNULL化されるため、
+ * hidden_atへのタイムスタンプ設定で代替する。
+ *
+ * status='live'の試合は非表示化を許可しない（UPDATEのWHERE句で弾くことで
+ * チェックと更新の間の競合を避ける。既知の課題11.2と同種の問題を再生産しないため）。
+ * 対象が存在しない場合はnullを返す。live不許可の場合はCANNOT_HIDE_LIVE_EVENTを投げる。
+ */
+async function hideEvent(eventId) {
+  const { rows } = await db.query(
+    `UPDATE events
+     SET hidden_at = NOW()
+     WHERE id = $1 AND status <> 'live'
+     RETURNING id, title, status, hidden_at`,
+    [eventId]
+  );
+  if (rows[0]) return rows[0];
+
+  const { rows: existing } = await db.query(`SELECT status FROM events WHERE id = $1`, [eventId]);
+  if (!existing[0]) return null;
+
+  const err = new Error('cannot hide a live event');
+  err.code = 'CANNOT_HIDE_LIVE_EVENT';
+  throw err;
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -455,4 +486,5 @@ module.exports = {
   createEvent,
   updateEvent,
   listOrganizationsForAdmin,
+  hideEvent,
 };

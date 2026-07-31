@@ -387,6 +387,12 @@
       editBtn.addEventListener('click', () => openEditModal(event));
       actionCell.appendChild(editBtn);
 
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '削除';
+      deleteBtn.classList.add('danger');
+      deleteBtn.addEventListener('click', () => handleDelete(event));
+      actionCell.appendChild(deleteBtn);
+
       eventsTableBody.appendChild(tr);
     });
   }
@@ -413,6 +419,24 @@
         );
       } else {
         showError('状態の更新に失敗しました: ' + e.message);
+      }
+    } finally {
+      await refreshAll();
+    }
+  }
+
+  async function handleDelete(event) {
+    const ok = confirm(`「${event.title}」を本当に削除しますか？`);
+    if (!ok) return;
+
+    try {
+      await apiFetch(`/events/${event.id}`, { method: 'DELETE' });
+      clearError();
+    } catch (e) {
+      if (e.status === 409 && e.body) {
+        showError(e.body.message || '進行中の試合は削除できません。');
+      } else {
+        showError('試合の削除に失敗しました: ' + e.message);
       }
     } finally {
       await refreshAll();
