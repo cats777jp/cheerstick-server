@@ -4,6 +4,118 @@
 
 ---
 
+## 2026-07-31 試合の非表示化機能（v2）をstaging環境で実装・検証（本番未反映）
+
+### 実施したこと
+- `cheerstick-task-20260731-delete-confdeltype-check.md`の指示に従い、staging環境
+  （`cheerstick_staging`）で`cheer_logs`→`events`の外部キー制約（`confdeltype`）を
+  SELECTのみで確認。結果は`r`/`a`/`c`のいずれでもなく**`n`（SET NULL）**と判明
+- 上記結果を受け、KMT様（チャット版経由）が物理DELETE方式から**非表示化
+  （論理削除、`events.hidden_at`列）方式**へ設計変更。新設計方針書
+  `docs/proposals/admin-hide-endpoint.md`を受け取り、`cheerstick-task-20260731-
+  hide-endpoint-staging.md`の指示に従いstaging環境で実装・検証した
+- 旧設計書`docs/proposals/admin-delete-endpoint.md`は本方針書により置き換えられたため削除し、
+  `docs/proposals/production-deploy-plan.md`4章・`docs/spec.md`11.3の参照先を更新
+- **STEP1（マイグレーション）**：`migrations/010_add_events_hidden_at.sql`を作成し、
+  `cheerstick_staging`にのみ適用（`node src/db/migrate.js`、`.env`のDATABASE_URLが
+  staging向けであることを確認済みの状態で実行）。適用前、`events`テーブルの所有者が
+  `cheerstick`のままで`cheerstick_stg`に`ALTER TABLE`権限が無く失敗したため、EC2上で
+  `sudo -u postgres psql -d cheerstick_staging`により`ALTER TABLE events OWNER TO
+  cheerstick_stg;`を実行（`cheerstick_staging`のみ対象、DB名を確認してから実行）
+- **STEP2（DELETEエンドポイント）**：`src/db/cheerstickQueries.js`に`hideEvent()`を追加
+  （`UPDATE ... WHERE id=$1 AND status<>'live'`の単一UPDATEで判定と更新を同時に行い、
+  影響0件の場合のみ追加SELECTで404/409を判別。既知の課題11.2と同種のTOCTOUを
+  作り込まないための実装）。`adminEventController.hide()`とUUID形式バリデーションを追加、
+  `src/routes/admin.js`に`DELETE /events/:id`を追加
+- **STEP3**：`listEventsAdmin()`に`WHERE e.hidden_at IS NULL`を追加
+- **STEP4（一般公開系の洗い出し）**：`src/`全体を`events`/`event_id`で検索し、
+  `cheerstickQueries.js`経由で`events`を参照する全関数を確認。一般公開系と判定した
+  `findLiveEventForOrganization`（WebSocket `count`）・`getRecentEventCheerTotals`
+  （`/webview/reference`）の2箇所に`hidden_at IS NULL`を追加。詳細は下記の洗い出し表参照
+- **STEP5**：`public/admin/index.html`に削除ボタン（`confirm()`による簡易確認）を追加。
+  409時はエラーバーにメッセージを表示
+- **STEP6（staging動作確認）**：ローカルに使い捨てテストサーバー（リポジトリ非追跡、
+  `.env`経由でSSHトンネル`localhost:5433`→`cheerstick_staging`に接続）を立て、curlおよび
+  Node直接呼び出しでAPI・SQLフィルタの両方を検証。結果は下記参照
+
+### STEP4-3：`events`参照箇所の洗い出し一覧
+
+| ファイル・関数 | 経路の種別 | フィルタ追加の要否 | 対応 |
+|---|---|---|---|
+| `adminEventController.js list()` → `listEventsAdmin()` | 管理（IP制限下） | 要 | 追加済み（STEP3） |
+| `websocket/index.js` `count`ハンドラ → `findLiveEventForOrganization()` | 一般公開（デバイスのWebSocket応援量送信） | 要 | 追加済み |
+| `referenceController.js getReference()` → `getRecentEventCheerTotals()` | 一般公開（`/webview/reference`、データ参照機能） | 要 | 追加済み |
+| `cheerstickQueries.js getAllTimeCheerTotal()` | 一般公開（同上） | 不要 | `events`をJOINせず`cheer_logs`のみ集計するため個々のイベント情報を露出しない。対応不要と判断 |
+| `adminEventController.js update()`/`updateStatus()` → `updateEvent()`/`updateEventStatus()` | 管理 | 対象外 | 非表示イベントの編集・状態変更を今回制限する指示は無いため未対応（判断が必要なら別途確認） |
+| `routes/events.js` + `eventsController.js`（`/api/v1/events`） | 一般公開のように見えるが**別スキーマ**（`device_id`/`event_type`/`payload`列、001の`events`にこれらの列は存在しない） | 対象外 | 今回の試合`events`テーブルとは無関係の既存コード。実行すると存在しない列でエラーになる可能性が高く、既存の不具合と判断。**修正は本タスクの範囲外につき未対応、報告のみ** |
+
+### STEP6：staging動作確認結果
+
+ローカルの使い捨てテストサーバー（`app.js`相当＋`express.static`、リポジトリには含めない。
+`.env`のstaging接続をそのまま使用）と、EC2上`sudo -u postgres psql -d cheerstick_staging`
+（DB名確認済み）を併用して検証。
+
+| # | 確認内容 | 結果 |
+|---|---|---|
+| 1 | 非live試合を削除 | `200`、`hidden_at`にタイムスタンプ設定を確認。curl実行（**UIボタンの実クリックは未確認、下記参照**） |
+| 2 | 直接SQLで確認 | 行は物理的に残存、`hidden_at`のみ設定されていることを確認 |
+| 3 | live試合を削除しようとする | `409` `CANNOT_HIDE_LIVE_EVENT`、行は非表示化されず（テスト後、対象は`scheduled`へ復帰させクリーンアップ） |
+| 4 | 一般公開系での除外確認 | `findLiveEventForOrganization`：hidden+live状態で`null`（除外成功）、hidden解除後は通常どおり取得。`getRecentEventCheerTotals`：一時デバイス・cheer_logsを作成し非表示化前後で比較、非表示化後は空配列（除外成功）。検証用の一時データはテスト後に削除済み |
+| 5 | 復元 | `UPDATE events SET hidden_at = NULL`で復元、一覧に再表示されることを確認 |
+| 6 | 存在しないID | `404` `EVENT_NOT_FOUND` |
+| （追加） | 不正なUUID形式 | `400` `INVALID_ID`（設計指示の「不正な形式で500にならないようにする」を確認） |
+
+**未確認事項：** ブラウザでの実クリック確認（`claude-in-chrome`拡張が未接続のため）。
+`confirm()`ダイアログの表示・削除ボタンのクリック・409時のエラーバー表示は、コード
+レビューとAPIレベルの動作確認（上記1・3）でのみ検証しており、実ブラウザでの動作は
+未検証。次回、拡張接続後またはKMT様のブラウザでの確認が必要
+
+### 変更したファイル
+- `migrations/010_add_events_hidden_at.sql`（新規。stagingにのみ適用済み、本番未適用）
+- `src/db/cheerstickQueries.js`（`hideEvent()`追加、`listEventsAdmin()`・
+  `findLiveEventForOrganization()`・`getRecentEventCheerTotals()`に`hidden_at`フィルタ追加）
+- `src/controllers/adminEventController.js`（`hide()`追加、UUID形式バリデーション追加）
+- `src/routes/admin.js`（`DELETE /events/:id`追加）
+- `public/admin/index.html`（削除ボタン・`handleDelete()`追加）
+- `docs/proposals/admin-hide-endpoint.md`（新規。旧`admin-delete-endpoint.md`を置き換え）
+- `docs/proposals/admin-delete-endpoint.md`（削除。新設計書に統合）
+- `docs/proposals/production-deploy-plan.md`（4章項目6の参照先を新設計書へ更新）
+- `docs/spec.md`（11.3に設計変更の経緯を追記、変更履歴に2件追記）
+- `docs/worklog.md`（本エントリ）
+- EC2（staging専用の変更のみ）：`cheerstick_staging`データベースの`events`テーブル所有者を
+  `cheerstick`→`cheerstick_stg`に変更（`ALTER TABLE ... OWNER TO`、マイグレーション適用のため）、
+  `migrations/010`適用による`events.hidden_at`列追加
+- **本番DB・本番環境（EC2の本番プロセス・nginx）には一切接続・変更していない**
+
+### 判明した事実 / 想定と違ったこと
+- `confdeltype`が`r`/`a`/`c`のいずれでもなく`n`（SET NULL）だったため、旧設計（物理DELETE、
+  `cheer_logs`が0件であることを条件とする）は前提から崩れ、KMT様判断で非表示化方式へ変更
+- `\d events`確認時、`cheer_logs`以外にも`awards`・`cheer_summaries`・
+  `device_event_sessions`・`event_targets`が`events`を参照しており、後者2つは
+  `ON DELETE CASCADE`だった（現行アプリコードは未使用のテーブル）。物理削除方式のままだった場合、
+  これらのテーブルも無言で影響を受けていた可能性がある。非表示化方式への変更でこのリスクも解消
+- `cheerstick_stg`ロールは`cheerstick_staging`構築時にGRANTのみで`ALTER TABLE`権限（所有権）を
+  持っていなかった。マイグレーション実行にはテーブル所有権が必要
+- `routes/events.js`/`eventsController.js`が、今回の`events`（試合）テーブルとは異なる
+  スキーマ（`device_id`/`event_type`/`payload`）を参照している既存コードだと判明（詳細は
+  STEP4-3表参照）。旧プロトタイプ由来の可能性があるが未追跡
+
+### 次回への申し送り
+- **commit・pushは未実施。** ユーザー（チャット版経由のKMT様）の確認・指示を待って実施すること
+- ブラウザでの実クリック確認が未完了（`claude-in-chrome`未接続のため）。次回接続後、または
+  KMT様のブラウザでの確認が必要
+- 本番反映は別タスクとする（今回はstaging実装・検証まで、`cheerstick-task-20260731-
+  hide-endpoint-staging.md`の指示範囲どおり）
+- `routes/events.js`の別スキーマ`events`参照バグは、今回は報告のみで未対応。対応要否は
+  別途判断が必要
+- `adminEventController.js`の`update()`/`updateStatus()`が非表示化済みイベントに対しても
+  動作してしまう点は、今回制限指示が無かったため未対応。運用上問題になるか要確認
+
+### 未解決のまま残した課題
+- 前回エントリから継続する既知の課題に変わりなし。加えて、上記「次回への申し送り」を追加
+
+---
+
 ## 2026-07-31 案B本番反映（PHASE 1〜6、6-5を除く）
 
 ### 実施したこと

@@ -404,6 +404,16 @@ KMT様判断、2026-07-30）。未対応のまま放置するのではなく、
 外部キー削除時挙動＝`confdeltype`の確認が必須、CASCADEだった場合は設計の
 見直しが必要と明記されている）。
 
+> **2026-07-31追記：物理DELETE方式から非表示化方式へ設計変更。**
+> staging環境（`cheerstick_staging`）で`confdeltype`を確認した結果、`r`/`a`/`c`の
+> いずれでもなく`n`（**SET NULL**）だった。物理削除すると`cheer_logs.event_id`が
+> 無言でNULLへ書き換わり、応援ログがどの試合のものか分からなくなる
+> （CASCADEより発見しづらい形の破損）。この事実を踏まえKMT様が判断し、
+> **物理削除ではなく非表示化（`events.hidden_at`列によるフラグ立て）方式に変更した。**
+> 新しい設計方針は`docs/proposals/admin-hide-endpoint.md`（旧`admin-delete-endpoint.md`を
+> 置き換え）に格納。エンドポイントは`DELETE /api/v1/admin/events/:id`のまま維持するが、
+> 実装は物理削除ではなく`hidden_at`へのタイムスタンプ設定となる。
+
 **実装時期：** 案B（`admin.cheerstick.com`新設）の本番反映が完了した後、
 staging環境（`cheerstick_staging`、ポート3001）で実装・検証してから、
 単独のデプロイとして本番反映する方針（同日の複数変更を避けるため）。
@@ -421,6 +431,33 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 疎通確認のみ実施した（詳細は`docs/worklog.md`2026-07-31エントリ、
 `docs/tasks/2026-07-31-planB-deploy.md`末尾の実施結果を参照）。
 
+### 11.4 `updateEventStatus`/`updateEvent`が非表示化済み(`hidden_at`)イベントをチェックしない（2026-07-31追記）
+
+非表示化機能（11.3、`docs/proposals/admin-hide-endpoint.md`）のstaging実装時に判明。
+管理API`PATCH /api/v1/admin/events/:id`（`updateEvent`）・
+`PATCH /api/v1/admin/events/:id/status`（`updateEventStatus`）は、対象イベントが
+`hidden_at`により非表示化済みかどうかを一切確認していない。そのため、非表示にした
+（＝一覧からは消えた）試合に対しても、IDさえ分かれば編集・状態変更（`live`化を含む）が
+そのまま通ってしまう。
+
+非表示化の意図（誤登録・テストデータを一覧・記録対象から外す）と矛盾する可能性がある
+挙動だが、非表示化機能の実装時点ではこの制限を追加する指示が無かったため未対応とした。
+対応要否（非表示化済みイベントへの操作を404扱いにする等）はKMT様の判断が必要。
+
+### 11.5 `routes/events.js`/`src/controllers/eventsController.js`が実スキーマと異なる`events`を参照している（2026-07-31追記）
+
+非表示化機能のSTEP4（一般公開系エンドポイントの洗い出し）で発見。`POST /api/v1/events`・
+`GET /api/v1/events`（`eventsController.js`）は`events`テーブルに対し
+`id, device_id, event_type, payload`という列構成でSELECT/INSERTしているが、
+実際の`events`テーブル（`migrations/001_initial_schema.sql`）にはこれらの列は存在しない
+（実際は`organization_id, venue_id, title, sport_type, starts_at, ends_at, status`等の
+「試合・イベント管理」用テーブル）。
+
+呼び出すと存在しない列を参照して失敗する可能性が高く、事実上動作しない死んだコードと
+判断される。出所・意図は未確認（旧`cheerstick-api`プロトタイプ由来の可能性があるが未追跡）。
+今回の非表示化機能の対象（試合管理用の`events`）とは無関係のため、修正・削除は本機能の
+範囲外として対応していない。対応要否は別途判断が必要。
+
 ---
 
 ## 変更履歴
@@ -435,3 +472,5 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 | 2026-07-27 | 3.2「チームID登録」に実装との乖離を追記、第11章「既知の課題」を新設 | デモモード実装の前段調査として`geturl`・WebSocket `connect`のコードリーディングと本番実地確認（未使用MACアドレスでの実行）を行った結果、当初「事前ホワイトリスト方式に確定済み」としていた3.2の記述と異なり、`ensureDevice()`が任意のMACアドレスを条件なく`devices`へ自動登録することが判明。3.2の既存記述は削除せず追記で乖離を明記し、これに伴うセキュリティ上の影響（認証機構が無く任意のMACで`cheer_logs`へ書き込み可能、応援量捏造のリスク）を新設の第11章に記録した。対応時期は未定としリリース後の検討事項とする |
 | 2026-07-31 | 11.3「管理画面にDELETEエンドポイントが存在しない」を新設 | KMT様の判断によりDELETE機能の実装が決定（設計方針は`docs/proposals/admin-delete-endpoint.md`）。従来`docs/proposals/production-deploy-plan.md`4章のみに記載されていた既知課題を、spec.mdを既知の課題の正本とする方針に合わせて11.3として正式に記録した |
 | 2026-07-31 | 11.3に追記：DELETE機能が8/9試合の前提条件である旨を明記 | 案B本番反映PHASE 6-5の実施時、`finished`後は操作不能かつDELETE未実装のため本番データが復旧不能になるリスクが判明。8/9向け本番データ登録をDELETE機能完了まで見送る方針（KMT様判断）を記録 |
+| 2026-07-31 | 11.3に追記：物理DELETE方式から非表示化方式への設計変更を記録 | staging環境での`confdeltype`確認により`n`（SET NULL）と判明。物理削除では`cheer_logs.event_id`が無言でNULL化される問題があるため、KMT様判断により`events.hidden_at`列による非表示化方式へ変更。設計方針書を`docs/proposals/admin-hide-endpoint.md`へ差し替え |
+| 2026-07-31 | 11.4「updateEventStatus/updateEventがhidden_atをチェックしない」、11.5「routes/events.js等が実スキーマと異なるeventsを参照している」を新設 | 非表示化機能のstaging実装・検証（STEP4の一般公開系エンドポイント洗い出し）で判明した2件を、KMT様の指示により既知の課題として正式に記録した |

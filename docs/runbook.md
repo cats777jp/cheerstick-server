@@ -299,6 +299,67 @@ UPDATE devices SET owner_user_id = NULL, registered_at = NULL
 
 ---
 
+## staging環境（cheerstick_staging）マイグレーション適用時の注意（2026-07-31追加）
+
+理由：`migrations/010_add_events_hidden_at.sql`の適用時に発生した問題と対処法を、
+本番マイグレーション時の再発に備えて記録する。
+
+staging構築時（2026-07-30）、`cheerstick_staging`内の全テーブルの所有者が
+`cheerstick_stg`ではなく`cheerstick`のままになっている（構築時はGRANTのみ実施し、
+所有権の移譲はしていなかったため）。このため、アプリのDB接続ロール
+（`cheerstick_stg`、`.env`の`DATABASE_URL`が使用）で`node src/db/migrate.js`を実行し、
+既存テーブルに`ALTER TABLE`を伴うマイグレーション（列追加等）を適用しようとすると、
+以下のエラーで失敗する。**PostgreSQLの`GRANT`は`ALTER TABLE`のようなDDL権限を
+付与できず、テーブル所有権（またはスーパーユーザー権限）が必要なため。**
+
+```
+Migration failed: Failed on 0NN_xxx.sql: must be owner of table <table>
+```
+
+### 対処法
+
+対象テーブルの所有者を`cheerstick_stg`へ変更してからマイグレーションを再実行する。
+**対象テーブルのみを指定すること（全テーブル一括の所有者変更は行わない）。**
+
+```bash
+# 実行前に必ずDB名を確認する（本番へ誤実行しないため）
+ssh -i C:\AWS\cheerstick-key\cheerstick-key.pem ubuntu@52.196.49.126 \
+  "sudo -u postgres psql -d cheerstick_staging -c 'SELECT current_database();'"
+
+# cheerstick_staging であることを確認したうえで実行
+ssh -i C:\AWS\cheerstick-key\cheerstick-key.pem ubuntu@52.196.49.126 \
+  "sudo -u postgres psql -d cheerstick_staging -c 'ALTER TABLE <対象テーブル> OWNER TO cheerstick_stg;'"
+```
+
+その後、ローカルから`node src/db/migrate.js`（`.env`が`cheerstick_staging`を
+指している状態）を再実行する。
+
+### 2026-07-31の実施内容（`migrations/010_add_events_hidden_at.sql`適用時）
+
+- 実行したSQL：`ALTER TABLE events OWNER TO cheerstick_stg;`
+- 変更前の所有者：`cheerstick`
+- 変更後の所有者：`cheerstick_stg`
+- 対象：**`events`テーブルのみ。** 他13テーブル（`awards`／`categories`／`cheer_logs`／
+  `cheer_summaries`／`device_event_sessions`／`devices`／`organizations`／
+  `schema_migrations`／`targets`／`user_target_follows`／`users`／`venues`）は
+  所有者を変更していない（すべて`cheerstick`のまま）。2026-07-31、
+  `SELECT tablename, tableowner FROM pg_tables WHERE schemaname='public'`で
+  全14テーブルを確認し、`events`以外に変更が無いことを確認済み
+
+### 今後の再発について
+
+この問題は、`ALTER TABLE`を伴う新しいマイグレーションを既存テーブルに適用する
+たびに再発する可能性が高い（対象テーブルの所有者をその都度変更する必要がある）。
+恒久対応（staging構築時に全テーブルの所有者を`cheerstick_stg`へ揃える、または
+`GRANT`ではなく所有権ごと移譲する運用に変更する等）は**未実施。** 次に発生した場合、
+都度上記の個別`ALTER TABLE ... OWNER TO`で対応するか、恒久対応に切り替えるかは
+KMT様と相談のうえ判断する。
+
+**本番環境（`cheerstick_production`）には無関係。** 本番の`cheerstick`ロールは
+元々全テーブルの所有者であり、この問題は発生しない。
+
+---
+
 ## デモ用デバイスの登録（審査・デモンストレーション用、is_demo方式・未実行）
 
 `migrations/009_add_device_is_demo.sql`（2026-07-27作成、本番未適用）で`devices.is_demo`列を

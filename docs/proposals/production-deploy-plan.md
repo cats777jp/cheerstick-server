@@ -177,9 +177,13 @@ EC2上の `/etc/nginx/sites-enabled/cheerstick-ws` と同一内容と推測さ�
 5. 不正UUID形式で500＋生のPostgreSQLエラーメッセージが返る
 6. 管理画面にDELETEエンドポイントが存在しない（誤登録の削除手段がない）
    → **2026-07-31、KMT様判断により実装が決定。** 設計方針は
-     `docs/proposals/admin-delete-endpoint.md` を参照。実装時期は
+     `docs/proposals/admin-hide-endpoint.md` を参照。実装時期は
      「案B本番反映の完了後、staging環境で検証してから」と決定済み
      （`docs/spec.md` 既知の課題11.3も参照）
+   → **2026-07-31追記：** staging環境での`confdeltype`確認の結果、当初想定していた
+     物理DELETE方式（`docs/proposals/admin-delete-endpoint.md`、旧文書・削除済み）は
+     `confdeltype='n'`（SET NULL）により応援ログが無言でNULL化される問題が判明し、
+     非表示化（論理削除）方式へ設計変更した。参照先ファイル名を上記のとおり変更
 7. 静的ファイル2箇所問題の恒久対応（nginx root統一）
 8. 2チーム対応：選択肢1（1試合＝2レコード）で運用中。
    選択肢2（一括開始/停止機能）はリリース後の改善候補
