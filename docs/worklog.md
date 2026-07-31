@@ -4,6 +4,47 @@
 
 ---
 
+## 2026-07-31 管理画面DELETE機能の設計方針書を格納
+
+### 実施したこと
+- ユーザーからDownloads内の設計方針書（`cheerstick-proposal-admin-delete-endpoint.md`、
+  チャット版Claude作成）を受け取り、格納指示に従い本文を
+  `docs/proposals/admin-delete-endpoint.md` として保存（格納指示セクションは除去）
+- 指示書は「`docs/spec.md`の既知の課題6」への追記を求めていたが、該当項目は
+  `docs/spec.md`には存在せず、`docs/proposals/production-deploy-plan.md`4章に
+  あることが判明。ユーザーに報告し確認を取った結果、**両方に記載する**方針で実施：
+  - `docs/proposals/production-deploy-plan.md` 4章の項目6に、実装決定・設計書への
+    参照を追記
+  - `docs/spec.md` 11章に新規11.3を新設し、既知の課題として正式に記録
+    （spec.mdを既知の課題の正本とする従来方針に合わせる）
+- **実装（コード変更）には一切着手していない。** ドキュメントの格納・参照追記のみ
+
+### 変更したファイル
+- `docs/proposals/admin-delete-endpoint.md`（新規、DELETE機能の設計方針書）
+- `docs/proposals/production-deploy-plan.md`（4章項目6に参照追記）
+- `docs/spec.md`（11.3新設、変更履歴に追記）
+- `docs/worklog.md`（本エントリ）
+- コード・DBの変更なし
+
+### 判明した事実 / 想定と違ったこと
+- 指示書が引用した「6. 管理画面にDELETEエンドポイントが存在しない」の文言は
+  `docs/spec.md`ではなく`docs/proposals/production-deploy-plan.md`4章のものだった。
+  指示書自体の前提と実態が食い違っていたケース（過去にも複数回発生）
+
+### 次回への申し送り
+- DELETE機能の実装は**本日（2026-07-31）の案B本番反映には含めない**
+  （`docs/proposals/admin-delete-endpoint.md` 3章参照）
+- 実装着手前に、`cheer_logs`→`events`の外部キー制約`confdeltype`の確認が必須
+  （CASCADEだった場合は設計見直しが必要。staging環境で確認可能）
+- 案Bの本番反映が完了した後、staging環境（ポート3001）で実装・検証してから
+  単独デプロイとする方針
+- 前回エントリ（案Bの事前確認結果）の申し送りに継続
+
+### 未解決のまま残した課題
+- 前回エントリから変わらず継続
+
+---
+
 ## 2026-07-31 案B（admin.cheerstick.com新設）の事前確認（読み取りのみ）
 
 ### 実施したこと
