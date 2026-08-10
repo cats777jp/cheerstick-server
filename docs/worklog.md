@@ -4,6 +4,57 @@
 
 ---
 
+## 2026-08-10 テスト試合データの手動削除（本番DB）
+
+※本作業は管理画面の動作確認中に発生した単発対応であり、
+　計画されたタスク（DELETE機能の実装等）とは別のものである。
+
+**背景**：
+管理画面（`https://admin.cheerstick.com/`）から動作確認のため仮の試合データを
+登録したところ`status`が`finished`になり、画面から削除・状態変更のいずれも
+できなくなった。編集フォームで変更できるのは試合名・チーム・開始日時・終了日時の
+4項目のみで、`finished`の行には「編集」ボタンしか表示されない。DELETE機能
+（`docs/proposals/admin-delete-endpoint.md`）は設計のみで未実装のため、
+今回限りの手動SQLで当該1行を削除した。
+
+**実施内容**：
+- STEP1（事前確認・読み取りのみ）：`events`を参照する外部キー制約とその
+  削除時挙動を確認
+  | 子テーブル | confdeltype | 挙動 |
+  |---|---|---|
+  | `awards` | `n` | SET NULL |
+  | `cheer_logs` | `n` | SET NULL |
+  | `cheer_summaries` | `c` | CASCADE |
+  | `device_event_sessions` | `c` | CASCADE |
+  | `event_targets` | `c` | CASCADE |
+  上記5テーブルすべてについて対象`event_id`の件数を確認したところ、いずれも0件
+  （巻き添えで消えるデータなし）
+- STEP2（バックアップ）：`~/cheerstick_production_20260810_040846.sql`
+  （45K）取得。ディスク空き容量に余裕があることも確認
+- STEP3（削除実行）：`BEGIN` 〜 `DELETE FROM events WHERE id = '6566a4ba-96a0-49cf-b619-6b2b9f67e4c4'`
+  〜 件数確認（`DELETE 1`）〜 `COMMIT`を同一psqlセッション内で実行
+
+**結果**：
+- `events`テーブル 0件
+- 巻き添え削除・孤児レコードの発生なし（STEP1で確認済みの通り関連テーブルは
+  いずれも0件だったため）
+
+**申し送り**：
+- **DELETE機能の実装が引き続き必要。** 今回の件で、「仮データの片付け」という
+  日常的な場面でも必要になることが判明した
+- **`finished`からの復帰手段が無い。** 編集フォームは試合名・チーム・開始日時・
+  終了日時のみで、`status`を戻す手段が無い。誤って`finished`にした場合、削除
+  以外の復旧手段が存在しない。DELETE機能の設計と併せて、状態遷移の見直しを
+  検討すること
+- 本番DBへの直接SQLによる削除は、今回限りの例外対応である
+- 上記2件は`docs/spec.md`11.6・11.7として正式に記録した（別コミット）
+
+**関連**：`docs/proposals/admin-delete-endpoint.md`、
+　　　　 `cheerstick-task-20260810-delete-test-event.md`、
+　　　　 `cheerstick-task-20260810-record-design-issues.md`
+
+---
+
 ## 2026-07-31 試合の非表示化機能（v2）を本番反映
 
 ### 実施したこと
