@@ -16,6 +16,12 @@ BLE応援スティックの振動データを収集し、応援熱量をデー�
 - 商用リリース：2026年8月第1週、V・ファーレン長崎を起点にJリーグ展開
 - 想定規模：2,000〜20,000本の同時接続
 
+### 1.1 名称について（2026-08-11追加）
+
+- **「推しフル」＝ユーザー向けサービス名。** WebView（`public/index.html`・`public/reference.html`）のtitle・見出し等、ユーザーが直接目にする箇所ではこちらを使用する（2026-07-27、コミット`f97af59`で「CheerStick」表記から変更済み。変更理由・決定経緯は`docs/worklog.md`同日エントリの通り未記録）
+- **「CheerStick」＝システム識別子。** GitHubリポジトリ名（`cats777jp/cheerstick-server`）、ドメイン（`*.cheerstick.com`）、DB名（`cheerstick_production`等）、コード内の変数・クラス名、ブリッジAPI識別子（`window.CheerStickBridge`・`window.onCheerStickData`等）として使用する。**ブリッジAPI識別子はVanstone様との合意事項のため、サービス名変更後も維持する。**
+- 本ドキュメント（`docs/spec.md`）自体のタイトルなど、システム全体を指す文脈では「CheerStick」を用いる
+
 ## 2. 役割分担（2026-07-23 確定）
 
 | 担当 | 範囲 |
@@ -112,6 +118,8 @@ GET /webviewrefer/?id=<MACアドレス>
   無い場合（scheduled / paused / 試合なし）
     → DB保存はスキップ（画面上のその場限り表示のみ。練習・動作確認用）
 ```
+
+> **2026-08-11追記：** `docs/proposals/cheer-count-algorithm.md`は旧Node-RED版WebViewのクライアント側（振動データ→count算出）ロジックを参照用に抽出した資料であり、**本章（サーバー側の集計仕様）とは別物。** 同資料内のWebSocket送信ペイロード例（`count`+`num_min/max`等のバッチ統計形式）は現行実装（本章の`{type:"count", id, value, duration_ms}`）と形状が異なる。参照時に混同しないこと。
 
 ### 4.4 未実装（要対応）
 
@@ -492,6 +500,8 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
    - 復帰を許す場合、どの状態へ戻すか（`paused`/`draft`）
    - 誤操作防止（確認ダイアログ、試合名の手入力等）との組み合わせで検討すること
 
+> **2026-08-11追記：** 2026-08-10の事故（本節記載の通り、誤って`finished`にした試合を本番DBへの手動SQLで削除して対処した件）を受け、**DELETE機能の実装優先度を引き上げる。** 従来「対応が必要な点」の1項目として記載していたが、リリース前の必須対応候補として扱う（最終判断はKMT様）。
+
 ### 11.7 `cheer_logs`/`awards`の外部キー制約がSET NULL（2026-08-10追記）
 
 **事象**
@@ -533,6 +543,8 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 3. **実施するなら実データが入る前が望ましい**
    - 応援データが蓄積された後の制約変更は、既存行の整合性確認が必要になる
 
+> **2026-08-11追記（範囲の訂正）：** 本節は`cheer_logs.event_id`のSET NULLのみを記載していたが、2026-08-11の調査で、SET NULLの対象は`event_id`だけでなく**`target_id`・`user_id`にも及ぶ**ことを確認した（`cheer_logs`の3列（`event_id`/`target_id`/`user_id`）すべてが`ON DELETE SET NULL`。`device_id`のみ`RESTRICT`）。あわせて、`awards`テーブルは`event_id`/`target_id`が`SET NULL`である一方、**`user_id`のみ`CASCADE`**という設計になっており、4テーブル（`cheer_logs`/`awards`/`cheer_summaries`/`event_targets`）横断で削除時挙動が不統一であることが判明した（`cheer_summaries`/`event_targets`は全列`CASCADE`）。統一方針の要否についてはKMT様の判断が必要。
+
 ---
 
 ## 変更履歴
@@ -550,3 +562,4 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 | 2026-07-31 | 11.3に追記：物理DELETE方式から非表示化方式への設計変更を記録 | staging環境での`confdeltype`確認により`n`（SET NULL）と判明。物理削除では`cheer_logs.event_id`が無言でNULL化される問題があるため、KMT様判断により`events.hidden_at`列による非表示化方式へ変更。設計方針書を`docs/proposals/admin-hide-endpoint.md`へ差し替え |
 | 2026-07-31 | 11.4「updateEventStatus/updateEventがhidden_atをチェックしない」、11.5「routes/events.js等が実スキーマと異なるeventsを参照している」を新設 | 非表示化機能のstaging実装・検証（STEP4の一般公開系エンドポイント洗い出し）で判明した2件を、KMT様の指示により既知の課題として正式に記録した |
 | 2026-08-10 | 11.6「finishedからの復帰手段が存在しない」、11.7「cheer_logs/awardsの外部キー制約がSET NULL」を新設 | 管理画面の動作確認中に登録した仮の試合データが`finished`となり削除・復帰いずれもできなくなったため、本番DBへの手動SQLで削除して対処（詳細は`docs/worklog.md`該当日エントリ参照）。その過程で判明した設計課題2件を、計画外の副次的発見である旨を明記した上でKMT様の指示により正式に記録した |
+| 2026-08-11 | 1.1「名称について」を新設、11.6に優先度引き上げの追記、11.7に範囲訂正（target_id/user_idも対象、awardsのuser_idのみCASCADEで不統一）の追記、4.3末尾にcheer-count-algorithm.mdの位置づけ注記を追加 | 全体棚卸し調査（Google Drive経由の指示書に基づく読み取り専用調査）の結果を反映。サービス名（推しフル/CheerStick）の定義が未記載だった点、11.7がcheer_logsのSET NULL対象を`event_id`のみと誤解を招く記載だった点（実際は`target_id`/`user_id`も対象、`awards.user_id`のみCASCADEで4テーブル横断の不統一あり）、`cheer-count-algorithm.md`が現行サーバー仕様と誤認されうる点をいずれも既存記述を削除せず追記で是正した |

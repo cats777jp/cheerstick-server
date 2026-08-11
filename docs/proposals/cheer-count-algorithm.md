@@ -1,5 +1,11 @@
 # 応援量カウント算出ロジック仕様書
 
+> **【位置づけに関する注記、2026-08-11追加】** 本資料は旧Node-RED版WebViewの
+> クライアント側（振動データ→count算出）ロジックの参照資料であり、**現行の
+> サーバー側集計仕様ではない。** ペイロード形状（`count`+`num_min/max`等の
+> バッチ統計形式）も現行実装（`docs/spec.md` 4.3、`{type:"count", id, value,
+> duration_ms}`）と異なる。誤って現行仕様として参照しないこと。
+
 > 旧Node-RED版 WebView からの抽出。Vanstone様へのAPP側実装リファレンスとして共有
 
 - 抽出元: `nodered-backup/20260724/extracted/user-registration-form.html`
