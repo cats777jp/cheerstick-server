@@ -4,6 +4,63 @@
 
 ---
 
+## 2026-08-18 11.6/11.7 現状調査（読み取り専用）、管理画面の静的ファイルにデプロイ漏れを発見
+
+### 背景
+`cheerstick-master-summary-20260811-rev2.md`4節（優先1・優先2）を受け、11.6（`finished`からの復帰手段なし・DELETE機能）と11.7（外部キー制約）の設計に入る前の現況調査を、作業指示書（`cheerstick-task-20260818-investigate-11.6-11.7.md`）に基づき実施した。**本タスクは調査のみ。書き込み・修正は一切行っていない。**
+
+### 実施したこと
+- STEP0（ローカル）／STEP0-E（EC2）：git状態・pm2状態の確認。8/11以降の新規コミットは全てdocsとWS connectログ実装のみで、状態遷移・DELETE・FK関連の変更は無いことを確認。停止ポイント該当なし
+- STEP1（11.6）：管理API・管理画面UIのコードリーディング。DB実体の確認（`\d events`、CHECK制約、実データ件数）は本番DB接続がブロックされたため未実施
+- STEP2（11.7）：マイグレーションファイル上のFK定義・NOT NULL制約を確認。DB実体（`pg_constraint`等）の確認は同様に未実施
+- 上記過程で発見した矛盾（後述）について、追加で以下を確認：
+  - 管理画面の削除ボタンの生成箇所の特定（コードリーディング）
+  - `cheer_logs`/`awards`/`cheer_summaries`/`event_targets`のNOT NULL制約（マイグレーションファイルベース）
+  - `docs/tasks/2026-07-31-hide-endpoint-production.md`の記述確認（UI操作かAPI直接呼び出しか）
+  - EC2上で`/var/www/cheerstick-admin/index.html`（配信中）と`public/admin/index.html`（git管理下）の`stat`・`diff`比較（読み取りのみ）
+  - 横展開確認として、`app.cheerstick.com`（`/var/www/cheerstick-app/`）の`index.html`／`reference.html`についても同様の`stat`・`diff`比較を実施
+
+### 判明した事実（最重要）
+
+**管理画面（admin.cheerstick.com）の静的ファイルに、2026-07-31から続くデプロイ漏れがあった。**
+
+- コミット`02cb6e6`（2026-07-31 17:24、非表示化＝DELETE機能の実装。削除ボタン・`handleDelete()`を含む）は、本番へのコードデプロイ（同日18:26記録の`git pull`＋`pm2 restart`）が行われた際、**`docs/runbook.md`が定める`sudo cp public/admin/index.html /var/www/cheerstick-admin/`のコピー手順が実施されなかった**
+- 配信中ファイル`/var/www/cheerstick-admin/index.html`（15,698バイト、最終更新2026-07-31 02:33:13 UTC＝11:33 JST）と、git管理下の`public/admin/index.html`（16,481バイト、最終更新2026-07-31 08:48:47 UTC＝17:48 JST）を`diff`した結果、削除ボタン生成コード（`deleteBtn`）と`handleDelete()`関数がまるごと欠落していることを確認（差分はこの1機能・2箇所のhunkのみで、他の差分は無し＝確認B）
+- 配信中ファイルの更新日時（11:33 JST）は`02cb6e6`のコミット時刻（17:24 JST）より前であり、**この状態は本日（2026-08-18、確認時点）まで約18日間変化していない**
+- **8/10（本ファイル同日エントリ）の「DELETE機能は設計のみで未実装のため手動SQLで削除した」という記述は、バックエンドAPI観点では誤りだが、UI観点では実質的に正しかった。** バックエンド（`DELETE /api/v1/admin/events/:id`）は7/31から本番で稼働していたが、管理画面に削除ボタンが表示されない状態だったため、ブラウザ操作では削除できなかったと考えられる
+- **現時点でも管理画面に削除ボタンは表示されていない。** 削除操作が必要になれば同じ状況が再発する
+
+**確認A（app.cheerstick.com側の横展開確認）：**
+
+- nginx設定（`/etc/nginx/sites-enabled/cheerstick-app`）で`root /var/www/cheerstick-app;`を確認（推測ではなく実配置を特定）
+- `reference.html`：配信中ファイルと`public/reference.html`は**完全に一致（diff無し）**
+- `index.html`：配信中ファイルの`<title>`は「推しフル」、`<h1>`も「「推しフル」へようこそ！」であり、**2026-07-27コミット`f97af59`（サービス名変更）は本番に反映済み**であることを確認
+- **一方、`index.html`には別のデプロイ漏れを新たに発見した。** コミット`051bcdb`（2026-07-28 18:17、「ネイティブアプリとのJSブリッジ層を実装」）による`window.CheerStickBridge`オブジェクトの実体定義・`window.receiveFromApp`関数が、配信中ファイルに**一切存在しない**。配信中ファイルには`window.CheerStickBridge && window.CheerStickBridge.sendLED && ...`という存在チェック付きの呼び出しコードのみが残っており、**肝心のブリッジ実体が無いため、この呼び出しは本番で常に不発（何も送信されない）**。配信中`index.html`の最終更新（2026-07-27 02:52:45 UTC＝11:52 JST）は`051bcdb`（7/28）より前であり、それ以降一度も再デプロイされていないことと符合する
+- 影響範囲：spec.md 5.2記載のネイティブアプリ⇔WebViewブリッジ（LED制御・終了通知・reference_url転送）が、本番では実質的に機能していない状態にあることを意味する。ただし「Vanstone側の実装も未着手」（spec.md 5.2既存記載）のため、これによる実害（アプリ側テスト失敗等）が既に発生しているかは本タスクでは未確認
+
+### DB実体確認について
+本番DBへのSSH経由psqlクエリは、実行前に権限クラシファイアにより自動拒否された。ユーザー判断により、DB実体に依存する以下は**次回タスクへ持ち越し**とした：
+- STEP1-1（`\d events`、CHECK制約）／1-6のEC2実ログ確認／1-7（本番`events`実データ）
+- STEP2-1〜2-5（FK定義全件・NULL許容実体・件数・`device_id`のRESTRICT確認）
+- STEP3（`devices`/`categories`列一覧、`organizations`/`genres`テーブル有無）
+
+### 変更したファイル
+- コード・DB・本番配信ファイルの変更は**一切なし**（発見のみ、修正は行っていない）
+- `docs/worklog.md`（本エントリ）
+
+### 次回への申し送り
+1. **管理画面（admin.cheerstick.com）の削除ボタンのデプロイ漏れの是正**（`public/admin/index.html`を`/var/www/cheerstick-admin/`へコピー）が必要。次タスクで対応する
+2. **`index.html`のJSブリッジ実装（`051bcdb`）のデプロイ漏れの是正**も同様に必要。あわせて次タスクで対応する
+3. 上記2件はいずれも`docs/runbook.md`記載の「静的ファイル2箇所デプロイ」手順の見落としが原因であり、恒久対応（nginx root統一 or デプロイスクリプト自動化）の優先度再検討が必要
+4. 11.6・11.7の設計は、DB実体確認（STEP1-1/1-6/1-7、STEP2-1〜2-5、STEP3）の完了後に着手すること
+5. `docs/spec.md`への11.6/11.7・本エントリ関連の訂正は、内容が未確定のため本日は実施していない（ユーザー指示）。次回、確定した内容を反映すること
+
+### 未解決のまま残した課題
+- 前回までの申し送りに変わらず継続
+- 上記「次回への申し送り」1〜5
+
+---
+
 ## 2026-08-18 WebSocket `connect` の接続ログを追加（実装・本番反映）
 
 ### 背景
