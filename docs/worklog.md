@@ -4,6 +4,68 @@
 
 ---
 
+## 2026-08-18 WebSocket `connect` の接続ログを追加（実装・本番反映）
+
+### 背景
+同日実施したVanstone様検証機の接続エラー調査（別エントリ参照）で、WebSocket `connect`の接続試行（どのMACがいつ接続し、どの`status`が返ったか）を記録するアプリケーションログが存在しないことが判明した。試合当日「応援が反映されない」等の問い合わせが発生した場合の調査起点を作るため、記録の追加のみを目的として実装した（`computeStatus()`の判定ロジック・クライアントへの応答内容・DBスキーマは変更しない）。
+
+### 実施したこと
+- **STEP1（現状調査）**：既存ロギング実装（`morgan`はExpressのHTTPアクセスログ用のみで、WS層は`console.log`/`console.error`のみ）、`connect`処理の構造（`computeStatus()`が返す5種類のstatus）、送信元IP取得可否、接続の識別単位を確認し報告。承認を得てSTEP2へ
+- **STEP2（実装）**：`src/websocket/index.js`に接続ログを追加（コミット`d7e965c`）
+  - 成功（`status`が`'error'`以外）：同一WebSocketコネクションで**初回のみ**`console.log`
+  - 失敗：`console.error`で**全件**。理由コードは`NO_ROW`（`row`が取得できない）／`NO_CATEGORY`（`category_id`がNULL）／`EXCEPTION`（`ensureDevice`等の例外。MACアドレスを30文字に切り詰めて記録し、Postgresエラーコードがあれば付記）の3分類
+  - 送信元IPは`X-Real-IP`ヘッダー優先、無ければ`socket.remoteAddress`にフォールバック
+  - メールアドレス・ニックネームは出力しない
+- **STEP3（staging確認）**：SSHトンネル（`localhost:5433`→`cheerstick_staging`）経由のローカルサーバーで4パターンを確認。**本番DBへの書き込みは無し**
+- **STEP4（本番反映）**：`git pull`→`pm2 restart cheerstick-server`→動作確認。既存のテスト用MAC（`AA:BB:CC:DD:EE:02`）で1回接続し、ログ出力とIP記録を確認
+
+### 想定と異なった点（最優先で報告）
+
+1. **STEP4実施直前、コミット`d7e965c`がpushされていなかったことが判明した。** STEP2の承認後にコミットし、STEP3（ローカル確認）へ進んだ際にpushを失念していた。EC2で`git pull`した直後、取得した差分に`src/websocket/index.js`が含まれていないことに気づいて発覚（当時のEC2側HEADは`3f64a2f`止まり）。その場でpushし、EC2で再度`git pull`して`d7e965c`まで反映させ解消した。**本番反映の途中で発覚したため実害は無かったが、CLAUDE.mdの「一日の終わりの運用ルール」が指摘する『未pushのまま終わる』事故と同種のミス。以後、コミット直後は都度pushを徹底する**
+2. 作業指示書は送信元IPの取得に`X-Forwarded-For`を想定していたが、本番nginx（`/etc/nginx/sites-enabled/cheerstick-ws`）の実設定は`X-Real-IP`のみで`X-Forwarded-For`は設定されていなかった（STEP1で確認・報告済み、`X-Real-IP`ベースに変更して実装）
+
+### 変更したファイル
+- `src/websocket/index.js`（コミット`d7e965c`）
+- 本番EC2：`git pull`（`3f64a2f`→`d7e965c`）、`pm2 restart cheerstick-server`（再起動回数2→3）
+- `docs/worklog.md`（本エントリ）
+- `docs/spec.md`（6.2追記、別コミット）
+- コード・DBの変更はいずれもstaging限定または本番の`git pull`/`pm2 restart`のみ。本番DBへの書き込みは無し
+
+### STEP3（staging確認）の結果
+
+| # | 確認内容 | 結果 |
+|---|---|---|
+| 1 | 正常系：category_id設定済みMACで同一コネクション内に`connect`を2回送信 | 成功ログは1回のみ（重複防止が機能） |
+| 2 | 異常系：category_id未設定MACで同一コネクション内に`connect`を2回送信 | `NO_CATEGORY`ログが2回とも出力（失敗は全件方針通り） |
+| 3 | 異常系：17文字超のMAC（VARCHAR(17)超過） | `EXCEPTION`ログが出力され、MACは30文字で切り詰め、`pg_code=22001`を付記 |
+| 4 | 送信元IP | ローカル直接接続（nginx経由なし）のため`ip=::1`。`X-Real-IP`未設定時のフォールバックが機能することを確認 |
+| 5 | 既存の応答内容 | `status`/`message`/`reference_url`とも変更前と同一 |
+
+`NO_ROW`（`row`が取得できないケース）はTOFUにより通常発生しないため未検証（コードレビューでの妥当性確認のみ）。
+
+### STEP4（本番反映）の結果
+
+- `pm2 list`：`online`、再起動回数2→3、`package.json`に差分無し
+- 反映直前、`ss -tnp state established '( sport = :3000 )'`で確立中コネクション0件、直近ログも数時間前であることを確認してから`pm2 restart`を実施
+- 実接続テスト：既存のテスト用MAC`AA:BB:CC:DD:EE:02`（category_id未設定）へ、ローカルPC（KMT様オフィスIP経由）から`wss://ws.cheerstick.com/cheer`へ1回接続
+- ログ実例：
+  ```
+  [WS] connect ng time=2026-08-18T03:14:49.646Z mac=AA:BB:CC:DD:EE:02 reason=NO_CATEGORY ip=49.156.217.121
+  ```
+- **`ip=`に実際のグローバルIP（`49.156.217.121`＝KMT様オフィスIP）が記録されており、`127.0.0.1`等への潰れは無いことを確認。`X-Real-IP`が正しく読めている証拠。**
+- 応答内容（`status`/`message`）は変更前と同一であることを確認
+- 本番`devices`への新規行作成なし（既存テスト用MACを使用）
+
+### 次回への申し送り
+1. 試合当日「応援が反映されない」等の問い合わせ時は、`grep 'connect ng' /home/ubuntu/.pm2/logs/cheerstick-server-error.log`で該当MACの失敗理由を追える
+2. ログはファイル出力のみで、ローテーション・監視の仕組みは無い（`pm2`のデフォルトログ運用のまま）。長期運用に向けては別途検討が必要（本タスクのスコープ外として記録のみ）
+3. **コミット後は都度pushする**（本エントリの「想定と異なった点」1参照）
+
+### 未解決のまま残した課題
+- 前回までの申し送りに変わらず継続
+
+---
+
 ## 2026-08-18 Vanstone様検証機2台の接続エラー調査（読み取り専用）
 
 ### 背景

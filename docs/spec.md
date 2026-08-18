@@ -236,6 +236,14 @@ targets (
 - **`is_demo`列による判定の迂回は存在しない。** `computeStatus()`は`is_demo`を一切参照していない。検証機やデモ機を`is_demo = true`にしても、この判定は迂回されない。デモ機を例外扱いしたい場合は別途分岐の追加が必要
 - 現時点で、WebSocket `connect`の接続試行（どのMACがいつ接続し、どの`status`が返ったか）を記録するアプリケーションログは存在しない
 
+> **2026-08-18追記（同日中に対応）：** 上記「アプリケーションログは存在しない」状態は本日中に解消した。`src/websocket/index.js`の`connect`ハンドラに接続ログを追加し、本番反映済み（コミット`d7e965c`、詳細は`docs/worklog.md`同日エントリ「WebSocket `connect` の接続ログを追加」参照）。
+> - 成功（`status`が`'error'`以外）：同一WebSocketコネクションで初回のみ`console.log`
+> - 失敗：`console.error`で全件。理由コードは`NO_ROW`（`row`が取得できない）／`NO_CATEGORY`（`category_id`がNULL）／`EXCEPTION`（`ensureDevice`等の例外。失敗したMACアドレスを30文字に切り詰めて記録し、Postgresエラーコードがあれば付記）の3分類
+> - 出力項目：ISO 8601日時・MACアドレス・status／理由コード・送信元IP（`X-Real-IP`ヘッダー優先、無ければ`socket.remoteAddress`にフォールバック）
+> - メールアドレス・ニックネームは出力しない
+> - `computeStatus()`の判定ロジック・クライアントへの応答内容・DBスキーマへの変更は無い（記録の追加のみ）
+> - 本番nginx（`/etc/nginx/sites-enabled/cheerstick-ws`）は`X-Real-IP`のみ設定し`X-Forwarded-For`は設定していないため、`X-Real-IP`を採用した
+
 ## 7. データベース
 
 PostgreSQL、EC2上に直接インストール（RDSではなく最小コスト構成）。
@@ -575,3 +583,4 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 | 2026-08-10 | 11.6「finishedからの復帰手段が存在しない」、11.7「cheer_logs/awardsの外部キー制約がSET NULL」を新設 | 管理画面の動作確認中に登録した仮の試合データが`finished`となり削除・復帰いずれもできなくなったため、本番DBへの手動SQLで削除して対処（詳細は`docs/worklog.md`該当日エントリ参照）。その過程で判明した設計課題2件を、計画外の副次的発見である旨を明記した上でKMT様の指示により正式に記録した |
 | 2026-08-11 | 1.1「名称について」を新設、11.6に優先度引き上げの追記、11.7に範囲訂正（target_id/user_idも対象、awardsのuser_idのみCASCADEで不統一）の追記、4.3末尾にcheer-count-algorithm.mdの位置づけ注記を追加 | 全体棚卸し調査（Google Drive経由の指示書に基づく読み取り専用調査）の結果を反映。サービス名（推しフル/CheerStick）の定義が未記載だった点、11.7がcheer_logsのSET NULL対象を`event_id`のみと誤解を招く記載だった点（実際は`target_id`/`user_id`も対象、`awards.user_id`のみCASCADEで4テーブル横断の不統一あり）、`cheer-count-algorithm.md`が現行サーバー仕様と誤認されうる点をいずれも既存記述を削除せず追記で是正した |
 | 2026-08-18 | 4.1に「category_id判定の生存確認完了」の追記、6.2「カテゴリー判定の実装詳細」を新設 | Vanstone様検証機2台の接続エラー調査（読み取り専用）により、category_id未設定判定がWebSocket `connect`でのみ行われ`geturl`では行われないこと、`is_demo`による迂回が存在しないこと、`connect`の接続試行を記録するアプリケーションログが存在しないことを確認したため。詳細は`docs/worklog.md`同日エントリ参照 |
+| 2026-08-18 | 6.2に追記：接続ログを本日中に実装・本番反映した旨を記録 | 同日の調査で判明した「connectの接続試行を記録するログが存在しない」状態を解消するため実装（`src/websocket/index.js`、コミット`d7e965c`）。既存記述（ログが存在しないという6.2の記載）は削除せず、対応済みである旨を追記で更新した。詳細は`docs/worklog.md`同日エントリ「WebSocket `connect` の接続ログを追加」参照 |
