@@ -4,6 +4,71 @@
 
 ---
 
+## 2026-08-18 静的ファイルのデプロイ漏れ2件を本番反映（管理画面の削除ボタン、appのブリッジ実装）
+
+### 背景
+同日の11.6/11.7現状調査（本ファイル別エントリ参照）で判明した静的ファイルのデプロイ漏れ3件（管理画面の削除ボタン、appのJSブリッジ実装、reference.htmlは一致済みで対象外）のうち、未反映の2件を本番へ反映した。作業指示書（`cheerstick-task-20260819-static-deploy-fix.md`、作成日8/18・実施予定8/19だったが8/18中に前倒し実施。退避先ディレクトリ名は`_deploy_backup_20260819`から`_deploy_backup_20260818`に読み替えて実施）に基づき、①管理画面→②app（ユーザー向け画面）の順に、各停止ポイントでユーザー（KMT様）の承認を得てから次工程へ進む形で実施した。
+
+### 実施したこと・結果
+
+**STEP0（事前確認）**：
+- EC2 HEAD：`d7e965c`。手順書は`f45d6e3`以降を想定していたが、未pullの3コミット（`3f64a2f`/`a55f480`/`f45d6e3`）はいずれも`docs/spec.md`・`docs/worklog.md`のみの変更で、`public/admin/index.html`・`public/index.html`には無関係であることをローカルの`git show --stat`で確認済み。停止条件（作業ツリー非クリーン等）には非該当と判断し続行
+- `reference.html`：配信中版とリポジトリ版は一致（変化なし）を再確認
+- webroot内に新たな`.bak`等の残置物なし
+- 差し替え前の疎通基準値：`app/index.html`=200、`app/reference.html`=200、`admin.cheerstick.com/`=403（IP制限による想定内の挙動）、`api/.../geturl`=200
+
+**STEP1**：退避先ディレクトリ`/home/ubuntu/_deploy_backup_20260818/{admin,app}/`を作成（`/var/www/`配下ではなく`/home/ubuntu/`配下）
+
+**STEP2（①管理画面）**：
+| # | 内容 | 結果 |
+|---|---|---|
+| 退避 | `/home/ubuntu/_deploy_backup_20260818/admin/index.html.20260818` | md5 `5e9c2990f7cee8df0e47d055b8bbbb9e`（差し替え前と一致） |
+| コピー | `public/admin/index.html` → `/var/www/cheerstick-admin/index.html` | 実施 |
+| 検証 | `diff` | **NONE**。反映後md5 `a9c0e5133529dccd62f33199d0d3a2ed`（リポジトリ側と一致） |
+| 権限 | `-rw-rw-r-- ubuntu:ubuntu`（`0664`） | 差し替え前と同一 |
+| 疎通 | `admin.cheerstick.com/` | `403`のまま変化なし |
+
+**停止ポイント②**でユーザーへ報告し、STEP3進行の承認を受けた。**あわせてユーザーが管理画面で実機確認を実施**：テスト試合「【テスト】削除ボタン確認 20260818」を1件登録し、［操作］列に「開始」「編集」「削除」の3ボタンが表示されること、［削除］→確認ダイアログ→一覧から消滅することを確認済み。
+
+**STEP3（②app＝ユーザー向け画面）**：
+進行前の追加確認として、EC2側リポジトリの`public/index.html`に`CheerStickBridge`（9件）・`receiveFromApp`（2件）が実在すること、サイズ36,145バイトであることを確認（0件だった場合は`git pull`が必要になりコピー中止の条件だったが、非該当）。
+
+| # | 内容 | 結果 |
+|---|---|---|
+| 退避 | `/home/ubuntu/_deploy_backup_20260818/app/index.html.20260818` | md5 `8b59dff74ef0d75fb79f039797c66e22`（差し替え前と一致） |
+| コピー | `public/index.html` → `/var/www/cheerstick-app/index.html` | 実施（`reference.html`はコピー対象外、触っていない） |
+| 検証 | `diff` | **NONE**。反映後md5 `4d6b9cc81d32deda8f58a621395aa3c1`（リポジトリ側と一致） |
+| ブリッジ確認 | `grep -c CheerStickBridge` / `grep -c receiveFromApp` | 9 / 2（いずれも0でないことを確認） |
+| 疎通 | `app/index.html`=200、`app/reference.html`=200（touchしていないが再確認）、`api/.../geturl`=200 | 差し替え前と同一 |
+| title確認 | `<title>推しフル</title>` | 維持を確認（`f97af59`が失われていないこと） |
+
+**STEP4（全体確認）**：4URLの疎通・pm2状態（`cheerstick-server` online、再起動回数3、STEP0-3と不変）をすべて確認。`pm2 restart`は本タスク中一度も実行していない。
+
+**STEP5（残る漏れの確認、読み取りのみ）**：
+- `sites-enabled`の4設定ファイルすべてを確認し、静的ファイルを配信する`root`は`cheerstick-admin`・`cheerstick-app`の2つのみであることを確認（`cheerstick-api`・`cheerstick-ws`は`root`無し、proxyのみ）
+- 両webroot内の全5ファイル（`admin/index.html`、`app/index.html`、`app/reference.html`、`app/images/teams/1.png`、`app/images/members/1/1.png`）すべてについて、対応するリポジトリ側ファイル（`public/`または`assets/images/`）とのdiff／md5一致を確認。**リポジトリに存在しない（対応の無い）ファイルは0件**
+- `/var/www/html/index.nginx-debian.html`（nginxデフォルトインストール時の"Welcome to nginx!"ページ、2026-07-21作成）を検出したが、`sites-enabled`のいずれの`server_name`/`root`にも該当せず、今回の3件とは無関係の未整理残置物と判断。削除等は行っていない
+- **結論：今回反映した2件以外に、webroot内に4件目の未反映は見つからなかった**
+
+### 変更したファイル
+- 本番EC2：`/var/www/cheerstick-admin/index.html`・`/var/www/cheerstick-app/index.html`を差し替え（`cp`のみ、`git pull`・`pm2 restart`・nginx操作は一切なし）
+- 退避：`/home/ubuntu/_deploy_backup_20260818/{admin,app}/index.html.20260818`（各1ファイル、削除はしていない）
+- `docs/worklog.md`（本エントリ）
+- `docs/runbook.md`（静的ファイル反映後のdiff確認手順を追記、別途記録）
+- コード・DBの変更なし。`docs/spec.md`は本日未変更（11.6の訂正内容が未確定のため、指示により据え置き）
+
+### 次回への申し送り
+1. 本タスクでは`docs/spec.md`11.6の訂正を行っていない。訂正内容の確定後、別タスクで反映すること
+2. `/var/www/html/index.nginx-debian.html`（無関係の残置物）の要否は本タスクでは判断していない。対応要否はKMT様の判断が必要
+3. nginx rootの統一（恒久対応）は今回も見送り（作業指示書の方針通り、ストア申請時期のnginx変更リスクを回避）
+4. 11.6・11.7のDB実体確認（`\d events`、FK定義全件、実データ件数等）は8/18時点で本番DB接続がブロックされたままであり、引き続き持ち越し
+
+### 未解決のまま残した課題
+- 前回までの申し送りに変わらず継続
+- 上記「次回への申し送り」1〜4
+
+---
+
 ## 2026-08-18 11.6/11.7 現状調査（読み取り専用）、管理画面の静的ファイルにデプロイ漏れを発見
 
 ### 背景

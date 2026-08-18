@@ -152,6 +152,26 @@ pm2 restart cheerstick-server
 **恒久対応（未実施）**：nginx の root を `cheerstick-server-new/public/` に統一するか、
 デプロイスクリプトでコピーを自動化する。
 
+### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
+
+**理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能
+（削除ボタン）の本番反映時にこの`cp`が実施されず、`public/admin/index.html`を
+`/var/www/cheerstick-admin/`へコピーする工程が丸ごと欠落した。同様に、2026-07-28の
+`public/index.html`（ネイティブアプリ向けJSブリッジ実装）も`/var/www/cheerstick-app/`へ
+未反映のまま21日間放置されていた。いずれも2026-08-18の調査で発覚し、同日中に手動で反映した
+（`docs/worklog.md`2026-08-18エントリ参照）。**「`cp`コマンドを手順書に書く」だけでは
+再発する**（今回も手順自体は既に書かれていたのに実行されなかった）。「反映したこと」ではなく
+**「反映されたこと」を毎回確認する行**を手順に加える。
+
+```bash
+# cp の直後に必ず実行し、両方とも「差分なし」であることを確認する
+diff /var/www/cheerstick-admin/index.html /home/ubuntu/cheerstick-server-new/public/admin/index.html && echo "admin: OK"
+diff /var/www/cheerstick-app/index.html   /home/ubuntu/cheerstick-server-new/public/index.html        && echo "app: OK"
+```
+
+**差分が出た場合、反映は完了していない。** コード変更を伴うデプロイでは、`pm2 restart`の
+前後どちらでもよいが、必ず`cp`の直後にこの`diff`を実行すること。
+
 ### 画像・素材の反映（2026-07-27対応：assets/images/ 新設に伴う追加）
 
 **`assets/images/` が正本。** 配信先 `/var/www/cheerstick-app/images/` へは
