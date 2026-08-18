@@ -4,6 +4,124 @@
 
 ---
 
+## 2026-08-18 11.6/11.7 実体調査（entity-check、管理画面UI・API詳細確認）
+
+### 背景
+`cheerstick-task-20260818-entity-check-11.6-11.7.md`に基づき実施。同日実施済みの`cheerstick-task-20260818-investigate-11.6-11.7.md`（別タスク、本ファイル別エントリ「11.6/11.7 現状調査」に記録済み）とは別物の後続タスクであり、11.6・11.7の設計に向けチャット側（Claude）が推測で埋めていた前提を実体（コード全文・本番配信ファイル）で置き換えることが目的。書き込みは本エントリ（worklogへの追記）のみに限定して実施した。
+
+### 実施したこと・結果
+
+**STEP0（ローカルの現況）**：ブランチ`feature/reference-data`、ローカルHEAD `b5d0856`、originと同期、作業ツリークリーン、未追跡は`cheerstick-ws`のみ。rev3記載の前提と完全一致。
+
+**STEP1（配信ファイルとリポジトリの突合）**：本番EC2で`diff`を実行し、admin/app とも差分なし（OK）を確認。8/18の反映が崩れていないことを再確認した。
+
+**STEP2（管理画面UI、`public/admin/index.html`読み取り専用）**：
+
+- `actionButtonsFor()`全文：
+  ```js
+  function actionButtonsFor(event) {
+    const buttons = [];
+    if (event.status === 'scheduled') {
+      buttons.push({ label: '開始', nextStatus: 'live', confirm: false });
+    } else if (event.status === 'live') {
+      buttons.push({ label: '停止', nextStatus: 'paused', confirm: false });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true });
+    } else if (event.status === 'paused') {
+      buttons.push({ label: '再開', nextStatus: 'live', confirm: false });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true });
+    }
+    return buttons;
+  }
+  ```
+- 状態別ボタン一覧（`編集`・`削除`は`renderTable()`内で全状態に無条件追加される。`actionButtonsFor()`自体が返すのは状態遷移ボタンのみ）：
+
+  | status | ボタン | ハンドラ | 確認ダイアログ | ダイアログ文言 |
+  |---|---|---|---|---|
+  | scheduled | 開始／編集／削除 | handleStatusChange／openEditModal／handleDelete | 開始:無、編集:無、削除:有 | 削除：「〈試合名〉」を本当に削除しますか？ |
+  | live | 停止／終了／編集／削除 | handleStatusChange(×2)／openEditModal／handleDelete | 停止:無、終了:有、削除:有 | 終了：「〈試合名〉」を終了します。この操作は取り消せません。よろしいですか？／削除：上記と同じ文言 |
+  | paused | 再開／終了／編集／削除 | 同上 | 再開:無、終了:有、削除:有 | 終了・削除とも上記と同じ |
+  | finished | 編集／削除 | openEditModal／handleDelete | 編集:無、削除:有 | 削除：上記と同じ |
+  | cancelled | 編集／削除 | 同上 | 編集:無、削除:有 | 削除：上記と同じ |
+
+- 確認ダイアログの実装：`window.confirm()`（ブラウザ標準）。独自モーダル（`#editModalOverlay`のようなカスタムUI）ではない。試合名（`event.title`）はダイアログ文言に含まれるが、現在のstatus文言は含まれない。`handleDelete()`と「終了」ボタンの確認ダイアログは、どちらも`confirm()`を使う点は共通だが、実装（呼び出し箇所）はそれぞれ別の関数内（`handleStatusChange`内／`handleDelete`内）であり、共通化されたヘルパーやコンポーネントは無い
+- **KMT様の記憶（「終了を押すと『終了しますか？』が出た」）は、現在配信されている`02cb6e6`版のコードと一致することを確認した**
+- `paused`→`live`の導線：「再開」ボタンとして存在する（`nextStatus:'live', confirm:false`）
+- `finished`に分岐が無いこと（rev3の記述）：`actionButtonsFor()`のif/else ifチェーンは`scheduled`/`live`/`paused`の3条件のみで、`finished`・`cancelled`はどちらも該当せず`buttons`は空配列のまま返る。裏取り完了
+
+**STEP3（API、`src/controllers/adminEventController.js`・`src/routes/admin.js`・`src/db/cheerstickQueries.js`読み取り専用）**：
+
+- `updateEventStatus()`全文（`src/db/cheerstickQueries.js`）：
+  ```js
+  async function updateEventStatus(eventId, status) {
+    if (!EVENT_STATUSES.includes(status)) {
+      const err = new Error(`invalid status: ${status}`);
+      err.code = 'INVALID_STATUS';
+      throw err;
+    }
+
+    if (status === 'live') {
+      const { rows: currentRows } = await db.query(
+        `SELECT organization_id FROM events WHERE id = $1`,
+        [eventId]
+      );
+      const organizationId = currentRows[0] && currentRows[0].organization_id;
+
+      if (organizationId) {
+        const { rows: conflictRows } = await db.query(
+          `SELECT id, title FROM events
+           WHERE organization_id = $1 AND status = 'live' AND id <> $2
+           LIMIT 1`,
+          [organizationId, eventId]
+        );
+        if (conflictRows[0]) {
+          const err = new Error('another event is already live for this organization');
+          err.code = 'LIVE_EVENT_CONFLICT';
+          err.conflict = conflictRows[0];
+          throw err;
+        }
+      }
+    }
+
+    const { rows } = await db.query(
+      `UPDATE events SET status = $1 WHERE id = $2 RETURNING id, status`,
+      [status, eventId]
+    );
+    return rows[0] || null;
+  }
+  ```
+- `EVENT_STATUSES`：`src/db/cheerstickQueries.js:291`、`['scheduled', 'live', 'paused', 'finished', 'cancelled']`（`006_event_status.sql`のCHECK制約とアプリ側で一致させる旨のコメントあり）
+- **遷移可否のバリデーションは存在しない。** `updateEventStatus()`は①`status`が`EVENT_STATUSES`に含まれるか、②`status`が`'live'`の場合のみ同一`organization_id`の既存live試合との衝突チェック、の2つしか行わない。**現在の`status`が何であるかは一切参照・制限していないため、`finished`→`live`のPATCHリクエストはそのまま通る**（同一組織に他のlive試合が無い限り200で成功する）
+- ログ出力：`updateEventStatus()`内に`console.log`／`console.error`は一切無い。対して`hide()`（`adminEventController.js:131-133`、非表示化＝削除操作）は成功時に`console.log`で`id`/`title`/`status`/`hidden_at`を出力している。**状態変更操作（終了操作を含む）はログに残らないが、削除（非表示化）操作はログに残る、という非対称がある**
+- status変更時の他列更新：無い。`UPDATE events SET status = $1 WHERE id = $2`のみで、終了時刻等に相当する列への書き込みは無い（`events`テーブル自体にそのような列があるかはSTEP4未実施のため不明）
+- `src/routes/admin.js`：6ルート（`GET/POST/PATCH /events`系、`PATCH /events/:id/status`、`DELETE /events/:id`、`GET /organizations`）いずれも認証ミドルウェアなし（ファイル冒頭に`// TODO: 本番公開前に認証必須。`のコメントのみ）。IP制限（`docs/runbook.md`記載）はnginx側（`cheerstick-api`設定）にあり、このファイル自体にIP制限に関する記述は無い
+
+**STEP4（本番DB実体確認）**：**未実施。** `\d events`の実行前に権限クラシファイアにより自動拒否された（8/18の前回タスクと同様の挙動）。作業指示書の停止ポイント③に従い、恒久的な許可ルール追加は行わず、以降のDB確認（インデックス・FK実体・NULL許容・実データ件数・devices/organizations/categories）はすべて次回へ持ち越しとした
+
+### 判明した事実（想定外・重要）
+
+**STEP5着手前に、作業指示書の前提（①②の記録がworklogに存在しない）と現状が食い違っていることが判明した。** 作業指示書は「静的ファイルデプロイ漏れ2件の本番反映」（①）・「WebSocket connect接続ログの実装・本番反映」（②）がworklogに未記録としてこれらの追記を指示していたが、実際には**既に別セッションで記録・commit済み**であることを確認した：
+
+- ①は本ファイル別エントリ「静的ファイルのデプロイ漏れ2件を本番反映（管理画面の削除ボタン、appのブリッジ実装）」（コミット`b5d0856`）として存在
+- ②は本ファイル別エントリ「WebSocket `connect` の接続ログを追加（実装・本番反映）」（コミット`a55f480`）として存在
+
+**worklogは追記のみ・過去エントリの編集削除禁止のルールのため、①②を重複して追記することはせず、本タスク自体の実施結果（STEP0〜4、本エントリ）のみを新規追記する。** 作業指示書が想定していた③（11.6/11.7実体調査＝本タスク自体の結果）のみが実際に未記録だった。
+
+### 変更したファイル
+- コード・DB・本番配信ファイルの変更は一切なし（読み取りのみ）
+- `docs/worklog.md`（本エントリ）
+
+### 次回への申し送り
+1. STEP4（DB実体確認：`\d events`のCHECK制約・`hidden_at`列定義・終了時刻相当列の有無、`status='live'`部分UNIQUEインデックスの有無、FK実体とrev3表の突合、NULL許容実体、`cheer_logs`等の実データ件数、`genres`/`devices.organization_id`の存否）は権限クラシファイアによりブロックされたため未実施のまま。次回、KMT様立ち会いのもとでのpsql実行等、別の手段の検討が必要
+2. **管理API`PATCH /api/v1/admin/events/:id/status`にログが無い件を申し送る。** 8/10の事故（誤って`finished`にした試合を本番DBへの手動SQLで削除）に相当する操作（状態変更）が、現状では一切ログに残らない。`hide()`（削除操作）には既にログがあるため、実装パターンの流用で対応可能と見込まれる
+3. 11.6（`finished`終端状態からの復帰・DELETE機能の優先度）・11.7（FK制約の統一方針）の設計は、上記STEP4の完了後に着手すること
+4. `docs/spec.md`の11.6・11.7訂正は、本タスクでも実施していない（STEP4が未完了のため、確定した内容がまだ無い）
+
+### 未解決のまま残した課題
+- 前回までの申し送りに変わらず継続
+- 上記「次回への申し送り」1〜4
+
+---
+
 ## 2026-08-18 静的ファイルのデプロイ漏れ2件を本番反映（管理画面の削除ボタン、appのブリッジ実装）
 
 ### 背景
