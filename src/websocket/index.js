@@ -25,6 +25,41 @@ const { generateReferenceToken } = require('../utils/referenceToken');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENABLE_REFERENCE_TOKEN = process.env.ENABLE_REFERENCE_TOKEN === 'true';
 
+// --- connect接続ログ（2026-08-18追加） ------------------------------------
+// 目的：どのデバイスがいつ接続を試み、どのstatusが返ったかを事後に追えるようにする。
+// 既存の判定ロジック（computeStatus）・クライアントへの応答内容は変更しない、記録の追加のみ。
+// メールアドレス・ニックネームは出力しない（devicesの行はmac_address等のみ参照する）。
+
+const LOG_MAC_MAX_LENGTH = 30; // 不正に長いid（VARCHAR(17)超過等）でログが荒れないよう切り詰める
+
+function truncateForLog(value) {
+  const str = String(value);
+  return str.length > LOG_MAC_MAX_LENGTH ? `${str.slice(0, LOG_MAC_MAX_LENGTH)}...` : str;
+}
+
+// 本番nginx（/etc/nginx/sites-enabled/cheerstick-ws）はX-Real-IPのみ設定し、
+// X-Forwarded-Forは設定していない（2026-08-18確認）。ヘッダーが無い場合はsocketの
+// remoteAddressにフォールバックする（nginx配下では通常127.0.0.1になる想定）。
+function getClientIp(req) {
+  return (req && req.headers && req.headers['x-real-ip']) ||
+    (req && req.socket && req.socket.remoteAddress) ||
+    'unknown';
+}
+
+function logConnectSuccess(macAddress, status, ip) {
+  console.log(
+    `[WS] connect ok time=${new Date().toISOString()} mac=${truncateForLog(macAddress)} status=${status} ip=${ip}`
+  );
+}
+
+// 失敗はconsole.error経由でerror.logへ出す（out.logの成功ログに埋もれさせないため）。
+function logConnectFailure(macAddress, reason, ip, extra) {
+  console.error(
+    `[WS] connect ng time=${new Date().toISOString()} mac=${truncateForLog(macAddress)} reason=${reason} ip=${ip}${extra ? ' ' + extra : ''}`
+  );
+}
+// ---------------------------------------------------------------------------
+
 function buildTeamPayload(row) {
   if (!row || !row.org_id) return null;
   return {
@@ -60,8 +95,10 @@ function computeStatus(row) {
   return 'complete';
 }
 
-async function buildConnectResponse(macAddress) {
-  const row = await cheerQueries.findDeviceWithProfile(macAddress);
+async function buildConnectResponse(macAddress, prefetchedRow) {
+  // prefetchedRow：connectハンドラでログ用に既に取得済みのrowを渡せば、
+  // 同一内容を二重SELECTしない（渡さなければ従来通りここで取得する）。
+  const row = prefetchedRow !== undefined ? prefetchedRow : await cheerQueries.findDeviceWithProfile(macAddress);
   const status = computeStatus(row);
 
   const payload = {
@@ -104,8 +141,10 @@ class CheerWebSocketServer {
   attach(server, path = '/cheer') {
     this.wss = new WebSocketServer({ server, path });
 
-    this.wss.on('connection', (ws) => {
+    this.wss.on('connection', (ws, req) => {
       let deviceId = null;
+      let connectSuccessLogged = false; // 同一コネクションでの成功ログは初回のみ
+      const clientIp = getClientIp(req);
 
       ws.on('message', async (raw) => {
         let msg;
@@ -123,8 +162,30 @@ class CheerWebSocketServer {
               }
               deviceId = msg.id;
               this.sessions.set(deviceId, ws);
-              await cheerQueries.ensureDevice(deviceId);
-              this.send(ws, await buildConnectResponse(deviceId));
+
+              let row;
+              try {
+                await cheerQueries.ensureDevice(deviceId);
+                row = await cheerQueries.findDeviceWithProfile(deviceId);
+              } catch (ensureErr) {
+                logConnectFailure(
+                  deviceId,
+                  'EXCEPTION',
+                  clientIp,
+                  ensureErr.code ? `pg_code=${ensureErr.code}` : undefined
+                );
+                throw ensureErr; // 応答は既存の外側catch（内部エラー扱い）に委ねる。ここでは変更しない。
+              }
+
+              const status = computeStatus(row);
+              if (status === 'error') {
+                logConnectFailure(deviceId, row ? 'NO_CATEGORY' : 'NO_ROW', clientIp);
+              } else if (!connectSuccessLogged) {
+                logConnectSuccess(deviceId, status, clientIp);
+                connectSuccessLogged = true;
+              }
+
+              this.send(ws, await buildConnectResponse(deviceId, row));
               break;
             }
 
