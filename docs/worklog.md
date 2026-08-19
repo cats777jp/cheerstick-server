@@ -4,6 +4,131 @@
 
 ---
 
+## 2026-08-19 実装1保留・実装2 B-5（devices管理機能）実装（コードのみ、未検証・未デプロイ）
+
+### 背景
+
+`cheerstick-impl-1-devices-whitelist.md`（実装1：デバイス登録とホワイトリスト化）に着手したが、
+0-1で必須とされるKMT様からの情報（CSVパス・投入するcategory_id・初回一括SQL投入の許容可否）の
+うちcategory_idが未確定のため、A-0-3（CSV確認）・A-1（1000件投入）・A-2・A-3をすべて保留した。
+A-0-1（WS接続判定ロジックの調査）・A-0-2（本番devicesテーブル実体確認）は完了済み（詳細は下記）。
+
+KMT様の判断により、`cheerstick-impl-2-admin-features.md`（実装2：管理・運用機能）のB-5
+（devices管理機能）を優先着手する方針に変更。理由：category_id未確定でもCSV取り込み・
+一括設定画面を先に用意しておけば、確定後に一括SQLではなく管理画面から安全に投入できるため。
+
+### A-0-1（WS接続判定ロジック、実装1）
+
+- `connect`ハンドラ全文確認（`src/websocket/index.js:159-190`、`computeStatus()`同86-96行）
+- `NO_ROW`／`NO_CATEGORY`：`computeStatus()`の`!row || !row.category_id`判定に対応。
+  `row`がfalsyなら`NO_ROW`、`category_id`がNULLなら`NO_CATEGORY`
+- `category_id`未設定デバイス：WS接続自体は確立されるが`status:"error"`が返り実質何もできない
+- TOFU自動登録：`ensureDevice()`（`src/db/cheerstickQueries.js`）のみ。呼び出しは
+  `src/websocket/index.js`の`connect`ケース1箇所のみ
+- `is_demo`分岐：無し（`computeStatus()`は`is_demo`を一切参照しない）
+- `geturl`（`src/controllers/webviewController.js`）：DBに一切触れない純粋なHTMLリダイレクト。
+  自動登録経路ではない
+- **追加で発見：`POST /api/v1/devices`（`src/controllers/devicesController.js`のregister、
+  `src/routes/devices.js`経由でマウント済み・到達可能）も`INSERT INTO devices`を実行するが、
+  存在しない`location`列を参照し、NOT NULLな`mac_address`を欠いているため呼び出すたびに
+  DBエラーで失敗する死んだコードと判断（spec.md 11.5の`eventsController.js`と同種のパターン）。
+  実害のある自動登録経路ではない**
+
+### A-0-2（本番devicesテーブル実体、実装1）
+
+KMT様が本番EC2上で直接psqlを実行し確認（Claude Code側はSSH+psqlが権限クラシファイアに
+自動拒否されたため実行不可。8/18の前回タスクと同一の既知の挙動。回避は試みていない）。
+結果：既存11件・Vanstone様検証機3台とも`category_id`設定済み。停止ポイントA-0（1〜5）は
+いずれも非該当。
+
+### B-5（devices管理機能）実装内容
+
+**新規ファイル：**
+- `src/utils/macAddress.js` — MACアドレス正規化（`normalizeMacAddress()`）。任意の区切り文字・
+  大文字小文字を`AA:BB:CC:DD:EE:FF`形式へ統一。16進数12文字ちょうどにならない場合はnullを返し、
+  CSVのヘッダー行・不正行の判別に使う
+- `src/controllers/adminDeviceController.js` — `GET/POST /admin/devices`、
+  `PATCH /admin/devices/:id`、`PATCH /admin/devices/bulk`、`POST /admin/devices/import`、
+  `GET /admin/categories`
+
+**変更ファイル：**
+- `src/db/cheerstickQueries.js` — デバイス管理用クエリ8関数を追加
+  （`assertCategoryExists`／`listCategoriesForAdmin`／`listDevicesAdmin`／`updateDeviceAdmin`／
+  `bulkUpdateDevicesByIds`／`bulkUpdateDevicesByFilter`／`createDeviceAdmin`／`importDevices`）
+- `src/routes/admin.js` — 上記エンドポイントをマウント。`/devices/bulk`・`/devices/import`は
+  `/devices/:id`より前に配置（順序を誤ると`:id`が`"bulk"`等を文字列として拾ってしまうため）
+- `public/admin/index.html` — デバイス管理セクション（一覧・ページング・MAC部分一致検索・
+  ジャンル絞り込み／未設定絞り込み・複数選択チェックボックスによる一括設定・
+  「絞り込み条件に一致する全件」への一括設定・CSVアップロード・単体登録フォーム）を追加
+
+**設計判断（指示書に無い、実装時に決めた点）：**
+
+1. **CSV正規化ルールを新規に定義した。** B-5指示書は「実装1で用いた正規化ルールと同じ処理に
+   すること」としていたが、実装1のA-0-3が保留のため実装1側のルールが存在しなかった。
+   KMT様に確認のうえ、大文字・コロン区切り（`AA:BB:CC:DD:EE:FF`）に統一する方式で新規決定。
+   既存11件・指示書内の全MAC例（検証機、デモ機`DE:AD:BE:EF:00:01`）と表記が一致する
+2. **CSV取り込みはcategory_idを設定しない。** KMT様確認：実際に届くCSVは検査ログ形式
+   （No, Date, BLE_NAME, BLE_MAC, RSSI, Voltage, Accelerometer, Accelerometer_Result, Remark
+   の9列）だが、KMT様側でMACアドレスのみの1列CSVに整形してから取り込む想定。ジャンル未確定の
+   まま取り込み、確定後に`PATCH /admin/devices/bulk`で絞り込み→一括設定する2段階運用とした
+3. **CSV取り込みは1列目のみを見る。** ヘッダー行の有無は、1行目が有効なMAC形式に正規化できるか
+   どうかで自動判別する（できなければヘッダー行としてスキップ）。生の検査ログCSV（MACが4列目）を
+   誤ってそのままアップロードした場合、1列目（No.列）は12桁16進にならないため全行が
+   「不正な形式」として拒否される（誤った列を拾って誤登録するより安全と判断）
+4. **一括設定（`PATCH /admin/devices/bulk`）はid配列指定とfilter指定の2方式に対応。**
+   id配列は現在ページのチェックボックス選択用（最大でも1ページ分、200件以下）。
+   グローバルの`express.json`が16kb上限（`src/app.js`、本タスクでは変更していない）のため、
+   2000件全件を一度にid配列で送ると上限超過になる。ページをまたいだ「絞り込み条件に一致する
+   全件」への適用は、id配列を送らずサーバー側でWHERE句を組み立てるfilter方式にして回避した。
+   filter方式は誤操作防止のため、絞り込み条件が一切無い状態（devices全件が対象になるケース）を
+   `FILTER_REQUIRED`として拒否する
+5. **`GET /admin/categories`を新設した。** 指示書のB-5エンドポイント一覧には無いが、
+   一覧画面のジャンル絞り込み・単体登録・一括設定のいずれもプルダウンにジャンル一覧が必要なため、
+   B-5の要件を満たすための付随実装として追加した（B-4のジャンルフィルタでも再利用できる想定）
+
+### 検証状況（★未完了）
+
+ローカル環境にPostgresが無いため、以下のみ実施：
+- `node --check`で全ファイル（新規3、変更2）の構文確認：OK
+- `cheerstickQueries.js`をモックし、CSV解析ロジック（`adminDeviceController.importDevices`）を
+  5パターンで検証：ヘッダー行判別、正規化（コロン区切り／区切りなし小文字）、CSV内重複、
+  DB側重複、検査ログ生データの誤アップロード時に安全に全件拒否されること、空ボディの400応答。
+  全てPASS
+
+**指示書記載の検証項目（未実施）：**
+- テスト用の数件でCSV取り込みが実地で動くこと
+- 一括設定が実DBに反映されること
+- 1000件（実際は2000件）が入った状態での一覧表示速度
+- `sudo cp`と`diff`による本番反映確認
+
+**本番デプロイも未実施。** ローカルでのコミットのみ。次回セッションまたはKMT様の指示を待って
+staging（`cheerstick_staging`）またはKMT様立ち会いでの実機検証・本番反映を行う。
+
+### 判明した事実
+
+- CSVは1000本ではなく**2000本**発注・納品済みとKMT様確認（「1000」という数字の出どころは
+  不明、追及不要とのこと）。B-5のページング・一括設定要件自体への影響は無し
+- `docs/spec.md`更新は本セッションでは行っていない（B-5関連で仕様の恒久記述に反映すべき内容が
+  あるかは次回判断）
+
+### 次回への申し送り（優先度順）
+
+1. B-5の実機検証（staging推奨）→本番`git pull`＋`sudo cp`＋`diff`確認→pm2再起動不要
+   （静的ファイル・APIコードのみの変更、`.env`変更は無い）
+2. 実装1（A-0-3以降）はcategory_id確定後に再開。CSVパスの共有も必要
+3. `docs/spec.md`（8章 REST API）にB-5で新設したエンドポイント一覧を追記するかは
+   実機検証完了後に判断
+4. 実装2の残り（B-1〜B-4）は指示書通り順不同で対応可能
+
+### 未解決のまま残した課題
+
+- 前回までの申し送りに変わらず継続
+- 上記「次回への申し送り」1〜4
+- `POST /api/v1/devices`（`devicesController.js`）の死んだコードの扱い（削除するか、
+  修正して活かすかは未判断。実装1調査で発見、今回worklogへ初めて記録）
+
+---
+
 ## 2026-08-18 マスタデータ・画像ファイルの現況調査（読み取り専用）
 
 ### 背景
