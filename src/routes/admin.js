@@ -1,7 +1,11 @@
 // src/routes/admin.js
 // 管理用エンドポイント。
 //
-// TODO: 本番公開前に認証必須。
+// 判断済み（2026-08-18時点）：アプリケーションレベルの認証は追加しない。nginx側の
+// IPアドレス制限（/api/v1/admin/、KMT様オフィス固定IP限定）に依拠する設計でKMT様と
+// 合意済み（B-3、2026-08-19）。詳細はdocs/spec.md 8章・docs/runbook.md
+// 「管理API アクセス制限」参照。運用者が複数人になる、または外部からの操作が
+// 必要になった時点でBasic認証等への移行を検討する。
 
 const express = require('express');
 const { Router } = express;
@@ -17,6 +21,8 @@ router.patch('/events/:id/status', adminEventController.updateStatus);
 router.delete('/events/:id', adminEventController.hide);
 
 router.get('/organizations', adminEventController.listOrganizations);
+router.post('/organizations', adminEventController.createOrganization);
+router.patch('/organizations/:id', adminEventController.updateOrganization);
 
 router.get('/categories', adminDeviceController.listCategories);
 

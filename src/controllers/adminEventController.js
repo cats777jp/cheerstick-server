@@ -1,13 +1,22 @@
 // src/controllers/adminEventController.js
 // 試合状態（events.status）を操作する管理用コントローラー。
 //
-// TODO: 本番公開前に認証必須。
+// 判断済み（2026-08-18時点）：アプリケーションレベルの認証は追加しない。理由・詳細は
+// src/routes/admin.jsのコメント、docs/spec.md 8章参照（B-3、2026-08-19）。
 
 'use strict';
 
 const cheerQueries = require('../db/cheerstickQueries');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// WS接続ログ（src/websocket/index.js）と同じ方式：X-Real-IPヘッダー優先、
+// 無ければsocketのremoteAddressにフォールバックする（B-2、2026-08-19追加）。
+function getClientIp(req) {
+  return (req && req.headers && req.headers['x-real-ip']) ||
+    (req && req.socket && req.socket.remoteAddress) ||
+    'unknown';
+}
 
 exports.list = async (req, res, next) => {
   try {
@@ -75,15 +84,78 @@ exports.update = async (req, res, next) => {
   }
 };
 
+// category_idクエリパラメータを指定するとそのジャンルのみに絞り込む（B-4、2026-08-19拡張）。
+// 未指定時は従来通り全件（試合登録フォームのチームプルダウンからの呼び出しと互換）。
 exports.listOrganizations = async (req, res, next) => {
   try {
-    const organizations = await cheerQueries.listOrganizationsForAdmin();
+    const { category_id: categoryId } = req.query;
+    const organizations = await cheerQueries.listOrganizationsForAdmin(categoryId || null);
     res.json(organizations);
   } catch (err) {
     next(err);
   }
 };
 
+/**
+ * 管理画面：チームを新規登録する（B-4、2026-08-19新設）。
+ * name・category_idは必須（category_id未設定のチームはデバイス向け一覧に出せず
+ * 実質使えないため、登録時点で必須とした）。logo_urlは任意。
+ */
+exports.createOrganization = async (req, res, next) => {
+  const { name, category_id: categoryId, logo_url: logoUrl } = req.body || {};
+
+  if (!name || !categoryId) {
+    return res.status(400).json({ error: 'name and category_id are required' });
+  }
+
+  try {
+    const created = await cheerQueries.createOrganizationAdmin({ name, categoryId, logoUrl });
+    res.status(201).json(created);
+  } catch (err) {
+    if (err.code === 'CATEGORY_NOT_FOUND') {
+      return res.status(400).json({ error: 'CATEGORY_NOT_FOUND' });
+    }
+    next(err);
+  }
+};
+
+/**
+ * 管理画面：チームを部分更新する（B-4、2026-08-19新設）。
+ */
+exports.updateOrganization = async (req, res, next) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) {
+    return res.status(400).json({ error: 'INVALID_ID' });
+  }
+
+  const { name, category_id: categoryId, logo_url: logoUrl } = req.body || {};
+  const fields = {};
+  if (name !== undefined) fields.name = name;
+  if (categoryId !== undefined) fields.categoryId = categoryId;
+  if (logoUrl !== undefined) fields.logoUrl = logoUrl;
+
+  try {
+    const updated = await cheerQueries.updateOrganizationAdmin(id, fields);
+    if (!updated) {
+      return res.status(404).json({ error: 'ORGANIZATION_NOT_FOUND' });
+    }
+    res.json(updated);
+  } catch (err) {
+    if (err.code === 'CATEGORY_NOT_FOUND') {
+      return res.status(400).json({ error: 'CATEGORY_NOT_FOUND' });
+    }
+    next(err);
+  }
+};
+
+/**
+ * 管理画面：試合状態(status)を変更する。
+ *
+ * B-2（2026-08-19追加）：変更前のstatusを取得したうえで、hide()（非表示化）と同じ形式で
+ * 変更ログを出力する。2026-08-10の事故（誤ってfinishedにした試合を本番DBへの手動SQLで
+ * 削除）に相当する操作がこれまで一切ログに残らなかったための対応。
+ * メールアドレス・ニックネームは出力しない。
+ */
 exports.updateStatus = async (req, res, next) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -93,10 +165,16 @@ exports.updateStatus = async (req, res, next) => {
   }
 
   try {
+    const before = await cheerQueries.getEventBasic(id);
     const updated = await cheerQueries.updateEventStatus(id, status);
     if (!updated) {
       return res.status(404).json({ error: 'EVENT_NOT_FOUND' });
     }
+    console.log(
+      `[ADMIN] status change time=${new Date().toISOString()} event_id=${updated.id} ` +
+      `title="${before ? before.title : ''}" from=${before ? before.status : 'unknown'} ` +
+      `to=${updated.status} ip=${getClientIp(req)}`
+    );
     res.json(updated);
   } catch (err) {
     if (err.code === 'INVALID_STATUS') {

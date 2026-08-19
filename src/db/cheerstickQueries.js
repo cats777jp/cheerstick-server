@@ -291,6 +291,15 @@ async function insertCheerLog({ deviceId, userId, eventId, targetId, intensity, 
 const EVENT_STATUSES = ['scheduled', 'live', 'paused', 'finished', 'cancelled'];
 
 /**
+ * 管理画面：状態変更ログ（B-2）用に、変更前のtitle/statusのみを取得する。
+ * 対象が無ければnull。
+ */
+async function getEventBasic(eventId) {
+  const { rows } = await db.query(`SELECT id, title, status FROM events WHERE id = $1`, [eventId]);
+  return rows[0] || null;
+}
+
+/**
  * 管理用：イベントの試合状態(status)を更新。
  * EVENT_STATUSES以外の値は拒否する（DBのCHECK制約より前にアプリ側で弾く）。
  *
@@ -430,11 +439,97 @@ async function updateEvent(eventId, fields) {
 }
 
 /**
- * 管理画面：試合登録フォームのプルダウン用にid/nameのみ取得。
+ * 管理画面：チーム（organizations）一覧を取得。
+ * categoryId指定時はそのジャンルのみに絞り込む（B-4、2026-08-19拡張）。
+ * 試合登録フォームのプルダウン（id/nameのみ使用）・チーム管理一覧（B-4）の両方で使う。
  */
-async function listOrganizationsForAdmin() {
-  const { rows } = await db.query(`SELECT id, name FROM organizations ORDER BY name`);
+async function listOrganizationsForAdmin(categoryId) {
+  const whereClauses = [];
+  const values = [];
+  let i = 1;
+
+  if (categoryId) {
+    whereClauses.push(`o.category_id = $${i}`);
+    values.push(categoryId);
+    i += 1;
+  }
+  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const { rows } = await db.query(
+    `SELECT o.id, o.name, o.logo_url, o.category_id, c.name AS category_name,
+            o.is_active, o.created_at
+     FROM organizations o
+     LEFT JOIN categories c ON c.id = o.category_id
+     ${whereSql}
+     ORDER BY o.name`,
+    values
+  );
   return rows;
+}
+
+/**
+ * 管理画面：チームを新規登録する（B-4、2026-08-19新設）。
+ * category_id（ジャンル）は必須（ジャンル未設定のチームはlistOrganizations()の
+ * デバイス向けチーム一覧に一切現れず実質使えなくなるため、呼び出し元で必須チェックする）。
+ *
+ * typeはB-4指示書に無い列（organizations.type、NOT NULL、football_club/baseball_club等の
+ * 組織種別ラベル。category_id＝ジャンルとは別軸で、現行コードのクエリからは一切参照されない）。
+ * 指示書に登場しないため、指定が無ければ既存データ（V・ファーレン長崎）と同じ
+ * 'football_club'をデフォルトとする。UI上の入力項目としては公開していない。
+ */
+async function createOrganizationAdmin({ name, categoryId, logoUrl, type }) {
+  await assertCategoryExists(categoryId);
+
+  const { rows } = await db.query(
+    `INSERT INTO organizations (name, type, category_id, logo_url)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, name, type, category_id, logo_url, is_active, created_at`,
+    [name, type || 'football_club', categoryId, logoUrl || null]
+  );
+  return rows[0];
+}
+
+/**
+ * 管理画面：チームを部分更新する（B-4、2026-08-19新設。updateEventと同じ方式）。
+ * fieldsに無いキーは更新しない。categoryIdが含まれる場合は実在確認する。
+ * 対象が無い場合はnullを返す（呼び出し元で404にマッピングする）。
+ */
+async function updateOrganizationAdmin(organizationId, fields) {
+  const columnMap = { name: 'name', categoryId: 'category_id', logoUrl: 'logo_url' };
+
+  if (Object.prototype.hasOwnProperty.call(fields, 'categoryId') && fields.categoryId != null) {
+    await assertCategoryExists(fields.categoryId);
+  }
+
+  const setClauses = [];
+  const values = [];
+  let i = 1;
+
+  for (const [key, column] of Object.entries(columnMap)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      setClauses.push(`${column} = $${i}`);
+      values.push(fields[key]);
+      i += 1;
+    }
+  }
+
+  if (setClauses.length === 0) {
+    const { rows } = await db.query(
+      `SELECT id, name, type, category_id, logo_url, is_active, created_at
+       FROM organizations WHERE id = $1`,
+      [organizationId]
+    );
+    return rows[0] || null;
+  }
+
+  values.push(organizationId);
+  const { rows } = await db.query(
+    `UPDATE organizations SET ${setClauses.join(', ')}
+     WHERE id = $${i}
+     RETURNING id, name, type, category_id, logo_url, is_active, created_at`,
+    values
+  );
+  return rows[0] || null;
 }
 
 /**
@@ -724,6 +819,9 @@ module.exports = {
   updateEvent,
   listOrganizationsForAdmin,
   hideEvent,
+  getEventBasic,
+  createOrganizationAdmin,
+  updateOrganizationAdmin,
   assertCategoryExists,
   listCategoriesForAdmin,
   listDevicesAdmin,

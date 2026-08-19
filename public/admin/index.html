@@ -217,6 +217,45 @@
     </table>
   </div>
 
+  <!-- (F) チーム管理（B-4、2026-08-19追加） -->
+  <div class="card">
+    <h2>チーム新規登録</h2>
+    <form id="orgCreateForm">
+      <label for="orgCreateName">チーム名</label>
+      <input id="orgCreateName" type="text" required>
+
+      <label for="orgCreateCategory">ジャンル</label>
+      <select id="orgCreateCategory" required></select>
+
+      <label for="orgCreateLogoUrl">ロゴURL（任意）</label>
+      <input id="orgCreateLogoUrl" type="text" placeholder="https://app.cheerstick.com/images/teams/...">
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>チーム一覧</h2>
+    <div class="device-toolbar">
+      <select id="orgCategoryFilter"></select>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>チーム名</th>
+          <th>ジャンル</th>
+          <th>状態</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="organizationsTableBody">
+        <tr class="empty-row"><td colspan="4">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <!-- (E) デバイス管理（B-5、2026-08-19追加） -->
   <div class="card">
     <h2>デバイス管理</h2>
@@ -296,6 +335,29 @@
 
       <div class="actions">
         <button type="button" id="editCancelBtn">キャンセル</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- (F) チーム編集モーダル（B-4、2026-08-19追加） -->
+<div id="orgEditModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2>チームを編集</h2>
+    <form id="orgEditForm">
+      <input type="hidden" id="orgEditId">
+      <label for="orgEditName">チーム名</label>
+      <input id="orgEditName" type="text" required>
+
+      <label for="orgEditCategory">ジャンル</label>
+      <select id="orgEditCategory" required></select>
+
+      <label for="orgEditLogoUrl">ロゴURL（任意）</label>
+      <input id="orgEditLogoUrl" type="text">
+
+      <div class="actions">
+        <button type="button" id="orgEditCancelBtn">キャンセル</button>
         <button type="submit" class="primary">保存</button>
       </div>
     </form>
@@ -421,14 +483,26 @@
 
   function actionButtonsFor(event) {
     const buttons = [];
+    const finishConfirm = `「${event.title}」を終了します。この操作は取り消せません。よろしいですか？`;
+
     if (event.status === 'scheduled') {
       buttons.push({ label: '開始', nextStatus: 'live', confirm: false });
     } else if (event.status === 'live') {
       buttons.push({ label: '停止', nextStatus: 'paused', confirm: false });
-      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true, confirmMessage: finishConfirm });
     } else if (event.status === 'paused') {
       buttons.push({ label: '再開', nextStatus: 'live', confirm: false });
-      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true, confirmMessage: finishConfirm });
+    } else if (event.status === 'finished') {
+      // B-1（11.6、2026-08-19追加）：finishedからの復帰導線。戻り先はpausedのみ
+      // （liveへ直接戻すとupdateEventStatusのLIVE_EVENT_CONFLICT検査を踏む経路があるため）。
+      // ボタン文言は「再開」ではなく「終了を取り消す」＝誤操作の取り消しであることを伝える。
+      buttons.push({
+        label: '終了を取り消す',
+        nextStatus: 'paused',
+        confirm: true,
+        confirmMessage: `「${event.title}」（現在：終了）の終了を取り消し、停止中に戻します。よろしいですか？`,
+      });
     }
     return buttons;
   }
@@ -481,7 +555,7 @@
 
   async function handleStatusChange(event, btnDef) {
     if (btnDef.confirm) {
-      const ok = confirm(`「${event.title}」を終了します。この操作は取り消せません。よろしいですか？`);
+      const ok = confirm(btnDef.confirmMessage || `「${event.title}」の状態を変更します。よろしいですか？`);
       if (!ok) return;
     }
 
@@ -609,6 +683,142 @@
 
   loadOrganizations();
   refreshAll();
+
+  // ==========================================================
+  // (F) チーム（organizations）管理（B-4、2026-08-19追加）
+  // ==========================================================
+  const orgCreateForm = document.getElementById('orgCreateForm');
+  const orgCreateCategory = document.getElementById('orgCreateCategory');
+  const orgCreateLogoUrl = document.getElementById('orgCreateLogoUrl');
+  const orgCategoryFilter = document.getElementById('orgCategoryFilter');
+  const organizationsTableBody = document.getElementById('organizationsTableBody');
+  const orgEditModalOverlay = document.getElementById('orgEditModalOverlay');
+  const orgEditForm = document.getElementById('orgEditForm');
+  const orgEditCategory = document.getElementById('orgEditCategory');
+  const orgEditCancelBtn = document.getElementById('orgEditCancelBtn');
+
+  async function loadOrgCategories() {
+    try {
+      const categories = await apiFetch('/categories');
+
+      orgCreateCategory.innerHTML = '';
+      orgCreateCategory.appendChild(new Option('選択してください', ''));
+      categories.forEach((c) => orgCreateCategory.appendChild(new Option(c.name, c.id)));
+
+      orgEditCategory.innerHTML = '';
+      categories.forEach((c) => orgEditCategory.appendChild(new Option(c.name, c.id)));
+
+      orgCategoryFilter.innerHTML = '';
+      orgCategoryFilter.appendChild(new Option('すべてのジャンル', ''));
+      categories.forEach((c) => orgCategoryFilter.appendChild(new Option(c.name, c.id)));
+    } catch (e) {
+      showError('ジャンル一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  function renderOrganizationsTable(organizations) {
+    organizationsTableBody.innerHTML = '';
+
+    if (organizations.length === 0) {
+      organizationsTableBody.innerHTML = '<tr class="empty-row"><td colspan="4">登録されているチームはありません</td></tr>';
+      return;
+    }
+
+    organizations.forEach((org) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(org.name)}</td>
+        <td>${escapeHtml(org.category_name || '未設定')}</td>
+        <td>${org.is_active ? '有効' : '無効'}</td>
+        <td class="action-cell"></td>
+      `;
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '編集';
+      editBtn.addEventListener('click', () => openOrgEditModal(org));
+      tr.querySelector('.action-cell').appendChild(editBtn);
+
+      organizationsTableBody.appendChild(tr);
+    });
+  }
+
+  async function loadOrganizationsList() {
+    const categoryId = orgCategoryFilter.value;
+    const params = new URLSearchParams();
+    if (categoryId) params.set('category_id', categoryId);
+
+    try {
+      const organizations = await apiFetch('/organizations' + (params.toString() ? '?' + params.toString() : ''));
+      renderOrganizationsTable(organizations);
+      clearError();
+    } catch (e) {
+      showError('チーム一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  orgCategoryFilter.addEventListener('change', loadOrganizationsList);
+
+  orgCreateForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    try {
+      await apiFetch('/organizations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('orgCreateName').value.trim(),
+          category_id: orgCreateCategory.value,
+          logo_url: orgCreateLogoUrl.value.trim() || null,
+        }),
+      });
+      clearError();
+      orgCreateForm.reset();
+      await loadOrganizationsList();
+      await loadOrganizations(); // 試合登録フォームのチームプルダウンも更新する
+    } catch (e2) {
+      showError('チームの登録に失敗しました: ' + e2.message);
+    }
+  });
+
+  function openOrgEditModal(org) {
+    document.getElementById('orgEditId').value = org.id;
+    document.getElementById('orgEditName').value = org.name;
+    document.getElementById('orgEditLogoUrl').value = org.logo_url || '';
+    orgEditCategory.value = org.category_id || '';
+    orgEditModalOverlay.classList.add('visible');
+  }
+
+  function closeOrgEditModal() {
+    orgEditModalOverlay.classList.remove('visible');
+  }
+
+  orgEditCancelBtn.addEventListener('click', closeOrgEditModal);
+
+  orgEditForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('orgEditId').value;
+
+    try {
+      await apiFetch(`/organizations/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('orgEditName').value.trim(),
+          category_id: orgEditCategory.value,
+          logo_url: document.getElementById('orgEditLogoUrl').value.trim() || null,
+        }),
+      });
+      clearError();
+      closeOrgEditModal();
+      await loadOrganizationsList();
+      await loadOrganizations();
+    } catch (e2) {
+      showError('チームの更新に失敗しました: ' + e2.message);
+    }
+  });
+
+  loadOrgCategories();
+  loadOrganizationsList();
 
   // ==========================================================
   // (E) デバイス管理（B-5、2026-08-19追加）
