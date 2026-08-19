@@ -139,6 +139,30 @@
   .modal-box .actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
 
   .empty-row td { color: var(--text-muted); text-align: center; padding: 20px; }
+
+  /* デバイス管理（B-5、2026-08-19追加） */
+  .device-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .device-toolbar input[type="text"],
+  .device-toolbar select { width: auto; flex: 1 1 160px; margin: 0; }
+  .device-toolbar input[type="file"] { flex: 1 1 220px; }
+  .device-toolbar label { margin: 0; }
+  .import-result { font-size: 13px; color: var(--text-muted); margin: -4px 0 12px; }
+  .device-pagination {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  td.checkbox-cell, th.checkbox-cell { width: 32px; }
+  td.checkbox-cell input, th.checkbox-cell input { width: auto; }
 </style>
 </head>
 <body>
@@ -191,6 +215,64 @@
         <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- (E) デバイス管理（B-5、2026-08-19追加） -->
+  <div class="card">
+    <h2>デバイス管理</h2>
+
+    <div class="device-toolbar">
+      <input id="deviceMacSearch" type="text" placeholder="MACアドレスで検索（部分一致）">
+      <select id="deviceCategoryFilter"></select>
+      <button id="deviceSearchBtn">検索</button>
+    </div>
+
+    <div class="device-toolbar">
+      <label for="deviceCsvFile">CSV取り込み（1列目にMACアドレス。ヘッダー行の有無どちらでも可）</label>
+      <input id="deviceCsvFile" type="file" accept=".csv,text/csv,text/plain">
+      <button id="deviceImportBtn">取り込む</button>
+    </div>
+    <div id="deviceImportResult" class="import-result"></div>
+
+    <form id="deviceCreateForm" class="device-toolbar">
+      <input id="deviceCreateMac" type="text" placeholder="MACアドレス（単体登録）" required>
+      <select id="deviceCreateCategory"></select>
+      <label><input id="deviceCreateIsDemo" type="checkbox"> デモ機</label>
+      <button type="submit">単体登録</button>
+    </form>
+
+    <div class="device-toolbar">
+      <span id="deviceSelectedCount">0件選択中</span>
+      <select id="deviceBulkCategory"></select>
+      <select id="deviceBulkIsDemo">
+        <option value="">デモ機フラグを変更しない</option>
+        <option value="true">デモ機にする</option>
+        <option value="false">デモ機を解除</option>
+      </select>
+      <button id="deviceBulkApplyBtn">選択した件に適用</button>
+      <button id="deviceBulkApplyAllBtn">絞り込み条件に一致する全件に適用</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="checkbox-cell"><input id="deviceSelectAllCheckbox" type="checkbox"></th>
+          <th>MACアドレス</th>
+          <th>ジャンル</th>
+          <th>デモ機</th>
+          <th>登録日</th>
+        </tr>
+      </thead>
+      <tbody id="devicesTableBody">
+        <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
+      </tbody>
+    </table>
+
+    <div class="device-pagination">
+      <button id="devicePrevBtn">前へ</button>
+      <span id="devicePageInfo"></span>
+      <button id="deviceNextBtn">次へ</button>
+    </div>
   </div>
 </div>
 
@@ -527,6 +609,304 @@
 
   loadOrganizations();
   refreshAll();
+
+  // ==========================================================
+  // (E) デバイス管理（B-5、2026-08-19追加）
+  // ==========================================================
+  const deviceMacSearch = document.getElementById('deviceMacSearch');
+  const deviceCategoryFilter = document.getElementById('deviceCategoryFilter');
+  const deviceSearchBtn = document.getElementById('deviceSearchBtn');
+  const deviceCsvFile = document.getElementById('deviceCsvFile');
+  const deviceImportBtn = document.getElementById('deviceImportBtn');
+  const deviceImportResult = document.getElementById('deviceImportResult');
+  const deviceCreateForm = document.getElementById('deviceCreateForm');
+  const deviceCreateCategory = document.getElementById('deviceCreateCategory');
+  const deviceSelectedCount = document.getElementById('deviceSelectedCount');
+  const deviceBulkCategory = document.getElementById('deviceBulkCategory');
+  const deviceBulkIsDemo = document.getElementById('deviceBulkIsDemo');
+  const deviceBulkApplyBtn = document.getElementById('deviceBulkApplyBtn');
+  const deviceBulkApplyAllBtn = document.getElementById('deviceBulkApplyAllBtn');
+  const devicesTableBody = document.getElementById('devicesTableBody');
+  const deviceSelectAllCheckbox = document.getElementById('deviceSelectAllCheckbox');
+  const devicePrevBtn = document.getElementById('devicePrevBtn');
+  const deviceNextBtn = document.getElementById('deviceNextBtn');
+  const devicePageInfo = document.getElementById('devicePageInfo');
+
+  const DEVICE_PAGE_SIZE = 50;
+  let devicePage = 1;
+  let deviceTotal = 0;
+  const selectedDeviceIds = new Set();
+
+  function currentDeviceFilter() {
+    const mac = deviceMacSearch.value.trim();
+    const categoryParam = deviceCategoryFilter.value; // '' | 'null' | uuid
+    return { mac: mac || null, categoryParam: categoryParam || null };
+  }
+
+  // カテゴリー（ジャンル）プルダウンを3画面分（一覧絞り込み／単体登録／一括設定）まとめて作る。
+  // それぞれ先頭の固定選択肢の意味が異なるため、modeで出し分ける。
+  function fillCategorySelect(selectEl, categories, mode) {
+    selectEl.innerHTML = '';
+
+    if (mode === 'filter') {
+      selectEl.appendChild(new Option('すべてのジャンル', ''));
+      selectEl.appendChild(new Option('未設定のみ', 'null'));
+    } else if (mode === 'create') {
+      selectEl.appendChild(new Option('ジャンル未設定', ''));
+    } else if (mode === 'bulk') {
+      selectEl.appendChild(new Option('ジャンルを変更しない', ''));
+      selectEl.appendChild(new Option('未設定にする', '__unset__'));
+    }
+
+    categories.forEach((c) => {
+      selectEl.appendChild(new Option(c.name, c.id));
+    });
+  }
+
+  async function loadDeviceCategories() {
+    try {
+      const categories = await apiFetch('/categories');
+      fillCategorySelect(deviceCategoryFilter, categories, 'filter');
+      fillCategorySelect(deviceCreateCategory, categories, 'create');
+      fillCategorySelect(deviceBulkCategory, categories, 'bulk');
+    } catch (e) {
+      showError('ジャンル一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  function updateSelectedCount() {
+    deviceSelectedCount.textContent = `${selectedDeviceIds.size}件選択中`;
+  }
+
+  function renderDevicesTable(devices) {
+    devicesTableBody.innerHTML = '';
+
+    if (devices.length === 0) {
+      devicesTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">該当するデバイスはありません</td></tr>';
+      return;
+    }
+
+    devices.forEach((device) => {
+      const tr = document.createElement('tr');
+
+      tr.innerHTML = `
+        <td class="checkbox-cell"><input type="checkbox" class="device-row-checkbox" data-id="${escapeHtml(device.id)}"></td>
+        <td>${escapeHtml(device.mac_address)}</td>
+        <td>${escapeHtml(device.category_name || '未設定')}</td>
+        <td>${device.is_demo ? 'デモ機' : ''}</td>
+        <td>${escapeHtml(formatDisplayDate(device.created_at))}</td>
+      `;
+
+      const checkbox = tr.querySelector('.device-row-checkbox');
+      checkbox.checked = selectedDeviceIds.has(device.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) selectedDeviceIds.add(device.id);
+        else selectedDeviceIds.delete(device.id);
+        updateSelectedCount();
+      });
+
+      devicesTableBody.appendChild(tr);
+    });
+
+    deviceSelectAllCheckbox.checked = false;
+  }
+
+  async function loadDevices() {
+    const { mac, categoryParam } = currentDeviceFilter();
+    const params = new URLSearchParams();
+    if (mac) params.set('mac', mac);
+    if (categoryParam) params.set('category_id', categoryParam);
+    params.set('page', devicePage);
+    params.set('page_size', DEVICE_PAGE_SIZE);
+
+    try {
+      const result = await apiFetch('/devices?' + params.toString());
+      deviceTotal = result.total;
+      renderDevicesTable(result.devices);
+      const totalPages = Math.max(Math.ceil(deviceTotal / DEVICE_PAGE_SIZE), 1);
+      devicePageInfo.textContent = `${devicePage} / ${totalPages}ページ（全${deviceTotal}件）`;
+      devicePrevBtn.disabled = devicePage <= 1;
+      deviceNextBtn.disabled = devicePage >= totalPages;
+      clearError();
+    } catch (e) {
+      showError('デバイス一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  deviceSearchBtn.addEventListener('click', () => {
+    devicePage = 1;
+    selectedDeviceIds.clear();
+    updateSelectedCount();
+    loadDevices();
+  });
+
+  devicePrevBtn.addEventListener('click', () => {
+    if (devicePage > 1) {
+      devicePage -= 1;
+      loadDevices();
+    }
+  });
+
+  deviceNextBtn.addEventListener('click', () => {
+    devicePage += 1;
+    loadDevices();
+  });
+
+  // 「全選択」は現在ページの表示行のみが対象（絞り込み条件に一致する全件は
+  // 別ボタン「絞り込み条件に一致する全件に適用」で扱う。IDを送らないためページ数に上限が無い）。
+  deviceSelectAllCheckbox.addEventListener('change', (e) => {
+    devicesTableBody.querySelectorAll('.device-row-checkbox').forEach((cb) => {
+      cb.checked = e.target.checked;
+      const id = cb.getAttribute('data-id');
+      if (e.target.checked) selectedDeviceIds.add(id);
+      else selectedDeviceIds.delete(id);
+    });
+    updateSelectedCount();
+  });
+
+  function buildBulkFields() {
+    const fields = {};
+    if (deviceBulkCategory.value === '__unset__') {
+      fields.category_id = null;
+    } else if (deviceBulkCategory.value) {
+      fields.category_id = deviceBulkCategory.value;
+    }
+    if (deviceBulkIsDemo.value === 'true') fields.is_demo = true;
+    else if (deviceBulkIsDemo.value === 'false') fields.is_demo = false;
+    return fields;
+  }
+
+  deviceBulkApplyBtn.addEventListener('click', async () => {
+    const fields = buildBulkFields();
+    if (Object.keys(fields).length === 0) {
+      showError('ジャンルまたはデモ機フラグのいずれかを指定してください');
+      return;
+    }
+    if (selectedDeviceIds.size === 0) {
+      showError('デバイスを選択してください');
+      return;
+    }
+    const ok = confirm(`選択した${selectedDeviceIds.size}件に適用します。よろしいですか？`);
+    if (!ok) return;
+
+    try {
+      const result = await apiFetch('/devices/bulk', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [...selectedDeviceIds], ...fields }),
+      });
+      clearError();
+      selectedDeviceIds.clear();
+      updateSelectedCount();
+      alert(`${result.updated}件を更新しました`);
+      await loadDevices();
+    } catch (e) {
+      showError('一括更新に失敗しました: ' + e.message);
+    }
+  });
+
+  deviceBulkApplyAllBtn.addEventListener('click', async () => {
+    const fields = buildBulkFields();
+    if (Object.keys(fields).length === 0) {
+      showError('ジャンルまたはデモ機フラグのいずれかを指定してください');
+      return;
+    }
+    const { mac, categoryParam } = currentDeviceFilter();
+    if (!mac && !categoryParam) {
+      showError('絞り込み条件（MAC検索またはジャンル）を指定してから実行してください（全件対象の誤操作防止）');
+      return;
+    }
+    const ok = confirm(`現在の絞り込み条件に一致する全件（最大${deviceTotal}件）に適用します。よろしいですか？`);
+    if (!ok) return;
+
+    const filter = {};
+    if (categoryParam === 'null') filter.category_id = null;
+    else if (categoryParam) filter.category_id = categoryParam;
+    if (mac) filter.mac = mac;
+
+    try {
+      const result = await apiFetch('/devices/bulk', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter, ...fields }),
+      });
+      clearError();
+      alert(`${result.updated}件を更新しました`);
+      await loadDevices();
+    } catch (e) {
+      showError('一括更新に失敗しました: ' + e.message);
+    }
+  });
+
+  deviceCreateForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const mac = document.getElementById('deviceCreateMac').value.trim();
+    const categoryId = deviceCreateCategory.value || null;
+    const isDemo = document.getElementById('deviceCreateIsDemo').checked;
+
+    try {
+      await apiFetch('/devices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mac_address: mac, category_id: categoryId, is_demo: isDemo }),
+      });
+      clearError();
+      deviceCreateForm.reset();
+      await loadDevices();
+    } catch (e2) {
+      if (e2.status === 409) {
+        showError('このMACアドレスは既に登録されています');
+      } else if (e2.status === 400 && e2.body && e2.body.error === 'INVALID_MAC_ADDRESS') {
+        showError('MACアドレスの形式が正しくありません');
+      } else {
+        showError('デバイスの登録に失敗しました: ' + e2.message);
+      }
+    }
+  });
+
+  deviceImportBtn.addEventListener('click', async () => {
+    const file = deviceCsvFile.files[0];
+    if (!file) {
+      showError('CSVファイルを選択してください');
+      return;
+    }
+
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      showError('CSVファイルの読み込みに失敗しました: ' + e.message);
+      return;
+    }
+
+    deviceImportBtn.disabled = true;
+    deviceImportResult.textContent = '取り込み中...';
+
+    try {
+      const result = await apiFetch('/devices/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: text,
+      });
+      clearError();
+      deviceImportResult.textContent =
+        `取り込み結果：全${result.total_rows}行中、新規登録${result.inserted}件／` +
+        `重複スキップ${result.duplicate_skipped}件／不正な形式${result.invalid_skipped}件` +
+        (result.header_skipped ? '（1行目はヘッダー行として除外）' : '');
+      deviceCsvFile.value = '';
+      devicePage = 1;
+      await loadDevices();
+    } catch (e) {
+      deviceImportResult.textContent = '';
+      showError('CSV取り込みに失敗しました: ' + e.message);
+    } finally {
+      deviceImportBtn.disabled = false;
+    }
+  });
+
+  loadDeviceCategories();
+  updateSelectedCount();
+  loadDevices();
 })();
 </script>
 </body>

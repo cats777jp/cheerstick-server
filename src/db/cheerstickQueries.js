@@ -466,6 +466,243 @@ async function hideEvent(eventId) {
   throw err;
 }
 
+/**
+ * 管理画面：category_idが実在するか確認する。
+ * 無ければCATEGORY_NOT_FOUNDを投げる（呼び出し元で400にマッピングする）。
+ */
+async function assertCategoryExists(categoryId) {
+  const { rows } = await db.query(`SELECT id FROM categories WHERE id = $1`, [categoryId]);
+  if (!rows[0]) {
+    const err = new Error('category not found');
+    err.code = 'CATEGORY_NOT_FOUND';
+    throw err;
+  }
+}
+
+/**
+ * 管理画面：ジャンル（categories）一覧をname順で取得。デバイス画面のプルダウン用。
+ */
+async function listCategoriesForAdmin() {
+  const { rows } = await db.query(`SELECT id, name FROM categories ORDER BY name`);
+  return rows;
+}
+
+/**
+ * 管理画面：デバイス一覧をページング付きで取得。
+ * unsetOnly指定時はcategory_id IS NULLのみ、categoryId指定時はそのジャンルのみに絞り込む
+ * （両方同時指定は呼び出し元で起きない前提。unsetOnlyを優先する）。
+ * macQueryは部分一致（ILIKE）。
+ */
+async function listDevicesAdmin({ categoryId, unsetOnly, macQuery, limit, offset }) {
+  const whereClauses = [];
+  const values = [];
+  let i = 1;
+
+  if (unsetOnly) {
+    whereClauses.push(`d.category_id IS NULL`);
+  } else if (categoryId) {
+    whereClauses.push(`d.category_id = $${i}`);
+    values.push(categoryId);
+    i += 1;
+  }
+  if (macQuery) {
+    whereClauses.push(`d.mac_address ILIKE $${i}`);
+    values.push(`%${macQuery}%`);
+    i += 1;
+  }
+  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const { rows: countRows } = await db.query(
+    `SELECT COUNT(*) AS total FROM devices d ${whereSql}`,
+    values
+  );
+  const total = parseInt(countRows[0].total, 10);
+
+  const listValues = [...values, limit, offset];
+  const { rows } = await db.query(
+    `SELECT d.id, d.mac_address, d.category_id, c.name AS category_name,
+            d.is_demo, d.owner_user_id, d.created_at
+     FROM devices d
+     LEFT JOIN categories c ON c.id = d.category_id
+     ${whereSql}
+     ORDER BY d.created_at DESC
+     LIMIT $${i} OFFSET $${i + 1}`,
+    listValues
+  );
+  return { rows, total };
+}
+
+/**
+ * 管理画面：デバイス1件のcategory_id・is_demoを部分更新する（updateEventと同じ方式）。
+ * fieldsに無いキーは更新しない。category_idが含まれ、かつnullでない場合は実在確認する。
+ * 対象デバイスが無い場合はnullを返す（呼び出し元で404にマッピングする）。
+ */
+async function updateDeviceAdmin(deviceId, fields) {
+  const columnMap = { categoryId: 'category_id', isDemo: 'is_demo' };
+
+  if (Object.prototype.hasOwnProperty.call(fields, 'categoryId') && fields.categoryId != null) {
+    await assertCategoryExists(fields.categoryId);
+  }
+
+  const setClauses = [];
+  const values = [];
+  let i = 1;
+
+  for (const [key, column] of Object.entries(columnMap)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      setClauses.push(`${column} = $${i}`);
+      values.push(fields[key]);
+      i += 1;
+    }
+  }
+
+  if (setClauses.length === 0) {
+    const { rows } = await db.query(
+      `SELECT id, mac_address, category_id, is_demo, owner_user_id, created_at
+       FROM devices WHERE id = $1`,
+      [deviceId]
+    );
+    return rows[0] || null;
+  }
+
+  values.push(deviceId);
+  const { rows } = await db.query(
+    `UPDATE devices SET ${setClauses.join(', ')}
+     WHERE id = $${i}
+     RETURNING id, mac_address, category_id, is_demo, owner_user_id, created_at`,
+    values
+  );
+  return rows[0] || null;
+}
+
+/**
+ * 管理画面：複数デバイス（id指定）へ同一のcategory_id・is_demoを一括適用する。
+ * 更新件数（rowCount）を返す。
+ */
+async function bulkUpdateDevicesByIds(ids, fields) {
+  const columnMap = { categoryId: 'category_id', isDemo: 'is_demo' };
+  const setClauses = [];
+  const values = [];
+  let i = 1;
+
+  for (const [key, column] of Object.entries(columnMap)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      setClauses.push(`${column} = $${i}`);
+      values.push(fields[key]);
+      i += 1;
+    }
+  }
+  if (setClauses.length === 0) return 0;
+
+  values.push(ids);
+  const { rowCount } = await db.query(
+    `UPDATE devices SET ${setClauses.join(', ')} WHERE id = ANY($${i}::uuid[])`,
+    values
+  );
+  return rowCount;
+}
+
+/**
+ * 管理画面：絞り込み条件（filter）に一致する全デバイスへ同一のcategory_id・is_demoを
+ * 一括適用する。IDを1件ずつ送らずに済むため、ページをまたいだ「全件」操作に使う。
+ *
+ * 誤操作防止：filterに何も条件が無い場合（devices全件が対象になる場合）はFILTER_REQUIREDを
+ * 投げて拒否する。絞り込みは呼び出し元（GET /admin/devicesの一覧）と同じ条件を使うこと。
+ */
+async function bulkUpdateDevicesByFilter(filter, fields) {
+  const columnMap = { categoryId: 'category_id', isDemo: 'is_demo' };
+  const setClauses = [];
+  const values = [];
+  let i = 1;
+
+  for (const [key, column] of Object.entries(columnMap)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      setClauses.push(`${column} = $${i}`);
+      values.push(fields[key]);
+      i += 1;
+    }
+  }
+  if (setClauses.length === 0) return 0;
+
+  const whereClauses = [];
+  if (filter.unsetOnly) {
+    whereClauses.push(`category_id IS NULL`);
+  } else if (filter.categoryId) {
+    whereClauses.push(`category_id = $${i}`);
+    values.push(filter.categoryId);
+    i += 1;
+  }
+  if (filter.macQuery) {
+    whereClauses.push(`mac_address ILIKE $${i}`);
+    values.push(`%${filter.macQuery}%`);
+    i += 1;
+  }
+
+  if (whereClauses.length === 0) {
+    const err = new Error('filter must narrow down at least one condition');
+    err.code = 'FILTER_REQUIRED';
+    throw err;
+  }
+
+  const { rowCount } = await db.query(
+    `UPDATE devices SET ${setClauses.join(', ')} WHERE ${whereClauses.join(' AND ')}`,
+    values
+  );
+  return rowCount;
+}
+
+/**
+ * 管理画面：デバイスを1件、単体登録する。macAddressは呼び出し元で正規化済みのこと。
+ * 重複（UNIQUE制約違反、pg_code 23505）はDEVICE_ALREADY_EXISTSとして投げる。
+ */
+async function createDeviceAdmin({ macAddress, categoryId, isDemo }) {
+  if (categoryId) await assertCategoryExists(categoryId);
+
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO devices (mac_address, status, category_id, is_demo)
+       VALUES ($1, 'active', $2, $3)
+       RETURNING id, mac_address, category_id, is_demo, owner_user_id, created_at`,
+      [macAddress, categoryId || null, !!isDemo]
+    );
+    return rows[0];
+  } catch (err) {
+    if (err.code === '23505') {
+      const e = new Error('device already exists');
+      e.code = 'DEVICE_ALREADY_EXISTS';
+      throw e;
+    }
+    throw err;
+  }
+}
+
+/**
+ * 管理画面：CSV取り込み。呼び出し元で正規化・重複除去済みのMACアドレス配列を受け取り、
+ * ON CONFLICT DO NOTHINGで一括INSERTする。実際に新規作成された行のmac_addressのみを返す
+ * （RETURNINGにはON CONFLICT DO NOTHINGでスキップされた行は含まれないため、
+ *  戻り値との差分＝DB側で既存だった重複件数として呼び出し元で算出する）。
+ */
+async function importDevices(macAddresses) {
+  if (macAddresses.length === 0) return [];
+
+  const values = [];
+  const placeholders = macAddresses
+    .map((mac, idx) => {
+      values.push(mac);
+      return `($${idx + 1}, 'active')`;
+    })
+    .join(',');
+
+  const { rows } = await db.query(
+    `INSERT INTO devices (mac_address, status)
+     VALUES ${placeholders}
+     ON CONFLICT (mac_address) DO NOTHING
+     RETURNING mac_address`,
+    values
+  );
+  return rows.map((r) => r.mac_address);
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -487,4 +724,12 @@ module.exports = {
   updateEvent,
   listOrganizationsForAdmin,
   hideEvent,
+  assertCategoryExists,
+  listCategoriesForAdmin,
+  listDevicesAdmin,
+  updateDeviceAdmin,
+  bulkUpdateDevicesByIds,
+  bulkUpdateDevicesByFilter,
+  createDeviceAdmin,
+  importDevices,
 };
