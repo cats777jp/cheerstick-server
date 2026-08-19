@@ -4,6 +4,116 @@
 
 ---
 
+## 2026-08-19 実装2 B-1〜B-4（finished復帰導線/状態変更ログ/認証TODO整理/チーム登録機能）実装（コードのみ、未検証・未デプロイ）
+
+### 背景
+
+B-5の実機検証完了を受け、`cheerstick-impl-2-admin-features.md`のB-1〜B-4に着手。
+KMT様の指示によりB-1・B-2は同じ検証（テスト試合での状態遷移）でまとめて確認できるため
+一括で実装・検証してよいとのことだったため、B-1〜B-4を通しで実装した。
+
+### コミット分割について（指示書0の「1項目ずつ完了」からの逸脱）
+
+指示書は「B-1から順に、1項目ずつ完了させること」「項目ごとにcommit→push」としているが、
+今回は`adminEventController.js`・`public/admin/index.html`の2ファイルがB-1〜B-4すべての
+変更で入り組んでおり（例：`adminEventController.js`はB-2の状態変更ログ・B-3のコメント・
+B-4のorganizationsエンドポイントが同一ファイル内に混在）、本環境ではhunk単位の対話的な
+git staging（`git add -p`等）が使えないため、ファイル単位・項目単位でのコミット分割が
+実施できなかった。**B-1〜B-4を1コミットにまとめ、コミットメッセージで項目ごとの内容を
+明記する形で代替した。**（コミット`5734e54`）
+
+### B-1：`finished`からの復帰導線
+
+- `public/admin/index.html`の`actionButtonsFor()`に`finished`分岐を追加。
+  「終了を取り消す」ボタンで`paused`へ復帰する（指示書通り、戻り先は`paused`のみ。
+  `live`への直接復帰は`updateEventStatus()`の`LIVE_EVENT_CONFLICT`検査を踏む経路が
+  あるため避けた）
+- 確認ダイアログの実装：既存の`handleStatusChange()`は「終了」ボタン専用の文言を
+  ハードコードしていたため、ボタン定義（`btnDef.confirmMessage`）ごとに文言を持たせる
+  形へ一般化した（既存の「終了」ボタンの文言・挙動は変更していない）
+- ダイアログ文言：`「〈試合名〉」（現在：終了）の終了を取り消し、停止中に戻します。
+  よろしいですか？`（指示書の例文通り）
+- 試合名の手入力は追加していない（指示書通り）
+
+### B-2：状態変更ログ
+
+- `PATCH /events/:id/status`（`adminEventController.js` `updateStatus`）に、
+  `hide()`と同形式のログを追加。変更前に`cheerQueries.getEventBasic()`で
+  現在のtitle/statusを取得してから更新するよう変更（指示書通り、従来は未取得だった）
+- 出力形式：`[ADMIN] status change time=... event_id=... title="..." from=X to=Y ip=...`
+- IPは`X-Real-IP`ヘッダー優先、無ければ`socket.remoteAddress`（WS接続ログと同じ方式、
+  `getClientIp()`を`adminEventController.js`に新設）
+- メールアドレス・ニックネームは出力しない
+- ログは実際にstatusが変更された場合のみ出力される（`EVENT_NOT_FOUND`・
+  `INVALID_STATUS`・`LIVE_EVENT_CONFLICT`のいずれでも出力されないことをモックテストで確認）
+
+### B-3：`src/routes/admin.js`のTODO書き換え
+
+- `src/routes/admin.js`・`src/controllers/adminEventController.js`・
+  `src/controllers/adminDeviceController.js`の3箇所すべての
+  「TODO: 本番公開前に認証必須。」を、判断済みである旨のコメントへ書き換えた
+  （指示書が明示するのは`admin.js`のみだが、同じ蒸し返し防止の目的のため3箇所とも揃えた）
+- **指示書の指定文言からの変更点：** 指示書は参照先を`docs/premises.md A-1`としているが、
+  このファイルは本リポジトリに存在しない（指示書の根拠ファイル
+  `cheerstick-premises-20260818.md`はチャット側の外部ファイルと見られる）。
+  この決定自体は既に`docs/spec.md` 8章・`docs/runbook.md`「管理API アクセス制限」に
+  記録済みのため、コメントの参照先をそちらに差し替えた
+- 認証機構の実装はしていない（指示書通り、コメント書き換えのみ）
+
+### B-4：organizations（チーム）の登録機能
+
+- `GET /admin/organizations`：既存エンドポイントを拡張し、`category_id`クエリパラメータで
+  絞り込み可能にした（未指定時は従来通り全件、試合登録フォームのプルダウンとの互換を維持）
+- `POST /admin/organizations`：新規登録（`name`・`category_id`・`logo_url`）。
+  `DELETE`は実装していない（指示書通り、premises C-1：削除＝非表示化の方針）
+- `PATCH /admin/organizations/:id`：部分更新（`updateEvent`と同じ方式）
+- 管理画面：チーム新規登録フォーム・一覧（ジャンル絞り込み）・編集モーダルを追加
+- **指示書に無い制約を発見：** `organizations.type`列（`football_club`等の組織種別、
+  `category_id`＝ジャンルとは別軸）が`NOT NULL`制約・デフォルト値なし。アプリコードからは
+  一切参照されない列（`grep`で使用箇所ゼロを確認）。指示書のPOSTボディに`type`の記載が
+  無いため、既存データ（V・ファーレン長崎）と同じ`'football_club'`をデフォルトで設定する
+  実装とした（UI上の入力項目としては公開していない）
+- **指示書に無い判断：** `category_id`を登録時必須とした（未設定のチームはデバイス向け
+  チーム一覧`listOrganizations(categoryId)`に一切現れず実質使えなくなるため）
+
+### 検証状況（★未完了）
+
+ローカル環境にPostgresが無いため、以下のみ実施：
+- `node --check`で全ファイルの構文確認：OK
+- `cheerQueries`をモックしたロジックテスト：
+  - `actionButtonsFor()`全分岐（scheduled/live/paused/finished/cancelled）とfinished分岐の
+    ボタン定義（nextStatus/confirm/confirmMessage）：PASS
+  - `updateStatus()`のログ出力：成功時のログ内容（4フィールドすべて含む、PII無し）、
+    EVENT_NOT_FOUND/INVALID_STATUS/LIVE_EVENT_CONFLICTでログが出ないこと：PASS
+  - organizations CRUD（一覧の絞り込み、登録の必須チェック、CATEGORY_NOT_FOUND、
+    更新のINVALID_ID/ORGANIZATION_NOT_FOUND）：10パターンPASS
+
+**指示書記載の検証項目（未実施）：**
+- B-1：本番でのテスト試合による状態遷移（scheduled→live→finished→終了を取り消す→
+  paused→live→finished、テスト試合の後始末）
+- B-2：pm2ログでの`[ADMIN] status change`実地出力確認
+- B-4：チーム1件の実地登録・編集・`category_id`フィルタ動作確認
+
+**本番デプロイも未実施。** ローカルでのコミットのみ。
+
+### 次回への申し送り（優先度順）
+
+1. B-1〜B-4の実機検証・本番反映（前回のB-5と同じ手順：`git pull`→`sudo cp`＋`diff`→
+   `pm2 restart`。今回はコード変更のみで静的ファイル変更は`public/admin/index.html`のみ）
+2. 実装1（A-0-3以降）はcategory_id確定後に再開
+3. `docs/spec.md`へB-4・B-5で新設したエンドポイントを追記するかは未判断のまま持ち越し
+4. `organizations.type`のデフォルト値運用（`'football_club'`固定でよいか）はKMT様確認が
+   望ましい。多スポーツ対応（Bリーグ・ラグビー等）が今後入る際、`type`の使い分けが
+   必要になるかは未検討
+
+### 未解決のまま残した課題
+
+- 前回までの申し送りに変わらず継続
+- 上記「次回への申し送り」1〜4
+- `POST /api/v1/devices`（`devicesController.js`）の死んだコードの扱い（継続、未判断）
+
+---
+
 ## 2026-08-19 B-5（devices管理機能）本番反映・実機検証完了
 
 ### 背景
