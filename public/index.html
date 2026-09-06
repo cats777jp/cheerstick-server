@@ -929,6 +929,9 @@
     cheeringCard.classList.remove('hidden');
     matchCheerCount = 0;
     cheerCountDisplay.textContent = '0';
+    // 前回セッションからの電池残量警告の継続時間・表示状態を持ち越さない
+    batteryLowSince = null;
+    batteryDisplay.classList.add('hidden');
   });
 
   // ---------- ネイティブアプリ向けブリッジ（送信側） ----------
@@ -1018,11 +1021,20 @@
   }
 
   const BATCH_SIZE = 5;
+  // 電池残量警告の閾値(V)。この電圧以下の状態が下記継続時間以上続いた場合のみ警告表示する
+  // （2026-09-06、Vanstone様指摘によりLED点灯時の瞬間的な電圧降下での誤発報を解消するため、
+  //   単発の瞬時値判定から継続時間判定へ変更。将来調整の可能性があるため定数化している）
   const BATTERY_LOW_THRESHOLD = 3.0;
+  const BATTERY_LOW_DURATION_MS = 60 * 1000;
 
   let cheerBatchCount = 0;
   let cheerBatchSum = 0;
   let cheerBatchStartedAt = null;
+  // volt <= BATTERY_LOW_THRESHOLD を連続して観測している間の開始時刻。
+  // 一度でも閾値を上回ったらnullにリセットする（タイムスタンプベース。
+  // window.onCheerStickDataの呼び出し間隔は1秒間隔を想定しているが（docs/spec.md 5.1）、
+  // 実機の呼び出し間隔がその通りとは限らないため、呼び出し回数ではなく経過時間で判定する）
+  let batteryLowSince = null;
 
   // Vanstoneへ提示する仮称: window.onCheerStickData
   // ネイティブアプリ側から加速度センサー等の生データを受け取るエントリポイント。
@@ -1076,10 +1088,17 @@
     window.CheerStickBridge && window.CheerStickBridge.sendLED &&
       window.CheerStickBridge.sendLED({ LED: led, stat: 'OK' });
 
-    // g. 電池残量チェック
+    // g. 電池残量チェック（60秒間連続して閾値以下の場合のみ警告表示。途中で1回でも
+    //    閾値を超えたらカウントをリセットする＝瞬間的な電圧降下による誤発報を防ぐ）
     if (typeof payload.volt === 'number' && payload.volt <= BATTERY_LOW_THRESHOLD) {
-      batteryDisplay.classList.remove('hidden');
+      if (batteryLowSince === null) batteryLowSince = Date.now();
+      if (Date.now() - batteryLowSince >= BATTERY_LOW_DURATION_MS) {
+        batteryDisplay.classList.remove('hidden');
+      } else {
+        batteryDisplay.classList.add('hidden');
+      }
     } else {
+      batteryLowSince = null;
       batteryDisplay.classList.add('hidden');
     }
   };
