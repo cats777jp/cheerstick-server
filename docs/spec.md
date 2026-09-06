@@ -280,6 +280,62 @@ PATCH /api/v1/admin/events/:id/status
      URLを外部に一切共有しないこと（IP制限のみでは共有時のリスクは残るため）。
 ```
 
+### 8.1 `finished`からの復帰（B-1、2026-08-19実装・2026-09-06本番反映＋実機検証済み）
+
+11.6章の事故を受けた対応。`PATCH /api/v1/admin/events/:id/status`自体に変更は無く、
+管理画面（`public/admin/index.html`）側に`finished`用の操作ボタンを追加したもの。
+
+- `finished`の試合一覧行に「終了を取り消す」ボタンを表示し、`status: "paused"`へ
+  遷移させる（復帰先は`paused`固定。`live`への直接復帰は`updateEventStatus`の
+  `LIVE_EVENT_CONFLICT`検査を経由する既存の同組織複数`live`防止ロジックに委ねるため、
+  ボタンからは行わない）
+- 確認ダイアログ文言：`「〈試合名〉」（現在：終了）の終了を取り消し、停止中に戻します。
+  よろしいですか？`（試合名の手入力は求めない）
+- DELETE機能（11.6章「対応が必要な点」1.）は本対応の範囲外で、未実装のまま
+
+### 8.2 状態変更ログ（B-2、2026-08-19実装・2026-09-06本番反映＋実機検証済み）
+
+`PATCH /api/v1/admin/events/:id/status`が実際に状態を変更した場合のみ、
+サーバーログ（pm2ログ）へ以下の形式で出力する。
+
+```
+[ADMIN] status change time=<ISO8601> event_id=<uuid> title="<試合名>" from=<変更前status> to=<変更後status> ip=<接続元IP>
+```
+
+- `ip`はWebSocket接続ログと同じ方式で取得（`X-Real-IP`ヘッダー優先、
+  無ければ`socket.remoteAddress`）
+- `EVENT_NOT_FOUND`・`INVALID_STATUS`・`LIVE_EVENT_CONFLICT`など、実際に状態が
+  変わらなかった場合は出力されない
+- メールアドレス・ニックネームは出力しない
+
+### 8.3 管理API：チーム（organizations）登録・編集（B-4、2026-08-19実装・2026-09-06本番反映＋実機検証済み）
+
+```
+GET /admin/organizations?category_id=<uuid>
+  category_id未指定時は従来通り全件を返す（試合登録フォームのプルダウンとの互換維持）
+
+POST /admin/organizations
+  body: { name, category_id, logo_url? }
+  name・category_idは必須（category_id未設定のチームはデバイス向け一覧に出せず
+  実質使えないため、登録時点で必須とした）。category_idが存在しない場合は
+  400 { error: "CATEGORY_NOT_FOUND" }
+
+PATCH /admin/organizations/:id
+  body: { name?, category_id?, logo_url? }（updateEventと同じ部分更新方式）
+  対象が無ければ404 { error: "ORGANIZATION_NOT_FOUND" }
+
+⚠️ DELETEは実装していない（premises C-1：削除＝非表示化の方針。B-4実装時点の判断）。
+   テスト登録したチームは本番データとして残り続けるため、実機検証時も
+   新規登録の実操作は行わずUI表示確認のみに留めた（2026-09-06）。
+⚠️ 認証はPATCH /events/:id/statusと同じくnginx側のIP制限のみ（アプリケーションレベル認証なし）。
+```
+
+`organizations.type`列（`football_club`等の組織種別、`category_id`＝ジャンルとは
+別軸）はB-4の実装対象外だが`NOT NULL`制約がある。指示書にAPI入力項目としての
+記載が無いため、`POST`時に未指定なら既存データ（V・ファーレン長崎）と同じ
+`'football_club'`をサーバー側デフォルト値として設定する（UI上の入力項目としては
+非公開）。アプリコードからは`type`列を参照する箇所は無い。
+
 ## 9. フロントエンド（public/index.html）
 
 ```
@@ -521,6 +577,8 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 
 > **2026-08-11追記：** 2026-08-10の事故（本節記載の通り、誤って`finished`にした試合を本番DBへの手動SQLで削除して対処した件）を受け、**DELETE機能の実装優先度を引き上げる。** 従来「対応が必要な点」の1項目として記載していたが、リリース前の必須対応候補として扱う（最終判断はKMT様）。
 
+> **2026-09-06追記：** 「対応が必要な点」2.（状態遷移の見直し）を実装（B-1、コミット`5734e54`、2026-09-06本番反映・実機検証済み）。復帰先は`paused`固定とし、誤操作防止として確認ダイアログ（試合名・現在の状態を表示、手入力は無し）を実装した。詳細は8章「管理API」を参照。**「対応が必要な点」1.（DELETE機能）は本追記の対象外で、引き続き未実装。**
+
 ### 11.7 `cheer_logs`/`awards`の外部キー制約がSET NULL（2026-08-10追記）
 
 **事象**
@@ -584,3 +642,4 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 | 2026-08-11 | 1.1「名称について」を新設、11.6に優先度引き上げの追記、11.7に範囲訂正（target_id/user_idも対象、awardsのuser_idのみCASCADEで不統一）の追記、4.3末尾にcheer-count-algorithm.mdの位置づけ注記を追加 | 全体棚卸し調査（Google Drive経由の指示書に基づく読み取り専用調査）の結果を反映。サービス名（推しフル/CheerStick）の定義が未記載だった点、11.7がcheer_logsのSET NULL対象を`event_id`のみと誤解を招く記載だった点（実際は`target_id`/`user_id`も対象、`awards.user_id`のみCASCADEで4テーブル横断の不統一あり）、`cheer-count-algorithm.md`が現行サーバー仕様と誤認されうる点をいずれも既存記述を削除せず追記で是正した |
 | 2026-08-18 | 4.1に「category_id判定の生存確認完了」の追記、6.2「カテゴリー判定の実装詳細」を新設 | Vanstone様検証機2台の接続エラー調査（読み取り専用）により、category_id未設定判定がWebSocket `connect`でのみ行われ`geturl`では行われないこと、`is_demo`による迂回が存在しないこと、`connect`の接続試行を記録するアプリケーションログが存在しないことを確認したため。詳細は`docs/worklog.md`同日エントリ参照 |
 | 2026-08-18 | 6.2に追記：接続ログを本日中に実装・本番反映した旨を記録 | 同日の調査で判明した「connectの接続試行を記録するログが存在しない」状態を解消するため実装（`src/websocket/index.js`、コミット`d7e965c`）。既存記述（ログが存在しないという6.2の記載）は削除せず、対応済みである旨を追記で更新した。詳細は`docs/worklog.md`同日エントリ「WebSocket `connect` の接続ログを追加」参照 |
+| 2026-09-06 | 8.1「finishedからの復帰」、8.2「状態変更ログ」、8.3「管理API：チーム登録・編集」を新設、11.6に対応完了の追記 | B-1〜B-4（コミット`5734e54`、2026-08-19実装・2026-09-06本番反映＋実機検証完了）の仕様化。反映完了を待って追記する方針としていたため（2026-08-19付worklog参照）、本番反映・実機検証が完了した本日まとめて記載した。11.6「対応が必要な点」2.（状態遷移の見直し）は本対応で解消したが、1.（DELETE機能）は対象外で未実装のまま残ることを明記した |
