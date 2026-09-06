@@ -1,6 +1,6 @@
 # CheerStick Runbook（環境・接続情報・手順）
 
-最終更新：2026-07-25
+最終更新：2026-09-06（cheerstick-api削除、pm2 startup設定・reboot対応を反映）
 
 ---
 
@@ -69,8 +69,11 @@ git fetch origin
 nginx                 80/443、api/app/ws すべてのリバースプロキシ
 cheerstick-server     pm2 online、ポート3000、REST API + WebSocket 統合プロセス
                       稼働ディレクトリ: /home/ubuntu/cheerstick-server-new（git管理下）
-cheerstick-api        pm2 stopped、旧プロトタイプ。削除候補
 ```
+
+> 2026-09-06、`cheerstick-api`（pm2 stopped、7/21作成の旧プロトタイプ）を削除。
+> `.envなし・DBアクセスなし・依存関係なし`を確認の上、`pm2 delete` → `pm2 save`、
+> `/home/ubuntu/cheerstick-api`ディレクトリごと削除した（コード変更なし、サーバー側作業のみ）。
 
 ### ドメイン・SSL
 
@@ -206,6 +209,15 @@ pm2 restart cheerstick-server --update-env
 5. インスタンス再起動テストでIP不変を確認、pm2の自動復帰も確認
    （このタイミングでカーネルが 6.17.0-1017-aws → 6.17.0-1019-aws に更新された）
 ```
+
+> **2026-09-06追記（矛盾の記録）：** 上記5.の「pm2の自動復帰も確認」について、
+> 2026-09-06のカーネル更新対応（1009→1012）の際に**`pm2 startup`（systemd登録）が
+> 未設定であることが判明し、reboot前に初めて設定した。** つまり2026-07-25時点では
+> systemd経由の自動復帰は構成されていなかったはずで、上記5.の記載と矛盾する。
+> 7/25時点で実際に何が起きていたか（手動での`pm2 resurrect`／`pm2 start`だったのか、
+> 確認自体が誤りだったのか）は今回追跡していない。**2026-09-06以降はsystemd経由の
+> 自動復帰が正しく構成されている**（reboot実施・`cheerstick-server`自動復帰・
+> admin.cheerstick.com正常表示を確認済み）。
 
 ---
 
