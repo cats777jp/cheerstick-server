@@ -262,7 +262,10 @@ DB: `cheerstick_production` / ユーザー: `cheerstick`
 008_target_profile_text.sql         （targets.profile_text 列、2026-07-25適用）
 009_add_device_is_demo.sql          （devices.is_demo 列、本番未適用。docs/runbook.md参照）
 010_add_events_hidden_at.sql        （events.hidden_at 列。11.3章参照）
-011_add_event_battles.sql           （event_battles テーブル新設。8.4章参照。2026-09-11実装・ローカル確認のみ、本番未反映）
+011_add_event_battles.sql           （event_battles テーブル新設。8.4章参照。2026-09-11実装・
+                                     ローカル確認後、同日中に本番DBへ適用済み。ただし
+                                     アプリDB接続ロールへの権限付与が未完了のため対抗戦機能は
+                                     まだ使用不可。11.8章参照）
 ```
 
 ### events.status
@@ -365,7 +368,14 @@ PATCH /admin/organizations/:id
 `'football_club'`をサーバー側デフォルト値として設定する（UI上の入力項目としては
 非公開）。アプリコードからは`type`列を参照する箇所は無い。
 
-### 8.4 対抗戦ペア管理・スコアAPI（2チーム対抗応援合戦機能、2026-09-11実装・ローカル確認のみ・本番未反映）
+### 8.4 対抗戦ペア管理・スコアAPI（2チーム対抗応援合戦機能、2026-09-11実装・同日本番反映）
+
+> **2026-09-11追記：本番デプロイ完了、ただし現時点では機能未使用可。**
+> migration 011・バックエンドコード・静的ファイル（後述9.3・9.4含む）一式を本番反映した。
+> ただし`event_battles`テーブルのDB権限が未整備のため、対抗戦関連APIは全て
+> `permission denied`エラーとなる状態が本デプロイ直後に判明している。詳細・対応要否は
+> 11.8章参照。以下の章の「本番未反映」等の記述は反映前（2026-09-11午前まで）の状態の
+> 記録として残す。
 
 KMT様提案の新機能。既存の`events`テーブルには一切変更を加えず（home/away化は見送り）、
 2つの既存イベントをペアリングする新規テーブル`event_battles`
@@ -453,6 +463,11 @@ GET /api/v1/event-battles/:id/score
   スコア画面のポーリング表示更新まで確認（詳細は`docs/worklog.md`同日エントリ参照）
 - 本番DBでの動作確認・本番デプロイは未実施（KMT様指示により今回は対象外）
 
+> **2026-09-11追記：本番デプロイ実施。** 上記のローカル確認を経て、同日中に本番へ
+> migration 011・コード・静的ファイル一式をデプロイした。デプロイ手順・結果・発覚した
+> DB権限問題は`docs/worklog.md`2026-09-11エントリ（「2チーム対抗応援合戦」機能の本番デプロイ）
+> 参照。DB権限問題の詳細は11.8章参照。
+
 ## 9. フロントエンド（public/index.html）
 
 ```
@@ -534,7 +549,11 @@ BATTERY_LOW_THRESHOLD`の状態を検知した時刻を`batteryLowSince`とし�
 - BLE切断時のサーバー通知（`type: "ble_disconnect"`）は見送り。クライアント側表示のみ
 - 実機（ネイティブアプリ）での動作テストはVanstone側ブリッジ実装完了後でないと不可
 
-### 9.3 管理画面：対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11実装・ローカル確認のみ）
+### 9.3 管理画面：対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11実装・同日本番反映）
+
+> 2026-09-11、本番反映済み。ただし対抗戦ペア管理部分は8.4章の権限問題（11.8章）が
+> 解消するまで動作しない（一括開始/停止/終了は既存の`PATCH .../status`のみを使うため
+> この権限問題の影響を受けない）。
 
 `public/admin/index.html`「試合一覧」カードに以下を追加した（バックエンドAPIの新規追加は
 無く、既存の`PATCH /events/:id/status`をループで呼ぶのみ）。
@@ -606,7 +625,11 @@ BATTERY_LOW_THRESHOLD`の状態を検知した時刻を`batteryLowSince`とし�
 - 削除ボタンあり（`DELETE /admin/event-battles/:id`、物理削除。元の試合自体は削除されない）。
   開始/終了ボタンとの連動は無い（ペアの登録・削除と試合の進行管理は独立）
 
-### 9.4 対抗戦スクリーン表示ページ `public/battle.html`（2チーム対抗応援合戦機能、2026-09-11新設・ローカル確認のみ）
+### 9.4 対抗戦スクリーン表示ページ `public/battle.html`（2チーム対抗応援合戦機能、2026-09-11新設・同日本番反映）
+
+> 2026-09-11、`/var/www/cheerstick-app/battle.html`として本番配置済み
+> （`https://app.cheerstick.com/battle.html`で200応答を確認済み）。ただし表示内容の
+> スコアAPI自体は8.4章の権限問題（11.8章）が解消するまで正常応答しない。
 
 URLパラメータ`battle_id`を受け取り、`GET /api/v1/event-battles/:id/score`を3秒間隔で
 ポーリングして表示を更新する単独ページ（WebSocket接続は行わない）。
@@ -866,6 +889,74 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 
 > **2026-08-11追記（範囲の訂正）：** 本節は`cheer_logs.event_id`のSET NULLのみを記載していたが、2026-08-11の調査で、SET NULLの対象は`event_id`だけでなく**`target_id`・`user_id`にも及ぶ**ことを確認した（`cheer_logs`の3列（`event_id`/`target_id`/`user_id`）すべてが`ON DELETE SET NULL`。`device_id`のみ`RESTRICT`）。あわせて、`awards`テーブルは`event_id`/`target_id`が`SET NULL`である一方、**`user_id`のみ`CASCADE`**という設計になっており、4テーブル（`cheer_logs`/`awards`/`cheer_summaries`/`event_targets`）横断で削除時挙動が不統一であることが判明した（`cheer_summaries`/`event_targets`は全列`CASCADE`）。統一方針の要否についてはKMT様の判断が必要。
 
+### 11.8 `event_battles`テーブルにアプリDB接続ロール（`cheerstick`）の権限が無い（2026-09-11追記・同日解消済み）
+
+> **2026-09-11解消：** KMT様がTeraTermで`ALTER TABLE event_battles OWNER TO cheerstick;`
+> を実行（`\dt`で所有者が`cheerstick`に変わったことをKMT様側で確認済み）。Claude Code側でも
+> 以下の再確認を実施し、権限問題が解消したことを確認した。
+> - `GET /api/v1/event-battles/<存在しないUUID>/score`：`permission denied`ではなく
+>   `404 {"error":"BATTLE_NOT_FOUND"}`が返ることを確認
+> - `GET /api/v1/admin/event-battles`（一覧取得）：`200 []`（権限エラーなし）を確認
+> - `POST /api/v1/admin/event-battles`で実際にテスト行をINSERT（既存の非表示化済み
+>   テストイベント2件をペアリング、新規イベントは作成せず）→ `201 Created`で成功
+> - 作成したテスト行に対し`GET .../score`で`total_intensity`を含むJOIN・SUM集計まで
+>   正常応答することを確認（`team_a`/`team_b`とも`total_intensity: 0`。9/6の実地検証時点で
+>   `cheer_logs`が0件のままであるため、11.7章の記述と整合する結果）
+> - `DELETE /api/v1/admin/event-battles/:id`でテスト行を削除、一覧が`[]`に戻ることを確認
+>
+> 以上により、対抗戦機能（8.4・9.3・9.4章）は本番で実際に使用可能な状態になった。
+> 以下は問題発生時点（2026-09-11午前）の記録として残す。
+
+**事象**
+
+2026-09-11の「2チーム対抗応援合戦」機能の本番デプロイ（migration 011適用）時に発生。
+`migrations/011_add_event_battles.sql`を`sudo -u postgres psql`（PostgreSQLスーパーユーザー）
+経由で実行したため、作成された`event_battles`テーブルの所有者が`postgres`のままとなり、
+アプリケーションのDB接続ロールである`cheerstick`に一切の権限（SELECT/INSERT/UPDATE/DELETE等）が
+付与されていない。
+
+```sql
+-- 確認済み（2026-09-11、読み取り専用）
+SELECT tablename, tableowner FROM pg_tables
+  WHERE schemaname='public' AND tablename IN ('events','event_battles');
+--    tablename    | tableowner
+-- ----------------+------------
+--  event_battles  | postgres     ← 他の全テーブルは cheerstick が所有
+--  events         | cheerstick
+```
+
+**影響**
+
+対抗戦関連のAPIが全て`{"error":"permission denied for table event_battles"}`で失敗する
+（本番反映直後に`GET /api/v1/event-battles/:id/score`・`GET /api/v1/admin/event-battles`の
+両方で実際に発生することを確認済み）。**既存の機能（WebSocket `connect`/`count`、
+管理画面の試合・チーム管理等）には一切影響しない**（`event_battles`テーブルを
+参照するのは対抗戦関連のコードのみのため）。
+
+**対応が必要な点**
+
+以下いずれかのSQLを、本番DBに対しPostgreSQLスーパーユーザー権限で実行する必要がある。
+Claude Codeでの実行は権限クラシファイアにより`GRANT`文・`ALTER TABLE ... OWNER TO`文の
+いずれもブロックされたため、**KMT様がTeraTerm等で直接実行する必要がある。**
+
+```sql
+-- 案A（推奨）：他の全テーブルと同じ所有者に揃える
+ALTER TABLE event_battles OWNER TO cheerstick;
+
+-- 案B：所有者は変更せず、events テーブルと同じ権限セットのみ付与する
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON event_battles TO cheerstick;
+```
+
+実行後、`GET https://api.cheerstick.com/api/v1/event-battles/<存在しないUUID>/score`が
+`permission denied`ではなく`404`（`BATTLE_NOT_FOUND`相当）を返すことで解消を確認できる。
+
+**対応時期**：実機到着前の準備の一環として、次回セッションまたはKMT様の手動対応で
+早期解消が望ましい（`docs/verification-checklist-hardware.md`項目2（対抗戦のスコア表示）の
+検証がこの解消を前提とするため。項目5の一括開始/停止/終了ボタンは既存の
+`PATCH .../status`を呼ぶのみで`event_battles`テーブルを参照しないため、
+本問題による影響は受けない）。
+
 ---
 
 ## 変更履歴
@@ -892,3 +983,5 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 | 2026-09-14 | 9.3に追記：一括開始/停止/終了への状態遷移ルール適用を記録 | 実装後の確認で、一括操作が`finished`→`live`のような単発ボタンでは表示されない遷移まで実行できてしまう点が指摘され、`public/admin/index.html`の`bulkChangeStatus()`に`actionButtonsFor()`の戻り値を用いた事前チェックを追加した。対象外の遷移はAPIを呼ばずスキップし、チェックを残したまま「対象外」である旨を表示するよう修正。既存記述（「現在のstatusに応じた遷移可否のチェックは行わない」）は削除せず追記で更新した。スコアAPI（8.4章）の認証・IP制限方針はKMT様確認済みのため変更なし |
 | 2026-09-14 | 9.3に追記：一括「停止」を`live`の行のみに限定する再修正を記録 | 同日の`actionButtonsFor()`ベース判定では、`finished`の試合が「終了を取り消す」と同じ`paused`遷移として一括「停止」の対象に含まれてしまい、「停止」というラベルの意図（live中の試合の一時中断）と実際の挙動（finishedの試合の復活）がずれることが判明。事故防止のため、一括「停止」のみ`actionButtonsFor()`に頼らず現在の状態が`live`の行に限定するよう`bulkChangeStatus()`を再修正した。一括「開始」「終了」は変更なし。個別ボタンの「終了を取り消す」は単発ボタンでのみ実行可能なまま。既存記述は削除せず追記で更新した |
 | 2026-09-11 | 11.7に追記：`cheer_logs`0件の本番DB再確認結果を記録 | 前回・前々回セッションでブロックされ続けていた本番EC2へのSSH接続を再試行したところ今回は成功し、`cheerstick_production`へ読み取り専用SELECTで接続できた。`cheer_logs`総行数・`event_id`別内訳とも0件のまま変化なし（2026-08-10時点の記述から約1ヶ月、9/6のB-1/B-2実機検証を挟んでも変化なし）であることを確認。既存記述（2026-08-10時点の「0件」）は削除せず追記で更新した。詳細は`docs/worklog.md`2026-09-11エントリ（本番DB SSH接続の再試行・cheer_logs実データ確認）参照 |
+| 2026-09-11 | 「2チーム対抗応援合戦」機能を本番デプロイ（7章のmigration 011記述、8.4・9.3・9.4の「本番未反映」記述に追記、11.8「event_battlesテーブルにcheerstickロールの権限が無い」を新設） | KMT様指示により実機到着前の準備として本番反映を実施。migration 011適用・`git pull`・静的ファイル（`battle.html`含む）反映・pm2再起動・疎通確認まで完了したが、migrationをpostgresスーパーユーザーで実行した副作用でアプリのDB接続ロール（`cheerstick`）に`event_battles`テーブルの権限が付与されておらず、対抗戦関連APIが`permission denied`で失敗する状態であることが判明した。`GRANT`/`ALTER TABLE ... OWNER TO`いずれも権限クラシファイアにブロックされたため、KMT様の手動対応（TeraTerm）が必要な既知の課題として11.8に記録した。既存記述は削除せず追記で更新した。詳細は`docs/worklog.md`2026-09-11エントリ（「2チーム対抗応援合戦」機能の本番デプロイ）参照 |
+| 2026-09-11 | 11.8に追記：DB権限問題の解消確認を記録 | KMT様がTeraTermで`ALTER TABLE event_battles OWNER TO cheerstick;`を実行。Claude Code側でスコアAPI・管理API一覧取得の200/404応答、実際のテスト行INSERT→スコア取得→DELETEの一連の流れを権限エラーなく確認し、対抗戦機能が本番で使用可能になったことを11.8章に追記で記録した。既存記述（問題発生時点の記録）は削除せず残した。詳細は`docs/worklog.md`2026-09-11エントリ（`event_battles`権限修正の解消確認）参照 |

@@ -4,6 +4,212 @@
 
 ---
 
+## 2026-09-11 `event_battles`権限修正の解消確認（KMT様TeraTerm対応後）
+
+### 背景
+
+前エントリ「2チーム対抗応援合戦」機能の本番デプロイで発覚した`event_battles`テーブルの
+DB権限問題（`docs/spec.md` 11.8章）について、KMT様がTeraTermで
+`ALTER TABLE event_battles OWNER TO cheerstick;`を実行し解消済みとの連絡を受け、
+Claude Code側で読み取り専用・最小限のテストデータ操作により解消を再確認した。
+今回もコード変更・デプロイは実施していない（確認のみ）。
+
+### 実施したこと・確認結果
+
+1. **スコアAPI（存在しないbattle_id）**：`GET /api/v1/event-battles/<存在しないUUID>/score`
+   → `permission denied`ではなく`404 {"error":"BATTLE_NOT_FOUND"}`を確認
+2. **管理API一覧取得**：`GET /api/v1/admin/event-battles` → `200 []`（権限エラーなし）を確認
+3. **管理画面からのINSERT確認**：管理画面（`admin.cheerstick.com`）の試合一覧が非表示化済み
+   イベントを除外する仕様（`adminEventController.list`）のため、現在プルダウンに表示できる
+   試合が0件だった。新規テストイベントの作成は依頼範囲外と判断し、代わりに画面が内部で
+   呼ぶのと同じ管理API（`POST /admin/event-battles`）を直接呼び、既存の非表示化済み
+   テストイベント2件（「【テスト】B1B2確認 20260906」「【テスト】削除ボタン確認 20260818」）を
+   ペアリングしてINSERTを検証した → `201 Created`で成功（権限エラーなし）
+4. 作成したテスト行に対し`GET .../score`を実行し、JOIN・`SUM(intensity)`集計を含む
+   スコア取得まで正常応答することを確認（`total_intensity`は両チームとも0。9/6実地検証以降
+   `cheer_logs`が引き続き0件であることと整合）
+5. `GET /api/v1/admin/event-battles`で作成した行が一覧に反映されることを確認
+6. `DELETE /api/v1/admin/event-battles/:id`でテスト行を削除し、一覧が`[]`に戻ることを確認
+   （指示どおり、確認後に削除済み。既存の2イベント自体には一切変更を加えていない）
+
+### 判明した事実 / 想定と違ったこと
+
+- 途中、`POST`のリクエストボディに日本語ラベル（`"【権限修正確認用テスト】削除予定"`）を
+  含めたところ、シェル経由のcurl呼び出しでエンコーディングが崩れ`400`エラーになった
+  （`Unexpected token '�'...`）。ASCII文字のみのラベル（`"TEST-perm-check-delete-me"`）に
+  変更したところ問題なく成功した。サーバー側・API仕様の問題ではなく、今回の確認手順
+  （ローカルシェルからのcurl呼び出し）固有の問題と判断する
+- 管理画面のプルダウンが非表示化済みイベントを除外する仕様のため、「管理画面から」という
+  依頼に対して文字通りのブラウザ操作ではなく、画面が呼ぶのと同じAPIへの直接リクエストで
+  代替検証した。バックエンドの処理経路（コントローラー・DB権限）は完全に同一のため、
+  今回確認したかった「権限エラーの解消」という観点では同等の検証と判断している
+
+### 変更したファイル
+
+- `docs/spec.md`（11.8章に解消確認の追記。詳細は同ファイルの変更履歴を参照）
+- `docs/worklog.md`（本エントリ）
+- 本番DB：テスト用`event_battles`行を1件INSERT後、確認完了によりDELETE（最終的に
+  変更前と同じ状態。既存の`events`2件には変更なし）
+- コード・デプロイの変更は無し
+
+### 次回への申し送り
+
+- 対抗戦機能（8.4・9.3・9.4章）は本番で実際に使用可能な状態になった。実機検証時は
+  `docs/verification-checklist-hardware.md`の0.1節を再実行し、表が全て✅になっている
+  ことを確認してから項目2に進むこと
+- 前回申し送りの3（migration 004・009の`docs/spec.md`記述更新）、および前回までの
+  その他の残課題（`cheer_logs`が0件である根本原因の切り分け、Vanstoneブリッジ仕様、
+  管理API認証追加、負荷試験、静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の
+  要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 前回までの残課題（継続。11.8章のDB権限問題自体は解消済み）
+
+---
+
+## 2026-09-11 「2チーム対抗応援合戦」機能の本番デプロイ
+
+### 背景
+
+実機（Android試作アプリ＋実機＋CheerStickスティック本体）が数日後に利用可能になる
+準備として、これまで`feature/reference-data`ブランチで実装・ローカル確認まで
+済んでいた「2チーム対抗応援合戦」機能一式（`event_battles`テーブル・スコアAPI・
+管理画面の対抗戦ペア管理/一括操作UI・`battle.html`）を、KMT様指示により本番反映した。
+
+### 事前確認
+
+- `git status`／`git log --oneline -1`：ローカルは`feature/reference-data`ブランチ、
+  未コミット変更なし（`cheerstick-ws`のみ未追跡、対応不要と既に判断済み）、
+  HEAD `7c9ce59`
+- `ss -tnp state established '( sport = :3000 )'`：本番EC2で該当接続0件
+  （実施可能な状態と判断）
+
+### 実施したこと（手順どおり）
+
+**手順①：マイグレーション適用**
+- 適用前バックアップ：`~/backups/cheerstick_production_20260911_184240.sql`
+  （47,205バイト、非ゼロを確認）
+- `sudo -u postgres psql -d cheerstick_production`で`migrations/011_add_event_battles.sql`
+  の内容を1文ずつ実行（`-c`の複数コマンド連結は分類器に拒否されるため、指示どおり
+  `CREATE TABLE`→`COMMENT ON TABLE`→`COMMENT ON COLUMN`×3→`CREATE INDEX`×2の
+  計7文を個別に実行）。全て成功
+- `\d event_battles`でテーブル構造（列・PK・FK・CHECK制約・インデックス2本）が
+  仕様どおりであることを確認
+- 既存の`schema_migrations`追跡テーブル（001〜010が記録済みであることを事前に確認済み。
+  004・009も含め本番適用済みと判明し、`docs/spec.md`7章の「004:未確認」「009:本番未適用」
+  という従来の記述が古い情報だったことも副次的に判明した）に、`011_add_event_battles.sql`の
+  適用記録を追加のINSERTで登録した
+
+**手順②：git pull・バックエンドコード反映**
+- `cd /home/ubuntu/cheerstick-server-new && git pull`：`8734d20..7c9ce59`を
+  fast-forwardで反映（12ファイル、2153行追加）
+- `git log --oneline -8`でローカルと一致する8コミット（`74f4bdf`〜`7c9ce59`）が
+  反映されたことを確認
+
+**手順③：静的ファイル反映**
+- `public/admin/index.html` → `/var/www/cheerstick-admin/index.html`：`sudo cp`後、
+  `diff`で差分なしを確認
+- `public/battle.html`（新規） → `/var/www/cheerstick-app/battle.html`：`sudo cp`。
+  コピー直後の所有者が`root:root`（644）になっており、既存の同ディレクトリ内ファイル
+  （`index.html`・`reference.html`）の`ubuntu:ubuntu`（664）という慣習と異なっていたため、
+  `chown ubuntu:ubuntu`・`chmod 664`で揃えた。その後`diff`で内容の一致も確認
+- `public/index.html`：今回のpullに変更は含まれていなかった（差分ファイル一覧に無し）。
+  念のため`diff`を再実行し、既存の反映済み状態から変化していないことを確認
+
+**手順④：pm2再起動**
+- `pm2 restart cheerstick-server`：成功、`status: online`
+- `pm2 list`・`pm2 logs --lines 30 --nostream`で確認。ログ末尾は起動メッセージ
+  （`CheerStick server running on port 3000`／`[WS] CheerStick WebSocket server
+  attached at /cheer`）で、再起動後の新規エラーは無し（表示された`NO_CATEGORY`等の
+  エラーは全て8月時点の古いログの残存であり、今回の再起動とは無関係と確認）
+
+**手順⑤：疎通確認**
+- `GET /api/v1/admin/categories`（既存API回帰確認）：`200 OK`
+- `https://admin.cheerstick.com/`：`200 OK`（`Last-Modified`が手順③のコピー時刻と一致）
+- `https://app.cheerstick.com/battle.html`：`200 OK`、`Content-Length`が
+  ソースファイルと一致（`Last-Modified`もコピー時刻と一致）
+- スコアAPI（`GET /api/v1/event-battles/:id/score`）：存在しないUUIDで疎通確認 →
+  **`404`ではなく`500`＋`{"error":"permission denied for table event_battles"}`**
+  （下記「判明した事実」参照）
+
+### 判明した事実 / 想定と違ったこと
+
+- **`event_battles`テーブルにアプリのDB接続ロール（`cheerstick`）の権限が付与されておらず、
+  対抗戦関連APIが全て`permission denied`で失敗する状態になっていることが判明した。**
+  原因は、migration 011を`sudo -u postgres psql`（PostgreSQLスーパーユーザー）経由で
+  実行したため、作成されたテーブルの所有者が`postgres`のままになり、他の全テーブル
+  （`cheerstick`が所有）と扱いが異なってしまったこと。
+  ```sql
+  SELECT tablename, tableowner FROM pg_tables
+    WHERE schemaname='public' AND tablename IN ('events','event_battles');
+  --   event_battles | postgres   ← ここだけ異なる
+  --   events        | cheerstick
+  ```
+  `GET /api/v1/event-battles/<UUID>/score`・`GET /api/v1/admin/event-battles`の
+  両方で実際に`permission denied for table event_battles`を確認した
+- **この問題の修正（`GRANT`文・`ALTER TABLE ... OWNER TO`文のいずれも）が権限クラシファイアに
+  ブロックされた。** 「[Permission Grant]」という理由でブロックされ、既存の`events`
+  テーブルと全く同じ権限セットを付与するだけの`GRANT`文も、所有者を他の全テーブルと
+  揃えるだけの`ALTER TABLE ... OWNER TO`文も、いずれも実行できなかった。無理に
+  回避しようとはせず、実行すべきSQL文をそのまま`docs/spec.md` 11.8章に記録した。
+  **KMT様がTeraTerm等で以下のいずれかを手動実行する必要がある。**
+  ```sql
+  -- 案A（推奨）
+  ALTER TABLE event_battles OWNER TO cheerstick;
+  -- 案B（所有者は変更しない）
+  GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+    ON event_battles TO cheerstick;
+  ```
+- **既存機能への影響は無い。** `event_battles`テーブルを参照するのは対抗戦関連の
+  コードのみのため、WebSocket `connect`/`count`、管理画面の試合・チーム管理等、
+  それ以外の全機能は今回のデプロイ後も正常に動作している（`GET /api/v1/admin/categories`の
+  200応答で回帰確認済み）
+- **一括開始/停止/終了ボタン（`docs/verification-checklist-hardware.md`項目5）は
+  この権限問題の影響を受けない。** 既存の`PATCH /events/:id/status`を呼ぶのみで
+  `event_battles`テーブルを一切参照しないため、対抗戦スコア表示（項目2）とは異なり
+  今回のデプロイのままで実機検証が可能
+- マイグレーション適用状況の副次的な確認として、`schema_migrations`テーブルに
+  001〜010が全て記録されていることを確認した。これにより`docs/spec.md`が従来
+  「未確認」としていた004（カテゴリー機能）・「本番未適用」としていた009
+  （`devices.is_demo`列）が、実際にはいずれも本番適用済みであったことも判明した
+  （004は2026-07-22、009は2026-07-27に適用済み）。この点は今回`docs/spec.md`側の
+  該当記述までは更新していない（本セッションのスコープ外と判断し、次回への
+  申し送りとする）
+
+### 変更したファイル
+
+- 本番DB：`event_battles`テーブル新設（`migrations/011_add_event_battles.sql`）、
+  `schema_migrations`への適用記録追加
+- 本番EC2：`git pull`（`8734d20`→`7c9ce59`）、`/var/www/cheerstick-admin/index.html`、
+  `/var/www/cheerstick-app/battle.html`（新規）の反映、`pm2 restart`
+- `docs/spec.md`（7章・8.4・9.3・9.4への追記、11.8「event_battlesテーブルに
+  cheerstickロールの権限が無い」を新設。詳細は同ファイルの変更履歴を参照）
+- `docs/worklog.md`（本エントリ）
+- コード自体（`src/`・`public/`・`migrations/`）の変更は無し（既にローカルに
+  存在した内容をそのまま本番へ反映したのみ）
+
+### 次回への申し送り
+
+1. **最優先：11.8章のDB権限問題の解消。** KMT様のTeraTermでの手動対応
+   （`ALTER TABLE event_battles OWNER TO cheerstick;`推奨）が必要。解消後、
+   `GET /api/v1/event-battles/<存在しないUUID>/score`が`404`を返すことで確認できる
+2. 上記解消後、`docs/verification-checklist-hardware.md`の0.1節（デプロイ状況確認）を
+   再実行し、表が全て✅になることを確認してから項目2の実機検証に進むこと
+   （項目5は今回のデプロイのままで検証可能。項目1・3・4は元々デプロイ済みで影響なし）
+3. `docs/spec.md`の migration 004・009 の記述（「未確認」「本番未適用」）が実際には
+   古い情報だったことが判明した。次回セッションで該当箇所の更新を検討する
+4. 前回までのその他の残課題（`cheer_logs`が0件である根本原因の切り分け、Vanstoneブリッジ
+   仕様、管理API認証追加、負荷試験、静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の
+   要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 11.8章のDB権限問題（上記申し送り1、最優先）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-11 本番DB SSH接続の再試行・cheer_logs実データ確認
 
 ### 背景
