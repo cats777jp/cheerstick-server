@@ -713,12 +713,19 @@
     }
   }
 
-  // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
-  // 選択中の試合IDに対し、既存のPATCH /events/:id/statusを1件ずつ順番に呼び出すだけ。
-  // 現在のstatusに応じた遷移可否のチェックは行わない（呼び出し先APIの検証にそのまま委ねるため、
-  // 例えばfinishedの試合を選んで「開始」を押すとliveへ直接遷移する。単発ボタンのUIが
-  // 状態ごとに出す遷移とは異なる経路になり得る点に注意）。
-  // 部分成功を許容：成功した行は選択解除、失敗した行は選択を残しエラー内容を行に表示する。
+  // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加、
+  // 2026-09-14に状態遷移ルール適用を追加）。
+  // 選択中の試合IDに対し、既存のPATCH /events/:id/statusを1件ずつ順番に呼び出すだけ
+  // （バックエンドAPIの新規追加は無し）。
+  //
+  // 状態遷移ルールは individual ボタン（actionButtonsFor()）と全く同じ関数の結果を
+  // そのまま使う（ルールを二重管理して食い違うことを避けるため）。個別ボタンとして
+  // 表示されない遷移（例：finished→liveへの直接遷移）は、一括操作でも実行しない。
+  // 対象外の行はAPIを呼ばずスキップし、失敗行と同様にチェックを残したまま
+  // 「対象外（現在の状態では実行できません）」を表示する。
+  //
+  // 部分成功を許容：成功した行は選択解除、失敗・対象外の行は選択を残しエラー内容を
+  // 行に表示する（個別ボタンでの手動対応用）。
   async function bulkChangeStatus(nextStatus, confirmMessage) {
     if (selectedEventIds.size === 0) {
       showError('試合を選択してください');
@@ -731,6 +738,20 @@
 
     const ids = [...selectedEventIds];
     for (const id of ids) {
+      const event = lastEventsList.find((e) => e.id === id);
+      if (!event) {
+        // refreshAll()後に一覧から消えた（削除された等）試合。
+        eventRowErrors.set(id, '試合が見つかりません（一覧から削除された可能性があります）');
+        continue;
+      }
+
+      const isAllowedTransition = actionButtonsFor(event).some((btnDef) => btnDef.nextStatus === nextStatus);
+      if (!isAllowedTransition) {
+        const statusLabel = STATUS_LABELS[event.status] || event.status;
+        eventRowErrors.set(id, `対象外（現在の状態「${statusLabel}」ではこの操作は実行できません）`);
+        continue; // APIは呼ばない。チェックも外さない。
+      }
+
       try {
         await apiFetch(`/events/${id}/status`, {
           method: 'PATCH',
