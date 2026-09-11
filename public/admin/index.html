@@ -163,6 +163,32 @@
   }
   td.checkbox-cell, th.checkbox-cell { width: 32px; }
   td.checkbox-cell input, th.checkbox-cell input { width: auto; }
+
+  /* 対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11追加） */
+  .bulk-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .bulk-toolbar span { font-size: 13px; color: var(--text-muted); }
+  .row-error {
+    color: #f87171;
+    font-size: 12px;
+    margin-top: 4px;
+  }
+  .battle-url-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .battle-url-row input {
+    width: auto;
+    flex: 1 1 220px;
+    font-size: 12px;
+    padding: 6px 8px;
+  }
 </style>
 </head>
 <body>
@@ -201,9 +227,21 @@
   <!-- (B) 試合一覧 -->
   <div class="card">
     <h2>試合一覧</h2>
+
+    <!-- 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
+         既存のPATCH /events/:id/statusをチェック済みの試合IDに対して1件ずつ順番に呼ぶだけで、
+         現在のstatusに応じた遷移可否のチェックは行わない（既存APIの検証にそのまま委ねる）。 -->
+    <div class="bulk-toolbar">
+      <span id="eventSelectedCount">0件選択中</span>
+      <button id="bulkStartBtn">開始</button>
+      <button id="bulkPauseBtn">停止</button>
+      <button id="bulkFinishBtn" class="danger">終了</button>
+    </div>
+
     <table>
       <thead>
         <tr>
+          <th class="checkbox-cell"><input id="eventSelectAllCheckbox" type="checkbox"></th>
           <th>試合名</th>
           <th>チーム</th>
           <th>開始日時</th>
@@ -212,6 +250,43 @@
         </tr>
       </thead>
       <tbody id="eventsTableBody">
+        <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- (G) 対抗戦ペア管理（2チーム対抗応援合戦機能、2026-09-11追加） -->
+  <div class="card">
+    <h2>対抗戦ペア登録</h2>
+    <form id="battleCreateForm">
+      <label for="battleEventA">試合A（画面左側）</label>
+      <select id="battleEventA" required></select>
+
+      <label for="battleEventB">試合B（画面右側）</label>
+      <select id="battleEventB" required></select>
+
+      <label for="battleLabel">ラベル（任意）</label>
+      <input id="battleLabel" type="text" placeholder="例：RED vs BLUE">
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>対抗戦ペア一覧</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ラベル</th>
+          <th>試合A</th>
+          <th>試合B</th>
+          <th>スクリーン表示URL</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="battlesTableBody">
         <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
       </tbody>
     </table>
@@ -370,6 +445,12 @@
     ? '/api/v1/admin'
     : 'https://api.cheerstick.com/api/v1/admin';
 
+  // 対抗戦スクリーン（public/battle.html）はユーザー向け画面（app.cheerstick.com）配下に
+  // 配置する想定のため、admin.cheerstick.comとは別オリジンになる（本番）。
+  const APP_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? ''
+    : 'https://app.cheerstick.com';
+
   const errorBar = document.getElementById('errorBar');
   const recordBanner = document.getElementById('recordBanner');
   const eventsTableBody = document.getElementById('eventsTableBody');
@@ -507,11 +588,22 @@
     return buttons;
   }
 
+  // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
+  // 選択状態・行エラーは再描画（refreshAll）をまたいで保持する必要があるため、
+  // イベントIDをキーにモジュールスコープで保持する。
+  const selectedEventIds = new Set();
+  const eventRowErrors = new Map(); // eventId -> エラーメッセージ
+  let lastEventsList = []; // 対抗戦ペア登録フォームのプルダウン用に最新の一覧を保持
+
+  function updateEventSelectedCount() {
+    document.getElementById('eventSelectedCount').textContent = `${selectedEventIds.size}件選択中`;
+  }
+
   function renderTable(events) {
     eventsTableBody.innerHTML = '';
 
     if (events.length === 0) {
-      eventsTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">登録されている試合はありません</td></tr>';
+      eventsTableBody.innerHTML = '<tr class="empty-row"><td colspan="6">登録されている試合はありません</td></tr>';
       return;
     }
 
@@ -519,14 +611,24 @@
       const tr = document.createElement('tr');
 
       const statusLabel = STATUS_LABELS[event.status] || event.status;
+      const rowError = eventRowErrors.get(event.id);
 
       tr.innerHTML = `
+        <td class="checkbox-cell"><input type="checkbox" class="event-row-checkbox" data-id="${escapeHtml(event.id)}"></td>
         <td>${escapeHtml(event.title)}</td>
         <td>${escapeHtml(event.organization_name || '-')}</td>
         <td>${escapeHtml(formatDisplayDate(event.starts_at))}</td>
         <td><span class="badge ${escapeHtml(event.status)}">${escapeHtml(statusLabel)}</span></td>
         <td class="action-cell"></td>
       `;
+
+      const checkbox = tr.querySelector('.event-row-checkbox');
+      checkbox.checked = selectedEventIds.has(event.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) selectedEventIds.add(event.id);
+        else selectedEventIds.delete(event.id);
+        updateEventSelectedCount();
+      });
 
       const actionCell = tr.querySelector('.action-cell');
 
@@ -549,8 +651,17 @@
       deleteBtn.addEventListener('click', () => handleDelete(event));
       actionCell.appendChild(deleteBtn);
 
+      if (rowError) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'row-error';
+        errorDiv.textContent = rowError;
+        actionCell.appendChild(errorDiv);
+      }
+
       eventsTableBody.appendChild(tr);
     });
+
+    document.getElementById('eventSelectAllCheckbox').checked = false;
   }
 
   async function handleStatusChange(event, btnDef) {
@@ -565,6 +676,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: btnDef.nextStatus }),
       });
+      eventRowErrors.delete(event.id);
       clearError();
     } catch (e) {
       if (e.status === 409 && e.body) {
@@ -587,6 +699,8 @@
 
     try {
       await apiFetch(`/events/${event.id}`, { method: 'DELETE' });
+      eventRowErrors.delete(event.id);
+      selectedEventIds.delete(event.id);
       clearError();
     } catch (e) {
       if (e.status === 409 && e.body) {
@@ -598,6 +712,66 @@
       await refreshAll();
     }
   }
+
+  // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
+  // 選択中の試合IDに対し、既存のPATCH /events/:id/statusを1件ずつ順番に呼び出すだけ。
+  // 現在のstatusに応じた遷移可否のチェックは行わない（呼び出し先APIの検証にそのまま委ねるため、
+  // 例えばfinishedの試合を選んで「開始」を押すとliveへ直接遷移する。単発ボタンのUIが
+  // 状態ごとに出す遷移とは異なる経路になり得る点に注意）。
+  // 部分成功を許容：成功した行は選択解除、失敗した行は選択を残しエラー内容を行に表示する。
+  async function bulkChangeStatus(nextStatus, confirmMessage) {
+    if (selectedEventIds.size === 0) {
+      showError('試合を選択してください');
+      return;
+    }
+    if (confirmMessage) {
+      const ok = confirm(confirmMessage);
+      if (!ok) return;
+    }
+
+    const ids = [...selectedEventIds];
+    for (const id of ids) {
+      try {
+        await apiFetch(`/events/${id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        selectedEventIds.delete(id);
+        eventRowErrors.delete(id);
+      } catch (e) {
+        let message = e.message;
+        if (e.status === 409 && e.body && e.body.conflicting_event) {
+          message = `同じチームでlive中の試合があります（${e.body.conflicting_event.title}）`;
+        } else if (e.status === 404) {
+          message = '試合が見つかりません';
+        }
+        eventRowErrors.set(id, message);
+        // 失敗した行は選択を残す（手動での個別対応用）。
+      }
+    }
+    clearError();
+    await refreshAll();
+  }
+
+  document.getElementById('bulkStartBtn').addEventListener('click', () => bulkChangeStatus('live', null));
+  document.getElementById('bulkPauseBtn').addEventListener('click', () => bulkChangeStatus('paused', null));
+  document.getElementById('bulkFinishBtn').addEventListener('click', () => {
+    bulkChangeStatus(
+      'finished',
+      `選択した${selectedEventIds.size}件の試合を終了します。この操作は取り消せません。よろしいですか？`
+    );
+  });
+
+  document.getElementById('eventSelectAllCheckbox').addEventListener('change', (e) => {
+    eventsTableBody.querySelectorAll('.event-row-checkbox').forEach((cb) => {
+      cb.checked = e.target.checked;
+      const id = cb.getAttribute('data-id');
+      if (e.target.checked) selectedEventIds.add(id);
+      else selectedEventIds.delete(id);
+    });
+    updateEventSelectedCount();
+  });
 
   function openEditModal(event) {
     document.getElementById('editId').value = event.id;
@@ -674,8 +848,11 @@
   async function refreshAll() {
     try {
       const events = await apiFetch('/events');
+      lastEventsList = events;
       renderBanner(events);
       renderTable(events);
+      updateEventSelectedCount();
+      populateBattleEventSelects(events);
     } catch (e) {
       showError('試合一覧の取得に失敗しました: ' + e.message);
     }
@@ -1117,6 +1294,141 @@
   loadDeviceCategories();
   updateSelectedCount();
   loadDevices();
+
+  // ==========================================================
+  // (G) 対抗戦ペア（event_battles）管理：2チーム対抗応援合戦機能（2026-09-11追加）
+  // ==========================================================
+  const battleCreateForm = document.getElementById('battleCreateForm');
+  const battleEventA = document.getElementById('battleEventA');
+  const battleEventB = document.getElementById('battleEventB');
+  const battleLabel = document.getElementById('battleLabel');
+  const battlesTableBody = document.getElementById('battlesTableBody');
+
+  function battleScreenUrl(battleId) {
+    return `${APP_BASE}/battle.html?battle_id=${battleId}`;
+  }
+
+  // 試合一覧（events）が更新されるたびに呼ばれる。プルダウンの選択状態は
+  // 可能な限り保持する（登録フォーム入力中に一覧が再取得されても選択が飛ばないように）。
+  function populateBattleEventSelects(events) {
+    [battleEventA, battleEventB].forEach((selectEl) => {
+      const prevValue = selectEl.value;
+      selectEl.innerHTML = '';
+      events.forEach((ev) => {
+        const opt = document.createElement('option');
+        opt.value = ev.id;
+        opt.textContent = `${ev.title}（${ev.organization_name || 'チーム未設定'}・${STATUS_LABELS[ev.status] || ev.status}）`;
+        selectEl.appendChild(opt);
+      });
+      if (events.some((ev) => ev.id === prevValue)) {
+        selectEl.value = prevValue;
+      }
+    });
+  }
+
+  function renderBattlesTable(battles) {
+    battlesTableBody.innerHTML = '';
+
+    if (battles.length === 0) {
+      battlesTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">登録されている対抗戦ペアはありません</td></tr>';
+      return;
+    }
+
+    battles.forEach((battle) => {
+      const tr = document.createElement('tr');
+      const url = battleScreenUrl(battle.id);
+
+      tr.innerHTML = `
+        <td>${escapeHtml(battle.label || '-')}</td>
+        <td>${escapeHtml(battle.event_a_title)}（${escapeHtml(battle.event_a_organization_name || 'チーム未設定')}）</td>
+        <td>${escapeHtml(battle.event_b_title)}（${escapeHtml(battle.event_b_organization_name || 'チーム未設定')}）</td>
+        <td>
+          <div class="battle-url-row">
+            <input type="text" readonly value="${escapeHtml(url)}">
+            <button type="button" class="battle-copy-btn">コピー</button>
+          </div>
+        </td>
+        <td class="action-cell"></td>
+      `;
+
+      tr.querySelector('.battle-copy-btn').addEventListener('click', async (e) => {
+        const btn = e.target;
+        try {
+          await navigator.clipboard.writeText(url);
+          const original = btn.textContent;
+          btn.textContent = 'コピーしました';
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch (err) {
+          // クリップボードAPIが使えない環境（非HTTPS等）向けのフォールバック
+          window.prompt('以下のURLを手動でコピーしてください', url);
+        }
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '削除';
+      deleteBtn.classList.add('danger');
+      deleteBtn.addEventListener('click', () => handleBattleDelete(battle));
+      tr.querySelector('.action-cell').appendChild(deleteBtn);
+
+      battlesTableBody.appendChild(tr);
+    });
+  }
+
+  async function loadBattles() {
+    try {
+      const battles = await apiFetch('/event-battles');
+      renderBattlesTable(battles);
+      clearError();
+    } catch (e) {
+      showError('対抗戦ペア一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  battleCreateForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (battleEventA.value && battleEventA.value === battleEventB.value) {
+      showError('試合Aと試合Bには異なる試合を選択してください');
+      return;
+    }
+
+    try {
+      await apiFetch('/event-battles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: battleLabel.value.trim() || null,
+          event_a_id: battleEventA.value,
+          event_b_id: battleEventB.value,
+        }),
+      });
+      clearError();
+      battleLabel.value = '';
+      await loadBattles();
+    } catch (e2) {
+      if (e2.status === 400 && e2.body && e2.body.error === 'SAME_EVENT') {
+        showError('試合Aと試合Bには異なる試合を選択してください');
+      } else {
+        showError('対抗戦ペアの登録に失敗しました: ' + e2.message);
+      }
+    }
+  });
+
+  async function handleBattleDelete(battle) {
+    const ok = confirm(`対抗戦ペア「${battle.label || '(ラベル無し)'}」を削除しますか？（元の試合自体は削除されません）`);
+    if (!ok) return;
+
+    try {
+      await apiFetch(`/event-battles/${battle.id}`, { method: 'DELETE' });
+      clearError();
+    } catch (e) {
+      showError('対抗戦ペアの削除に失敗しました: ' + e.message);
+    } finally {
+      await loadBattles();
+    }
+  }
+
+  loadBattles();
 })();
 </script>
 </body>

@@ -798,6 +798,123 @@ async function importDevices(macAddresses) {
   return rows.map((r) => r.mac_address);
 }
 
+// =============================================================
+// 2チーム対抗応援合戦（event_battles）機能
+// events テーブルには一切変更を加えず、既存の2イベントをペアリングするだけの
+// 別テーブル（migrations/011_add_event_battles.sql）として実装する。
+// =============================================================
+
+/**
+ * event_battles作成・更新時の共通チェック：eventIdが実在するか確認する。
+ * 無ければEVENT_NOT_FOUNDを投げる（呼び出し元で400にマッピングする）。
+ */
+async function assertEventExists(eventId) {
+  const { rows } = await db.query(`SELECT id FROM events WHERE id = $1`, [eventId]);
+  if (!rows[0]) {
+    const err = new Error('event not found');
+    err.code = 'EVENT_NOT_FOUND';
+    throw err;
+  }
+}
+
+/**
+ * 管理画面：対抗戦ペアを新規登録する。
+ * event_a_id / event_b_id とも実在確認する（無ければEVENT_NOT_FOUND）。
+ * 同一イベント同士の指定はDBのCHECK制約でも弾かれるが、エラーメッセージを
+ * 分かりやすくするためアプリ側でも先にSAME_EVENTとして弾く。
+ */
+async function createEventBattle({ label, eventAId, eventBId }) {
+  if (eventAId === eventBId) {
+    const err = new Error('event_a_id and event_b_id must be different');
+    err.code = 'SAME_EVENT';
+    throw err;
+  }
+  await assertEventExists(eventAId);
+  await assertEventExists(eventBId);
+
+  const { rows } = await db.query(
+    `INSERT INTO event_battles (label, event_a_id, event_b_id)
+     VALUES ($1, $2, $3)
+     RETURNING id, label, event_a_id, event_b_id, created_at`,
+    [label || null, eventAId, eventBId]
+  );
+  return rows[0];
+}
+
+/**
+ * 管理画面：対抗戦ペア一覧を取得。一覧表示用に両イベントのtitle・組織名もJOINして返す。
+ * events.hidden_at（非表示化）で絞り込みはしない：ペアリング自体の管理台帳のため、
+ * 元イベントが非表示化されても一覧からは消さず、表示側でstatus等を見て判断できるようにする。
+ */
+async function listEventBattles() {
+  const { rows } = await db.query(
+    `SELECT eb.id, eb.label, eb.created_at,
+            ea.id AS event_a_id, ea.title AS event_a_title, ea.status AS event_a_status,
+            oa.name AS event_a_organization_name,
+            ebv.id AS event_b_id, ebv.title AS event_b_title, ebv.status AS event_b_status,
+            ob.name AS event_b_organization_name
+     FROM event_battles eb
+     JOIN events ea  ON ea.id  = eb.event_a_id
+     JOIN events ebv ON ebv.id = eb.event_b_id
+     LEFT JOIN organizations oa ON oa.id = ea.organization_id
+     LEFT JOIN organizations ob ON ob.id = ebv.organization_id
+     ORDER BY eb.created_at DESC`
+  );
+  return rows;
+}
+
+/**
+ * 管理画面：対抗戦ペアを削除する（物理削除）。
+ * event_battlesは他テーブルから参照されない末端テーブルであり、events/cheer_logsのような
+ * SET NULL孤児レコード問題（spec.md 11.7章）が起きないため、非表示化方式は採らない。
+ * 対象が無い場合はnullを返す（呼び出し元で404にマッピングする）。
+ */
+async function deleteEventBattle(battleId) {
+  const { rows } = await db.query(
+    `DELETE FROM event_battles WHERE id = $1 RETURNING id`,
+    [battleId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * スコア表示API：対抗戦ペアのメタ情報（両イベントの組織情報含む）を取得。
+ * 無ければnull。status（live/paused/finished等）による絞り込みは行わない
+ * （停止中・終了後もその時点のcheer_logs集計をそのまま表示し続ける設計のため）。
+ */
+async function getEventBattleMeta(battleId) {
+  const { rows } = await db.query(
+    `SELECT eb.id, eb.label,
+            ea.id AS event_a_id, ea.title AS event_a_title,
+            oa.id AS org_a_id, oa.name AS org_a_name, oa.logo_url AS org_a_logo_url, oa.color AS org_a_color,
+            ebv.id AS event_b_id, ebv.title AS event_b_title,
+            ob.id AS org_b_id, ob.name AS org_b_name, ob.logo_url AS org_b_logo_url, ob.color AS org_b_color
+     FROM event_battles eb
+     JOIN events ea  ON ea.id  = eb.event_a_id
+     JOIN events ebv ON ebv.id = eb.event_b_id
+     LEFT JOIN organizations oa ON oa.id = ea.organization_id
+     LEFT JOIN organizations ob ON ob.id = ebv.organization_id
+     WHERE eb.id = $1`,
+    [battleId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * スコア表示API：指定イベントのcheer_logs.intensity合計を取得。
+ * getAllTimeCheerTotal（デバイス単位・全期間）と同じSUMパターンをevent単位に絞ったもの。
+ * 行が無い場合はSUMがNULLになるためCOALESCEで0に丸める。
+ */
+async function getEventIntensityTotal(eventId) {
+  const { rows } = await db.query(
+    `SELECT COALESCE(SUM(intensity), 0) AS total_intensity
+     FROM cheer_logs
+     WHERE event_id = $1`,
+    [eventId]
+  );
+  return parseInt(rows[0].total_intensity, 10);
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -830,4 +947,9 @@ module.exports = {
   bulkUpdateDevicesByFilter,
   createDeviceAdmin,
   importDevices,
+  createEventBattle,
+  listEventBattles,
+  deleteEventBattle,
+  getEventBattleMeta,
+  getEventIntensityTotal,
 };

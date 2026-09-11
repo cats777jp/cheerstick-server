@@ -220,3 +220,64 @@ exports.hide = async (req, res, next) => {
     next(err);
   }
 };
+
+// ==========================================================
+// 対抗戦ペア（event_battles）管理：2チーム対抗応援合戦機能
+// ==========================================================
+
+/**
+ * 管理画面：対抗戦ペア一覧を取得。
+ */
+exports.listBattles = async (req, res, next) => {
+  try {
+    const battles = await cheerQueries.listEventBattles();
+    res.json(battles);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * 管理画面：対抗戦ペアを新規登録する。
+ * label・event_a_id・event_b_idを受け取る。event_a_id/event_b_idは必須、labelは任意。
+ */
+exports.createBattle = async (req, res, next) => {
+  const { label, event_a_id: eventAId, event_b_id: eventBId } = req.body || {};
+
+  if (!eventAId || !eventBId) {
+    return res.status(400).json({ error: 'event_a_id and event_b_id are required' });
+  }
+
+  try {
+    const created = await cheerQueries.createEventBattle({ label: label || null, eventAId, eventBId });
+    res.status(201).json(created);
+  } catch (err) {
+    if (err.code === 'SAME_EVENT') {
+      return res.status(400).json({ error: 'SAME_EVENT' });
+    }
+    if (err.code === 'EVENT_NOT_FOUND') {
+      return res.status(400).json({ error: 'EVENT_NOT_FOUND' });
+    }
+    next(err);
+  }
+};
+
+/**
+ * 管理画面：対抗戦ペアを削除する（物理削除。詳細はcheerstickQueries.deleteEventBattleのコメント参照）。
+ */
+exports.deleteBattle = async (req, res, next) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) {
+    return res.status(400).json({ error: 'INVALID_ID' });
+  }
+
+  try {
+    const deleted = await cheerQueries.deleteEventBattle(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'BATTLE_NOT_FOUND' });
+    }
+    res.status(200).json(deleted);
+  } catch (err) {
+    next(err);
+  }
+};

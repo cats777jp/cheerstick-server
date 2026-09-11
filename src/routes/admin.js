@@ -26,6 +26,11 @@ router.patch('/organizations/:id', adminEventController.updateOrganization);
 
 router.get('/categories', adminDeviceController.listCategories);
 
+// 対抗戦ペア（event_battles）管理：2チーム対抗応援合戦機能（2026-09-11新設）
+router.get('/event-battles', adminEventController.listBattles);
+router.post('/event-battles', adminEventController.createBattle);
+router.delete('/event-battles/:id', adminEventController.deleteBattle);
+
 // B-5（devices管理機能、2026-08-19新設）
 // /devices/bulk・/devices/import は /devices/:id より前に置くこと
 // （後ろに置くと ":id" が "bulk"/"import" を文字列として拾ってしまう）。
