@@ -714,13 +714,21 @@
   }
 
   // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加、
-  // 2026-09-14に状態遷移ルール適用を追加）。
+  // 2026-09-14に状態遷移ルール適用を追加、同日中に「停止」のlive限定を追加）。
   // 選択中の試合IDに対し、既存のPATCH /events/:id/statusを1件ずつ順番に呼び出すだけ
   // （バックエンドAPIの新規追加は無し）。
   //
-  // 状態遷移ルールは individual ボタン（actionButtonsFor()）と全く同じ関数の結果を
-  // そのまま使う（ルールを二重管理して食い違うことを避けるため）。個別ボタンとして
+  // 状態遷移ルールは基本的に individual ボタン（actionButtonsFor()）と全く同じ関数の
+  // 結果をそのまま使う（ルールを二重管理して食い違うことを避けるため）。個別ボタンとして
   // 表示されない遷移（例：finished→liveへの直接遷移）は、一括操作でも実行しない。
+  //
+  // ただし一括「停止」（nextStatus === 'paused'）のみ例外的に、対象をstatus==='live'の
+  // 行に限定する特別扱いをしている。actionButtonsFor()ベースの判定だけに頼ると、
+  // finishedの試合も（「終了を取り消す」と同じpaused遷移のため）許可されてしまい、
+  // 「停止」というラベルの意図（live中の試合を一時中断する）と実際の挙動
+  // （finishedの試合を復活させてしまう）がずれる。個別ボタンの「終了を取り消す」は
+  // 単発ボタンでのみ実行可能なままとし、一括操作からは除外する。
+  //
   // 対象外の行はAPIを呼ばずスキップし、失敗行と同様にチェックを残したまま
   // 「対象外（現在の状態では実行できません）」を表示する。
   //
@@ -745,7 +753,11 @@
         continue;
       }
 
-      const isAllowedTransition = actionButtonsFor(event).some((btnDef) => btnDef.nextStatus === nextStatus);
+      // 一括「停止」だけはactionButtonsFor()の遷移先一致に頼らず、
+      // 現在の状態がliveの行にのみ限定する（上記コメント参照。事故防止のため）。
+      const isAllowedTransition = nextStatus === 'paused'
+        ? event.status === 'live'
+        : actionButtonsFor(event).some((btnDef) => btnDef.nextStatus === nextStatus);
       if (!isAllowedTransition) {
         const statusLabel = STATUS_LABELS[event.status] || event.status;
         eventRowErrors.set(id, `対象外（現在の状態「${statusLabel}」ではこの操作は実行できません）`);
