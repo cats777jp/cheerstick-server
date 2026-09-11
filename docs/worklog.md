@@ -4,6 +4,151 @@
 
 ---
 
+## 2026-09-11 「2チーム対抗応援合戦」機能の設計調査・実装（フェーズ1〜5、ローカル確認まで）
+
+### 背景
+
+KMT様提案中の新機能「2チーム対抗応援合戦」について、前段の調査4回
+（cheer_logs書き込み実態、eventsスキーマとhome/away化の影響範囲、cheer_summariesの
+再調査、負荷試験実績の有無、通算応援量の集計ロジック、停止ボタンの実装確認）を
+踏まえ、設計・実装まで実施した。作業は`feature/reference-data`ブランチ上、
+本番デプロイは今回行わず、ローカル・開発環境での動作確認までを対象とした
+（KMT様指示）。
+
+### 実施したこと
+
+**フェーズ1：`event_battles`テーブル新設**
+- `migrations/011_add_event_battles.sql`。`events`テーブルには一切変更を加えず、
+  既存の2イベントをペアリングする別テーブルとして実現（先行調査でhome/away列追加は
+  影響範囲が大きいと判断し見送り済みの方針を踏襲）
+- `ON DELETE CASCADE`を採用（event_battlesは他テーブルから参照されない末端テーブルで
+  あり、11.7章の孤児レコード問題とは無関係と判断）
+
+**フェーズ2：スコア集計API**
+- `GET /api/v1/event-battles/:id/score`（`src/routes/eventBattles.js`・
+  `src/controllers/eventBattleController.js`）
+- `src/db/cheerstickQueries.js`に`createEventBattle`/`listEventBattles`/
+  `deleteEventBattle`/`getEventBattleMeta`/`getEventIntensityTotal`を追加
+- 既存の`getAllTimeCheerTotal`と同じSUMパターンをevent単位に絞ったのみで、
+  statusによる分岐は行わない設計（指示通り）
+
+**フェーズ3：管理画面「対抗戦ペア管理」**
+- `public/admin/index.html`に「対抗戦ペア登録」「対抗戦ペア一覧」カードを追加
+- 管理API：`GET/POST /admin/event-battles`、`DELETE /admin/event-battles/:id`
+  （`src/controllers/adminEventController.js`に追加、`src/routes/admin.js`に登録）
+- 一覧の各行にスクリーン表示用URL（`battle.html?battle_id=`）をコピーできるボタンを設置
+
+**フェーズ4：一括開始/停止/終了ボタン**
+- `public/admin/index.html`「試合一覧」に選択チェックボックス＋一括ボタン3種を追加。
+  バックエンドAPIの新規追加は無く、既存の`PATCH /events/:id/status`を選択件数分
+  順番に呼ぶのみ
+- 部分成功を許容：成功した行は選択解除、失敗した行は選択を残しエラー内容を表示
+
+**フェーズ5：対抗戦スクリーン表示ページ**
+- `public/battle.html`を新設。`battle_id`をURLパラメータで受け取り、スコアAPIを
+  3秒間隔でポーリング。左右にチーム名・ロゴ（無ければ頭文字アバター）・チームカラー・
+  応援量ゲージ（両者のうち大きい方を100%とする相対表示）を表示
+
+**ドキュメント**
+- `docs/spec.md`：7章のマイグレーション一覧に009・010・011を追加、8.0「管理画面の
+  状態遷移ボタン」（記載漏れの補記）、8.4「対抗戦ペア管理・スコアAPI」、9.3「管理画面：
+  対抗戦ペア管理・一括操作」、9.4「対抗戦スクリーン表示ページ」を新設
+- 単独コミット（`docs: `プレフィックス）でコード変更とは分離してコミットする
+
+### 動作確認の方法と結果（本番DB・本番環境には一切接続していない）
+
+**本番/staging DBへの接続について**：本セッションではSSH接続（本番EC2への読み取り専用
+接続を含む）が権限クラシファイアにより全てブロックされ、staging DBへのSSHトンネルも
+含め一切のSSH実行ができなかった。そのため、cheer_logsの実データ件数確認（前回調査分）
+も含め、本番・staging DBへの接続を伴う確認は今回一切実施できていない。
+
+**代替手段：`pg-mem`（インメモリPostgres互換エンジン）による検証**
+- `npm install --no-save --no-package-lock pg-mem`でローカルに一時導入し、検証後
+  `npm uninstall`で削除（`package.json`/`package-lock.json`は無変更、`git status`で確認済み）
+- `migrations/001〜011`を順に適用できることを確認（`COMMENT ON`・トリガー関連の一部
+  statementはpg-memの構文サポート制限によりテストスクリプト側でスキップしたが、
+  event_battlesを含む全テーブル・FK・CHECK制約の作成自体は成功）
+- `cheerstickQueries.js`の新規関数（createEventBattle/listEventBattles/
+  getEventBattleMeta/getEventIntensityTotal/deleteEventBattle）を単体で実行し、
+  正常系・SAME_EVENT・EVENT_NOT_FOUND・BATTLE_NOT_FOUND・DB CHECK制約違反・
+  ON DELETE CASCADEの発火をいずれもassertで確認（全件PASS）
+- 実際の`src/app.js`をHTTPサーバーとして起動し、`POST/GET/DELETE /api/v1/admin/
+  event-battles`と`GET /api/v1/event-battles/:id/score`を実HTTPリクエストで確認。
+  既存の`/api/v1/admin/events`・`/organizations`が引き続き正常応答することも確認し、
+  今回の変更が既存機能を壊していないことを検証（回帰確認）
+- `live`→`paused`遷移後もスコアAPIの値が変わらず表示され続けることを確認
+
+**ブラウザでの確認（claude-in-chrome、上記pg-mem環境をローカルサーバーとして起動）**
+- 管理画面：試合一覧へのチェックボックス列・一括ボタン（開始/停止/終了）の表示、
+  「対抗戦ペア登録」フォームのプルダウンにチーム名・状態が正しく表示されること、
+  登録後に「対抗戦ペア一覧」へ反映されることを確認
+- 一括操作の部分成功を実際に再現して確認：同一組織（V・ファーレン長崎）で
+  既に`live`の試合がある状態で、同組織の`scheduled`試合と別組織の`live`試合を
+  同時に選択して一括「開始」を実行 → 別組織側は成功して選択解除、同組織側は
+  `LIVE_EVENT_CONFLICT`（409）で失敗し、選択を保持したまま行に赤字で
+  「同じチームでlive中の試合があります（ホーム開幕戦）」が表示されることを確認
+  （スクリーンショットで視覚確認済み）
+- `battle.html`：登録済みbattle_idで実際にスコア画面を表示し、応援強度の数値・
+  相対ゲージ幅・チームカラー・頭文字アバター（ロゴ未設定時）が意図通り描画されることを
+  確認。3秒ポーリングにより表示中の「最終更新」時刻が実際に更新されていくことも確認
+- 異常系：`battle_id`未指定時の案内メッセージ、存在しない`battle_id`指定時の
+  「対抗戦ペアが見つかりません」表示をそれぞれ確認
+- 両画面ともコンソールエラー無し（`read_console_messages`で確認）
+
+**確認できていないこと（申し送り）**
+- 本番・staging DBに接続しての動作確認（SSH経由の手段が今回のセッションでは
+  使えなかったため）
+- 実機（BLEデバイス・ネイティブアプリ）を使った一連の応援→スコア反映の確認
+- `battle.html`の対抗戦スクリーンとしての演出面（ゲージ上限値の扱い、色の対比、
+  大画面での見え方等）はデザイン調整前の最小実装のまま
+
+### 変更したファイル
+
+- `migrations/011_add_event_battles.sql`（新規）
+- `src/db/cheerstickQueries.js`（event_battles関連関数を追加）
+- `src/controllers/eventBattleController.js`（新規、公開スコアAPI）
+- `src/routes/eventBattles.js`（新規）
+- `src/routes/index.js`（`/event-battles`ルート登録）
+- `src/controllers/adminEventController.js`（対抗戦ペアCRUDを追加）
+- `src/routes/admin.js`（対抗戦ペアCRUDルート登録）
+- `public/admin/index.html`（一括操作・対抗戦ペア管理UIを追加）
+- `public/battle.html`（新規、対抗戦スクリーン表示ページ）
+- `docs/spec.md`（7章・8.0・8.4・9.3・9.4を新設。詳細は同ファイルの変更履歴を参照）
+- `docs/worklog.md`（本エントリ）
+
+### 判明した事実 / 想定と違ったこと
+
+- 本セッションでは、本番EC2へのSSH（読み取り専用の確認目的も含む）が権限クラシファイアに
+  より一貫してブロックされた。前段の調査4回の一部（cheer_logs実データ件数の確認）も
+  含め、本番・staging DBへ接続しての確認は今回のセッション内では実施不可能だった。
+  `pg-mem`によるローカル代替検証で機能面はカバーしたが、実データでの検証は
+  次回、SSH接続が可能な環境・セッションで改めて実施する必要がある
+- 対抗戦スコアAPI（`GET /api/v1/event-battles/:id/score`）は`/api/v1/admin/`配下に
+  置いていないため、本番nginxの管理API用IPアドレス制限（`runbook.md`参照）が
+  適用されない設計になっている。対抗戦スクリーンを会場等の任意端末で表示する
+  ために意図的にそうしたが、battle_id（UUID）を知っていれば誰でも閲覧できる状態に
+  なる点は、本番反映前にKMT様の確認が必要（`docs/spec.md` 8.4章に明記済み）
+
+### 次回への申し送り（優先度順）
+
+1. 本番・staging DBへ接続しての動作確認（本セッションでSSHが使えなかったため未実施）。
+   確認できたらローカル確認と合わせて本番デプロイの判断へ進める
+2. 対抗戦スコアAPIがnginxのIP制限対象外である点について、本番反映前にKMT様の
+   意思確認を行う（公開のままでよいか、何らかの追加保護を入れるか）
+3. `public/battle.html`のデプロイ先（`/var/www/cheerstick-app/`）への配置は、
+   デプロイ手順（runbook.md）の2箇所デプロイ対象への追加が必要（今回は本番反映自体を
+   行っていないため未対応）
+4. 前回までの残課題（Vanstoneブリッジ仕様、管理API認証追加、負荷試験、
+   静的ファイル2箇所デプロイ恒久対応、実装1の再開、`cheerstick-ws`の要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 本番・staging DBでの動作確認（上記申し送り1、継続）
+- 対抗戦スコアAPIの認証・IP制限方針の確定（上記申し送り2、継続）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-06 電池残量警告ロジック変更（誤発報対策）・本番反映
 
 ### 背景

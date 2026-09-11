@@ -260,6 +260,9 @@ DB: `cheerstick_production` / ユーザー: `cheerstick`
 006_event_status.sql                （events.status へ CHECK制約）
 007_organization_color.sql          （organizations.color 列）
 008_target_profile_text.sql         （targets.profile_text 列、2026-07-25適用）
+009_add_device_is_demo.sql          （devices.is_demo 列、本番未適用。docs/runbook.md参照）
+010_add_events_hidden_at.sql        （events.hidden_at 列。11.3章参照）
+011_add_event_battles.sql           （event_battles テーブル新設。8.4章参照。2026-09-11実装・ローカル確認のみ、本番未反映）
 ```
 
 ### events.status
@@ -279,6 +282,32 @@ PATCH /api/v1/admin/events/:id/status
      移行を検討する（設定箇所は docs/runbook.md 参照）。
      URLを外部に一切共有しないこと（IP制限のみでは共有時のリスクは残るため）。
 ```
+
+### 8.0 管理画面の状態遷移ボタン（記載漏れの補記、2026-09-11追記）
+
+> 本節は新規仕様ではなく、2026-07-30の管理画面新規実装（コミット`f24289b`）時点から
+> 存在していた挙動の記載漏れを補うもの。2026-09-11、「2チーム対抗応援合戦」機能の
+> 設計検討に伴う調査で、管理画面の「停止」ボタンについて本章・9章に説明が無いことが
+> 判明したため追記する（`docs/worklog.md`2026-09-11エントリ参照）。
+
+`PATCH /api/v1/admin/events/:id/status`は、管理画面（`public/admin/index.html`）の
+以下のボタンからすべて共通で呼ばれる（エンドポイント自体は1本のみ）。
+
+| 現在の状態 | 表示されるボタン | 遷移先 | 確認ダイアログ |
+|---|---|---|---|
+| `scheduled` | 開始 | `live` | 無 |
+| `live` | 停止 | `paused` | 無 |
+| `live` | 終了 | `finished` | 有 |
+| `paused` | 再開 | `live` | 無 |
+| `paused` | 終了 | `finished` | 有 |
+| `finished` | 終了を取り消す（8.1参照） | `paused` | 有 |
+
+- 「停止」は試合を一時中断する操作であり、4.3章の判定ロジックにより`paused`中は
+  `count`受信自体は継続するが`cheer_logs`への書き込みはスキップされる（`scheduled`と同じ扱い）
+- `paused`→`live`遷移時のみ、同一organizationの他イベントとの`LIVE_EVENT_CONFLICT`検証
+  （11.2章）を経由する（`updateEventStatus`が`status==='live'`の場合のみチェックするため）
+- CHECK制約（7章）上の`paused`は2026-07-23の応援量カウント機能実装時点から存在する値であり、
+  8.1（2026-08-19実装）より前から使われている
 
 ### 8.1 `finished`からの復帰（B-1、2026-08-19実装・2026-09-06本番反映＋実機検証済み）
 
@@ -335,6 +364,94 @@ PATCH /admin/organizations/:id
 記載が無いため、`POST`時に未指定なら既存データ（V・ファーレン長崎）と同じ
 `'football_club'`をサーバー側デフォルト値として設定する（UI上の入力項目としては
 非公開）。アプリコードからは`type`列を参照する箇所は無い。
+
+### 8.4 対抗戦ペア管理・スコアAPI（2チーム対抗応援合戦機能、2026-09-11実装・ローカル確認のみ・本番未反映）
+
+KMT様提案の新機能。既存の`events`テーブルには一切変更を加えず（home/away化は見送り）、
+2つの既存イベントをペアリングする新規テーブル`event_battles`
+（`migrations/011_add_event_battles.sql`）で実現した。
+
+```sql
+event_battles (
+  id, label, event_a_id, event_b_id, created_at
+)
+-- event_a_id/event_b_id は events(id) を参照、ON DELETE CASCADE
+-- CHECK (event_a_id <> event_b_id)
+```
+
+- `event_a_id`＝画面左側、`event_b_id`＝画面右側として扱う（アプリ側の慣例。DB上の区別は無い）
+- ON DELETE CASCADEとした判断：event_battlesを参照する子テーブルは無い末端テーブルであり、
+  11.7章の孤児レコード問題とは無関係。ただし現状`events`の物理削除経路自体が実装に
+  存在しない（削除操作は`hideEvent()`によるhidden_at設定のみ）ため、通常運用でこの
+  CASCADEが発火する場面は無い
+
+**管理API（`PATCH /events/:id/status`等と同じくnginx側IP制限のみ、認証追加なし）**
+
+```
+GET /api/v1/admin/event-battles
+  一覧取得。両イベントのtitle・組織名をJOINして返す
+
+POST /api/v1/admin/event-battles
+  body: { label?, event_a_id, event_b_id }
+  event_a_id・event_b_idは必須。実在しなければ400 { error: "EVENT_NOT_FOUND" }
+  同一イベントの指定は400 { error: "SAME_EVENT" }（DBのCHECK制約でも二重に防止）
+
+DELETE /api/v1/admin/event-battles/:id
+  物理削除（非表示化ではない。event_battles自体は「ペアリングの台帳」であり、
+  元のevents/cheer_logsを一切変更しないため11.7章のような孤児レコード問題が起きない）
+  対象が無ければ404 { error: "BATTLE_NOT_FOUND" }
+```
+
+**公開スコアAPI（★注意：`/api/v1/admin/`配下ではないため、上記admin系エンドポイントに
+かかっているnginx IPアドレス制限は適用されない）**
+
+```
+GET /api/v1/event-battles/:id/score
+  認証：アプリケーションレベルの認証は追加しない（B-3の方針を踏襲）。
+  ただし本エンドポイントはadmin配下ではないため、runbook.mdの管理API用IP制限の
+  対象外であり、意図的にIP制限の外に置いている（対抗戦スクリーンを会場等の
+  任意の端末で表示する必要があるため）。battle_id（UUID）を知っていれば誰でも
+  閲覧できる状態であり、3章のreference機能（MACアドレス直指定方式）と同種の
+  「推測困難なIDによる簡易的な保護」に留まる。本番反映前に運用上許容できるか
+  KMT様の確認が必要
+
+  レスポンス例：
+  {
+    "battle_id": "...", "label": "...",
+    "team_a": {
+      "event_id": "...", "event_title": "...",
+      "organization": { "id", "name", "logo_url", "color" } | null,
+      "total_intensity": 12345
+    },
+    "team_b": { ...同様... },
+    "updated_at": "..."
+  }
+
+  集計方法：getAllTimeCheerTotal（3.3章・reference機能）と同じSUMパターンを
+  event単位に絞ったもの（SELECT COALESCE(SUM(intensity),0) FROM cheer_logs
+  WHERE event_id = $1）。durationやcheer_countは含めない（通算応援量の集計と同様、
+  intensity合計のみを「応援量」として扱う既存方針に合わせた）
+
+  status（live/paused/finished等）による分岐は行わない：停止中・終了後もその時点の
+  cheer_logs集計をそのまま返し続ける。4.3章の判定ロジック側でstatus='live'以外は
+  そもそもcheer_logsへ書き込まれないため、本APIで重ねて絞り込む必要が無いための設計
+```
+
+**動作確認（2026-09-11、ローカル・pg-mem疑似DBによる検証。実DBでの検証は別途必要）**
+
+- migrations 001〜011を通しで適用できることを確認
+- createEventBattle/listEventBattles/getEventBattleMeta/getEventIntensityTotal/
+  deleteEventBattleの単体動作、SAME_EVENT・EVENT_NOT_FOUND・BATTLE_NOT_FOUND各エラー、
+  ON DELETE CASCADEの発火を確認
+- 実際のExpressアプリ（`src/app.js`）をHTTP経由で起動し、管理API（作成・一覧・削除）と
+  公開スコアAPIを一気通貫で確認。既存の`/api/v1/admin/events`・`/organizations`が
+  引き続き正常応答することも確認（回帰無し）
+- 試合を`live`→`paused`にしてもスコアAPIの値が変わらず表示され続けることを確認
+- 管理画面（`public/admin/index.html`）・対抗戦スクリーン（`public/battle.html`）を
+  ブラウザで実際に操作し、対抗戦ペアの登録・一覧・URL・削除、一括開始/停止/終了の
+  部分成功（同一組織の同時live禁止に抵触した行にエラー表示が残ることを含む）、
+  スコア画面のポーリング表示更新まで確認（詳細は`docs/worklog.md`同日エントリ参照）
+- 本番DBでの動作確認・本番デプロイは未実施（KMT様指示により今回は対象外）
 
 ## 9. フロントエンド（public/index.html）
 
@@ -416,6 +533,49 @@ BATTERY_LOW_THRESHOLD`の状態を検知した時刻を`batteryLowSince`とし�
 
 - BLE切断時のサーバー通知（`type: "ble_disconnect"`）は見送り。クライアント側表示のみ
 - 実機（ネイティブアプリ）での動作テストはVanstone側ブリッジ実装完了後でないと不可
+
+### 9.3 管理画面：対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11実装・ローカル確認のみ）
+
+`public/admin/index.html`「試合一覧」カードに以下を追加した（バックエンドAPIの新規追加は
+無く、既存の`PATCH /events/:id/status`をループで呼ぶのみ）。
+
+- 各行にチェックボックスを1個追加、一覧上部に「開始」「停止」「終了」の一括ボタンを設置
+- チェック済みの試合IDへ、押されたボタンに対応する`status`変更APIを1件ずつ順番に呼び出す。
+  **現在のstatusに応じた遷移可否のチェックは行わない**（呼び出し先APIの検証にそのまま委ねる。
+  例えば`finished`の試合を選んで一括「開始」を押すと`live`へ直接遷移する。8.0章の単発ボタンが
+  状態ごとに出す遷移とは異なる経路になり得るため、運用上の注意点として明記する）
+- 部分成功を許容：成功した行はチェックを外し一覧を更新、失敗した行はチェックを残し
+  その行にエラー内容（例：「同じチームでlive中の試合があります」）を表示する。
+  失敗した行は個別の単発ボタンで手動対応できる
+- 確認ダイアログは8.0章の単発ボタンの使い分け（開始/停止/再開は無・終了は有）を踏襲し、
+  一括「終了」時のみ選択件数を含む確認ダイアログを1回表示する
+
+新設カード「対抗戦ペア登録」「対抗戦ペア一覧」を試合一覧の直後に追加：
+
+- 登録フォーム：既存の試合一覧から試合A・試合Bをプルダウンで選択し、任意のラベルを付けて
+  `POST /admin/event-battles`を呼ぶ
+- 一覧：登録済みペアを表示し、各行にスクリーン表示用URL
+  （`<APP_BASE>/battle.html?battle_id=<id>`）をテキスト入力＋「コピー」ボタンで提供。
+  `APP_BASE`はadmin.cheerstick.comとは別オリジンのapp.cheerstick.comを本番用に想定
+  （`public/index.html`が配信される先と同じ想定。9.1章参照）
+- 削除ボタンあり（`DELETE /admin/event-battles/:id`、物理削除。元の試合自体は削除されない）。
+  開始/終了ボタンとの連動は無い（ペアの登録・削除と試合の進行管理は独立）
+
+### 9.4 対抗戦スクリーン表示ページ `public/battle.html`（2チーム対抗応援合戦機能、2026-09-11新設・ローカル確認のみ）
+
+URLパラメータ`battle_id`を受け取り、`GET /api/v1/event-battles/:id/score`を3秒間隔で
+ポーリングして表示を更新する単独ページ（WebSocket接続は行わない）。
+
+- 表示内容：左に`team_a`、右に`team_b`のチーム名・ロゴ（`organizations.logo_url`。
+  無ければ`organizations.color`または`colorFor(id)`フォールバックによる頭文字アバター、
+  9.1章の空枠仕様と同じ考え方）・チームカラー・応援量ゲージ
+- ゲージは上限値を固定せず、両者のうち大きい方を100%とする相対表示（まず動くものを優先する
+  方針のためのシンプルな実装。演出の調整は別途）
+- `battle_id`未指定・`BATTLE_NOT_FOUND`（404）は致命エラーとして専用メッセージを表示。
+  一時的な通信断（fetch失敗）は直前の表示を保持したまま次回ポーリングへ継続し、
+  画面上部に再試行中である旨のバナーのみ表示する
+- 配置予定：`public/index.html`と同じ`/var/www/cheerstick-app/`配下
+  （runbook.md「デプロイ手順」の2箇所デプロイ対象に本ページも追加が必要。本番反映時に注意）
 
 ## 10. 未実施の検証
 
@@ -673,3 +833,4 @@ staging環境（`cheerstick_staging`、ポート3001）で実装・検証して�
 | 2026-08-18 | 6.2に追記：接続ログを本日中に実装・本番反映した旨を記録 | 同日の調査で判明した「connectの接続試行を記録するログが存在しない」状態を解消するため実装（`src/websocket/index.js`、コミット`d7e965c`）。既存記述（ログが存在しないという6.2の記載）は削除せず、対応済みである旨を追記で更新した。詳細は`docs/worklog.md`同日エントリ「WebSocket `connect` の接続ログを追加」参照 |
 | 2026-09-06 | 8.1「finishedからの復帰」、8.2「状態変更ログ」、8.3「管理API：チーム登録・編集」を新設、11.6に対応完了の追記 | B-1〜B-4（コミット`5734e54`、2026-08-19実装・2026-09-06本番反映＋実機検証完了）の仕様化。反映完了を待って追記する方針としていたため（2026-08-19付worklog参照）、本番反映・実機検証が完了した本日まとめて記載した。11.6「対応が必要な点」2.（状態遷移の見直し）は本対応で解消したが、1.（DELETE機能）は対象外で未実装のまま残ることを明記した |
 | 2026-09-06 | 9章の電池残量表示の記述を更新、9.2「電池残量警告の継続時間判定」を新設 | Vanstone様よりLED点灯時の瞬間的な電圧降下で電池残量警告が誤発報するとの指摘を受け、単発の瞬時値判定（volt <= 3.0Vの1回受信で即時表示）から、60秒間連続して閾値以下の場合のみ表示するタイムスタンプベースの継続時間判定へ変更（`public/index.html`）。実装・ローカルでの構文チェック／状態遷移の単体検証までは完了。実機検証・本番反映はKMT様側で実施するため未実施のまま |
+| 2026-09-11 | 7章のマイグレーション一覧に009・010・011を追加、8.0「管理画面の状態遷移ボタン」を新設、8.4「対抗戦ペア管理・スコアAPI」を新設、9.3「管理画面：対抗戦ペア管理・一括操作」・9.4「対抗戦スクリーン表示ページ」を新設 | KMT様提案の新機能「2チーム対抗応援合戦」の実装（`event_battles`テーブル新設、`migrations/011_add_event_battles.sql`）に伴う仕様化。既存の`events`テーブルには変更を加えず、events同士をペアリングする別テーブルとして実現した（先行の設計調査で home_organization_id/away_organization_id 追加は影響範囲が大きいと判断し見送り）。あわせて、同調査中に判明した「管理画面の停止/再開ボタン（2026-07-30実装）が8章・9章に一度も記載されていなかった」という既存の記載漏れも、新規仕様ではなく過去の記載漏れの補記として8.0に追加した。実装はローカル（pg-mem疑似DBによるmigration適用・DB関数・HTTP・ブラウザ確認）まで完了。本番DBでの確認・本番デプロイは未実施（KMT様指示により今回の対象外） |
