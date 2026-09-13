@@ -152,18 +152,26 @@ sudo cp public/admin/index.html /var/www/cheerstick-admin/     # ← 2026-07-31�
 pm2 restart cheerstick-server
 ```
 
+**追記（2026-09-13、public直下の公開ページが増えたことに伴う注記）：** `public/`直下には
+`index.html`の他に`battle.html`（2026-09-11新設）・`target-report.html`（2026-09-13新設）が
+あり、いずれも`/var/www/cheerstick-app/`配下へ個別に`cp`する必要がある
+（`docs/spec.md` 9.4・9.7章参照）。上記の基本コマンド例は`index.html`のみだが、これらの
+ページに変更・新規追加があった場合は同様に`sudo cp public/<ファイル名>
+/var/www/cheerstick-app/`を追加すること。
+
 **恒久対応（未実施）**：nginx の root を `cheerstick-server-new/public/` に統一するか、
 デプロイスクリプトでコピーを自動化する。
 
-### ⚠️ 管理画面は5ファイル構成になった（2026-09-13追記・未反映）
+### ⚠️ 管理画面は6ファイル構成になった（2026-09-13追記・未反映）
 
 **理由：** `public/admin/index.html`（試合管理・チーム管理・デバイス管理が同居する
 単一ファイル）を、ランチャー方式（index.html／events.html／masters.html／common.css／
-common.js の5ファイル）へ再構成した（`docs/spec.md` 9.5章参照）。**本項目は
-2026-09-13時点でローカル確認のみであり、本番デプロイは未実施。** 実際にデプロイする際は、
-上記の単一ファイルcp（`sudo cp public/admin/index.html /var/www/cheerstick-admin/`）では
-新設した4ファイルがコピーされず、旧デプロイ漏れ事故と同じ問題が再発する。デプロイ時は
-以下の5ファイルすべてを対象にすること。
+common.js の5ファイル）へ再構成した（`docs/spec.md` 9.5章参照）。同日中に選手・推し対象
+管理画面`targets.html`（`docs/spec.md` 9.6章）を追加し、6ファイル構成になった。
+**本項目は2026-09-13時点でローカル確認のみであり、本番デプロイは未実施。** 実際に
+デプロイする際は、単一ファイルcp（`sudo cp public/admin/index.html
+/var/www/cheerstick-admin/`）だけでは新設した5ファイルがコピーされず、旧デプロイ漏れ
+事故と同じ問題が再発する。デプロイ時は以下の6ファイルすべてを対象にすること。
 
 ```bash
 cd /home/ubuntu/cheerstick-server-new
@@ -171,13 +179,14 @@ git pull
 sudo cp public/admin/index.html    /var/www/cheerstick-admin/
 sudo cp public/admin/events.html   /var/www/cheerstick-admin/
 sudo cp public/admin/masters.html  /var/www/cheerstick-admin/
+sudo cp public/admin/targets.html  /var/www/cheerstick-admin/
 sudo cp public/admin/common.css    /var/www/cheerstick-admin/
 sudo cp public/admin/common.js     /var/www/cheerstick-admin/
 pm2 restart cheerstick-server
 ```
 
 反映確認は下記「★必須：コピー後は『反映されたこと』をdiffで確認する」の方針に倣い、
-5ファイルすべてに対して`diff`を実行してから完了とすること。
+6ファイルすべてに対して`diff`を実行してから完了とすること。
 
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 

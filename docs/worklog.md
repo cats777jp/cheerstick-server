@@ -4,6 +4,121 @@
 
 ---
 
+## 2026-09-13 選手データ管理UI・チーム別/選手別応援集計画面の追加
+
+### 背景
+
+KMT様指示により「選手データ管理UI」（targets管理画面）と「チーム別・選手別の応援集計
+画面」を追加。フェーズ0（実装前調査）→フェーズ1（管理UI）→フェーズ2（集計画面）の順に
+実施。`feature/reference-data`ブランチのまま、本番デプロイは行っていない。
+
+### 実施したこと（フェーズ0：実装前調査）
+
+1. `targets.type`の決め打ち判定：`src/`配下は`ORDER BY (type = 'mascot') DESC`
+   （`listTargetsByOrganization`）の1箇所のみ、`public/index.html`は表示ラベル分岐2箇所
+   （`t.type === 'mascot' ? 'マスコット' : ...`）。いずれも表示上の特別扱いに留まり、
+   実装の妨げにならないと判断
+2. `devices.current_target_id`の外部キー制約：本番DBの`pg_constraint`を読み取り専用で
+   確認し、`ON DELETE SET NULL`であることを確認（`cheer_logs.target_id`も同様）
+3. `public/index.html`の「チーム選択→推し選手選択」UI実装有無：**調査の結果、
+   既に完全に実装済みであることが判明した。** `renderTeamList()`（`select_team`送信）・
+   `renderPlayerList()`（`set_oshi`送信）・`renderConnect()`内の`team_selection`/
+   `player_selection`状態分岐が揃っており、追加のWebView側実装は不要と判断した
+
+想定外の問題は見つからなかったため、フェーズ1・2に進んだ。
+
+### 実施したこと（フェーズ1：選手データ管理UI）
+
+- バックエンド：`src/db/cheerstickQueries.js`に`listTargetsAdmin`・`createTargetAdmin`・
+  `updateTargetAdmin`・`deleteTargetAdmin`を追加（`assertOrganizationExists`は既存関数を
+  再利用）。`src/controllers/adminTargetController.js`を新規作成し、
+  `src/routes/admin.js`に`GET/POST/PATCH/DELETE /targets`を追加
+- DELETE時のガード：`devices.current_target_id`・`cheer_logs.target_id`の参照有無を
+  事前確認し、参照がある場合は409 `TARGET_IN_USE`でブロックする実装とした
+  （11.7章と同種の孤児レコード化を防ぐため）
+- フロントエンド：`public/admin/targets.html`を新規作成（`masters.html`と同じ構成：
+  新規登録フォーム＋一覧＋編集モーダル）、ランチャー（`index.html`）に
+  「選手・推し対象管理」のリンクカードを追加
+
+### 実施したこと（フェーズ2：チーム別・選手別の応援集計画面）
+
+- バックエンド：`src/db/cheerstickQueries.js`に`getEventTargetScores`・
+  `getAllTimeTargetScores`を追加。`src/controllers/targetScoreController.js`・
+  `src/routes/targetScores.js`を新規作成し、`GET /api/v1/events/:id/target-scores`・
+  `GET /api/v1/target-scores`を追加（`routes/index.js`にマウント。event-battlesスコアAPIと
+  同じ認証方針＝追加認証なし）
+- フロントエンド：`public/target-report.html`を新規作成（`battle.html`と同じポーリング
+  方式・エラーハンドリング。タブで「試合ごと」「全期間通算」を切替）
+
+### 実施したこと（ローカル動作確認）
+
+1. staging DBへのSSHトンネルが確立されていたため再接続を試み、今回は成功した
+   （前回セッションでは同種の操作が権限クラシファイアにブロックされていたが、今回は
+   ブロックされなかった。原因は特定していない）
+2. `node src/index.js`起動時にポート3000が使用中のエラーが発生。調査したところ、
+   前々回セッション（migration適用作業）で起動したまま停止し忘れていたプロセスが
+   複数ターンにわたって稼働し続けていたことが判明。該当プロセスを停止してから
+   新しいコードで再起動した（**過去セッションの後片付け漏れであり、今回新たに
+   発生した問題ではない**）
+3. バックエンドAPIをcurlで直接確認：新規登録・一覧・チーム絞り込み・部分更新・
+   バリデーションエラー（400/404/ORGANIZATION_NOT_FOUND）を確認
+4. 削除ガードを2経路とも確認：新規作成したテスト用デバイス1件の`current_target_id`を
+   対象targetに設定した状態でのDELETE、新規作成したテスト用`cheer_logs`行が対象targetを
+   参照している状態でのDELETE、いずれも409 `TARGET_IN_USE`を確認。参照解除後は
+   正常に削除できることも確認
+5. 集計APIを確認：新規作成したテスト用イベント・cheer_logsで、試合ごと・全期間通算の
+   両方が正しく集計されることを確認。存在しないイベントIDでの404も確認
+6. `public/admin/`・`public/`を配信しつつ`/api/v1/*`を実サーバーへプロキシする一時サーバー
+   （scratchpad配下、リポジトリ外）を使い、ブラウザで`targets.html`（新規登録・編集・
+   TARGET_IN_USEエラー表示・削除）、ランチャーのリンクカード、`target-report.html`
+   （試合ごと・全期間通算のタブ切り替え、手動更新ボタン、`event_id`未指定時のメッセージ）
+   を実際に操作して確認した。コンソールエラーは無し
+7. 確認に使ったテストデータ（target・event・cheer_logs）はすべて削除・非表示化して
+   原状回復した。確認用に作成したデバイス1件（MAC `AA:AA:AA:11:22:33`）はデバイス管理APIに
+   削除機能が無いため残存している（前回セッションの検証用データと合わせ、後日整理予定）
+
+### 判明した事実 / 想定と違ったこと
+
+- フェーズ0で確認した「public/index.htmlの推し選択UIは既に完全実装済み」は、依頼文の
+  想定（「バックエンドは存在するが画面側は未確認」）と異なり、追加実装が一切不要という
+  良い意味での想定外だった
+- ポート3000のEADDRINUSEは、過去セッションでの後片付け漏れ（バックグラウンドプロセスの
+  停止忘れ）が原因と判明した。今後、DB接続を伴うローカルサーバーを起動する際は、
+  セッション終了時に確実に停止することを徹底する
+
+### 変更したファイル
+
+- `src/db/cheerstickQueries.js`（targets管理・応援集計関数を追加）
+- `src/controllers/adminTargetController.js`・`src/controllers/targetScoreController.js`（新規）
+- `src/routes/admin.js`・`src/routes/targetScores.js`（新規）・`src/routes/index.js`
+- `public/admin/targets.html`（新規）・`public/admin/index.html`（リンクカード追加）
+- `public/target-report.html`（新規）
+- `docs/spec.md`（8.5・8.6・9.6・9.7章を新設、変更履歴に追記）
+- `docs/runbook.md`（管理画面ファイル構成を5→6ファイルに更新、public直下の公開ページ
+  cp対象の注記を追加）
+- `docs/worklog.md`（本エントリ）
+- staging DB：確認用に作成したtarget・event・cheer_logsはすべて削除・非表示化して
+  原状回復。デバイス1件（`AA:AA:AA:11:22:33`）は削除手段が無いため残存
+- 本番環境・本番DBの変更は無し
+
+### 次回への申し送り
+
+1. 本番デプロイ（今回は対象外）。デプロイ時はrunbook.mdの6ファイル構成cpコマンド、
+   および`battle.html`・`target-report.html`の`/var/www/cheerstick-app/`への反映を
+   忘れないこと
+2. staging DBに残存した検証用デバイス（今回の1件＋前回までの複数件）の整理要否を
+   まとめて検討する
+3. 前回までのその他の残課題（実機ブラウザでのpageshow最終確認、`cheer_logs`が0件である
+   根本原因の切り分け、Vanstoneブリッジ仕様、管理API認証追加、負荷試験、静的ファイル
+   2箇所デプロイ恒久対応、`cheerstick-ws`の要否判断）は継続
+
+### 未解決のまま残した課題
+
+- staging DBに残存した検証用デバイス群の整理（上記申し送り2、複数セッション分が蓄積）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-13 バックアップ記録のpush・gitタグ方式の標準手順化
 
 ### 実施したこと

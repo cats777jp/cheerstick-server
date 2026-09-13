@@ -468,6 +468,122 @@ GET /api/v1/event-battles/:id/score
 > DB権限問題は`docs/worklog.md`2026-09-11エントリ（「2チーム対抗応援合戦」機能の本番デプロイ）
 > 参照。DB権限問題の詳細は11.8章参照。
 
+### 8.5 管理API：選手・推し対象（targets）登録・編集・削除（2026-09-13実装・ローカル確認まで）
+
+`targets`テーブル（6.1章参照）自体は`connect`応答（推し選択肢の提供）・`count`（応援ログの
+`target_id`記録）で既に実運用中だったが、管理画面からの登録・編集手段が存在せず、本番DBへの
+直接`UPDATE`（9.1章参照）に頼っていた。これを解消するため、既存の`organizations`管理API
+（8.3章）と同じパターンで新設した。マイグレーション（DBスキーマ変更）は無し（既存の列を
+そのまま使う）。
+
+```
+GET /admin/targets?organization_id=<uuid>
+  organization_id未指定時は全件を返す。指定時はそのチーム配下のみに絞り込む
+
+POST /admin/targets
+  body: { name, organization_id, type, image_url?, number?, profile_text?, is_active? }
+  name・organization_id・typeは必須。
+  organization_id：DB上のtargets.organization_idはNULL許容だが、所属チームの無いtargetは
+    WebViewの推し選択（listTargetsByOrganization、既存実装）に一切現れず実質使えなくなるため、
+    organizations.category_id（8.3章）と同じ考え方でアプリ層で必須とした
+  type：DB列がNOT NULLのため必須。CHECK制約は無く自由入力（既存データはplayer/mascot。
+    画面側はdatalistで候補提示するのみで値の制限はしない）
+  organization_idが存在しない場合は400 { error: "ORGANIZATION_NOT_FOUND" }
+
+PATCH /admin/targets/:id
+  body: { name?, organization_id?, type?, image_url?, number?, profile_text?, is_active? }
+  （updateOrganizationAdminと同じ部分更新方式）
+  対象が無ければ404 { error: "TARGET_NOT_FOUND" }
+
+DELETE /admin/targets/:id
+  物理削除。devices.current_target_id または cheer_logs.target_id で参照されている場合は
+  409 { error: "TARGET_IN_USE" } を返し、削除をブロックする（後述）
+  対象が無ければ404 { error: "TARGET_NOT_FOUND" }
+
+⚠️ 認証は他の管理APIと同じくnginx側のIP制限のみ（アプリケーションレベル認証なし）。
+```
+
+`metadata`列（JSONB）は本APIの対象外（管理画面の入力項目に含まれない）。既存の空枠仕様・
+`profile_text`追加時と同じ判断で、種別固有の追加属性は引き続き直接SQLでの編集対象のまま
+とした。
+
+**DELETE時のTARGET_IN_USEガードについて（実装前調査で判明した事実に基づく設計）**：
+`devices.current_target_id`・`cheer_logs.target_id`の外部キー制約はいずれも
+`ON DELETE SET NULL`であることを実装前に確認済み（本番DBの`pg_constraint`で実測）。
+そのためDB制約だけに頼ると、参照中のtargetを物理削除した場合に`cheer_logs.target_id`が
+無言でNULL化され、「どの選手への応援だったか分からない」孤児レコードが発生する
+（11.7章の`events`削除時と同種の問題）。これを避けるため、削除前にアプリ層で
+`devices.current_target_id`・`cheer_logs.target_id`の参照有無を確認し、参照がある場合は
+削除をブロックする方式とした。`event_targets`・`cheer_summaries`・`awards`・
+`user_target_follows`の4テーブルもtargetsを参照する外部キーを持つが（`ON DELETE CASCADE`）、
+コード上一度も参照されていない未使用機能（6.1章の参照元整理と同じ調査結果）のため、
+参照チェックの対象には含めていない。
+
+**実装前調査で判明したその他の事実**：
+- `targets.type`の値を決め打ちで分岐しているコードは、`ORDER BY (type = 'mascot') DESC`
+  （`listTargetsByOrganization`、推し選択肢の並び順）と、`public/index.html`の表示ラベル
+  分岐2箇所（`t.type === 'mascot' ? 'マスコット' : ...`）のみ。いずれも表示上の特別扱いに
+  留まり、本APIの実装を妨げるものではないと判断した（`listTargetsAdmin`の一覧も同じ
+  `ORDER BY`を踏襲し、既存の並び順と一貫させている）
+- **`public/index.html`（エンドユーザー向けWebView）には、「チーム選択→推し選手選択」の
+  UIが既に完全に実装済みであることを確認した。** `renderTeamList()`（`select_team`送信）・
+  `renderPlayerList()`（`set_oshi`送信）・`renderConnect()`内の`team_selection`/
+  `player_selection`状態分岐が揃っており、本APIで登録・編集したデータは追加のWebView側
+  実装を要さずそのまま反映される
+
+**動作確認（2026-09-13、staging DBに接続したローカルサーバーで実施）**：
+- 新規登録・一覧取得・チーム絞り込み・部分更新・不正なUUID/存在しないIDでの400/404を確認
+- `ORGANIZATION_NOT_FOUND`（存在しないチーム指定時）を確認
+- 削除ガードを2経路とも確認：新規作成したテスト用デバイス1件の`current_target_id`を
+  対象targetに設定した状態でのDELETE、および新規作成したテスト用`cheer_logs`行が
+  対象targetを参照している状態でのDELETE、いずれも409 `TARGET_IN_USE`になることを確認。
+  参照解除後は正常に削除できることも確認
+- 確認に使った試合・応援ログはすべて削除・非表示化して原状回復した。確認用に作成した
+  デバイス1件（MAC `AA:AA:AA:11:22:33`）はデバイス管理APIに削除機能が無いため残存している
+  （既存デバイス2件を含む前回セッションの検証用データと合わせ、後日整理予定）
+
+### 8.6 チーム別・選手別の応援集計API（2026-09-13新設・ローカル確認まで）
+
+`event_battles`のスコアAPI（8.4章）と同じ「認証を追加せず、参照専用のシンプルなSUM集計」
+という設計方針を踏襲し、target単位（選手・マスコット単位）の集計を追加した。
+
+```
+GET /api/v1/events/:id/target-scores
+  指定イベントのcheer_logsをtarget_id単位でSUM(intensity)集計し、targets・organizationsを
+  JOINして名前・チーム情報も返す。statusによる分岐は行わない（4.3章の判定ロジック側で
+  status='live'以外はそもそもcheer_logsへ書き込まれないため、ここで重ねて絞り込む必要が
+  無いという、event_battlesスコアAPIと同じ考え方）
+  イベントが存在しない場合は404 { error: "EVENT_NOT_FOUND" }
+
+  レスポンス例：
+  {
+    "event_id": "...", "event_title": "...",
+    "targets": [
+      { "target_id", "target_name", "target_type", "target_image_url", "target_number",
+        "organization": { "id", "name", "color" } | null, "total_intensity" },
+      ...
+    ],
+    "updated_at": "..."
+  }
+
+GET /api/v1/target-scores
+  event_idの絞り込みが無いだけで、上記と同じ集計方式（全期間・全試合通算）。
+  レスポンス形式は event_id/event_title を含まない以外は同じ
+
+認証：/api/v1/admin/ 配下ではないため、本番nginxのIPアドレス制限は適用されない
+（event_battlesスコアAPIと同じ理由。target-report.htmlを会場等の任意の端末で表示する
+必要があるため、意図的にIP制限の外に置く）。
+```
+
+集計対象は`cheer_logs`を起点とし`targets`へINNER JOINするため、応援量0件のtargetは
+一覧に現れない（`cheer_logs.target_id`がNULL＝推し未選択のままカウントされた行も、
+INNER JOINにより自然に除外される）。
+
+**動作確認（2026-09-13、staging DBに接続したローカルサーバーで実施）**：新規作成した
+テスト用イベント・target・cheer_logsで、試合ごと（`total_intensity`が該当イベント分のみ
+集計されること）・全期間通算（複数イベント分が合算されること）の両方を確認した。
+存在しないイベントIDでの404も確認した。確認後、テストデータはすべて削除・非表示化した。
+
 ## 9. フロントエンド（public/index.html）
 
 ```
@@ -780,6 +896,40 @@ window.addEventListener('pageshow', () => {
   としてタブをフリーズさせ自動化コマンドが応答不能になる事象が発生したため、
   検証用に`window.alert`/`window.confirm`をページ側スクリプトで一時的に上書きして
   進めた（本番相当の`public/admin/`側コードは一切変更していない）
+
+### 9.6 管理画面：選手・推し対象管理 `public/admin/targets.html`（2026-09-13新設・ローカル確認まで）
+
+8.5章のAPIに対応する管理画面。`masters.html`（チーム管理・デバイス管理）と同じ構成
+（新規登録フォーム＋一覧＋編集モーダル、`common.css`/`common.js`を読み込む）で追加した。
+
+- 新規登録フォーム：名前（必須）・所属チーム（必須、ドロップダウン）・種別type
+  （自由入力＋`<datalist>`によるオートコンプリート。初期候補は`player`/`mascot`/`team`/
+  `artist`/`unit`、読み込んだ一覧に含まれる既存値も動的に追加）・背番号（任意）・
+  画像URL（任意）・プロフィール文（任意、テキストエリア）・有効/無効（チェックボックス）
+- 一覧：所属チームでの絞り込み、各行に編集・削除ボタン
+- 削除：`confirm()`後にDELETEを呼ぶ。409 `TARGET_IN_USE`受信時は
+  「「〈名前〉」は既にデバイスの推し選択または応援ログで使用されているため削除できません。」
+  という具体的な文言をエラーバーに表示する（8.5章のガードに対応）
+- ランチャー（`index.html`）に「選手・推し対象管理」のリンクカードを追加した
+
+### 9.7 応援ランキング画面 `public/target-report.html`（2026-09-13新設・ローカル確認まで）
+
+8.6章のAPIを表示する一般公開ページ。認証方針は`battle.html`と同じ
+（`/api/v1/admin/`配下ではないためnginxのIP制限は適用されない。会場等の任意の端末で
+表示する必要があるための意図的な設計）。
+
+- タブ切り替えで「試合ごと」「全期間通算」の2表示モードを提供
+  - 「試合ごと」：URLパラメータ`event_id`を読み取り、`GET /events/:id/target-scores`を
+    3秒間隔でポーリング（`battle.html`と同じポーリング方式。一時的な通信断は直前の表示を
+    保持したまま再試行バナーのみ表示し、`event_id`未指定・存在しないイベントは
+    致命エラーとして専用メッセージを表示）
+  - 「全期間通算」：ページ読み込み時に`GET /target-scores`を1回取得。手動更新ボタンあり
+  - `event_id`パラメータの有無で初期表示タブを自動選択（有れば「試合ごと」、無ければ
+    「全期間通算」）
+- 表示項目：順位・対象の画像またはアバター（`battle.html`と同じ頭文字色分けフォールバック
+  パターン）・名前・所属チーム名・応援量（`total_intensity`降順、サーバー側で整列済み）
+- デプロイ時の配置先は`battle.html`と同じ`/var/www/cheerstick-app/`配下
+  （runbook.md「デプロイ手順」の対象に本ページも追加が必要。本番反映時に注意）
 
 ## 10. 未実施の検証
 
@@ -1196,3 +1346,4 @@ staging側は「テーブル自体が存在しない」状態である。
 | 2026-09-13 | 9.5に追記：staging DBでの実データ動作確認結果を記録、11.9「staging DBにmigration 011が未適用」を新設 | KMT様がSSHトンネルを確立したstaging DBに接続し、3ページ（index.html/events.html/masters.html）を実データで確認した。events.htmlの試合一覧・新規登録・編集・個別状態変更・一括操作（対象外スキップ・部分成功含む）、masters.htmlのチーム一覧・編集・新規登録、デバイス一覧・単体登録・CSV取込・一括適用がいずれも正常動作することを確認。pageshow修正も実データ環境で再確認した（実際のブラウザ戻る操作は自動化環境の制約で不可のため前回同様pageshowイベント発火による検証）。一方、staging DBに`migrations/011_add_event_battles.sql`が未適用で`event_battles`テーブルが存在せず、対抗戦関連機能の実データ確認ができなかったため11.9章に新規課題として記録した（本番の11.8章とは別問題、修正は未実施）。検証用に新規登録したチーム2件・デバイス2件はUI上に削除手段が無いためstaging DBに残存している旨、およびデバイス一括適用の誤操作で既存デバイス2件のデモ機フラグを一時的に変更したが直後に復元した旨も記録した。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 11.9に追記：staging DBへのmigration 011適用完了・対抗戦機能の実データ確認結果を記録、runbook.md「staging環境マイグレーション適用時の注意」に追記 | 本番（11.8章）の所有者問題（`sudo -u postgres`経由が原因）を踏まえ、staging DBでは`.env`のアプリ接続ロール（`cheerstick_stg`）自身で`migrations/011_add_event_battles.sql`を1文ずつ実行する方法に変更した（接続ロール自身が新規テーブルを作成すればそのロールが所有者になるため、所有者不一致が原理的に発生しない）。適用前に`cheerstick_stg`のCREATE権限・schema_migrations適用状況・テーブル未存在を読み取り専用で確認したうえで実行し、適用後に所有者一致（`cheerstick_stg`）を確認した。`OWNER TO`等の所有者変更操作は行っていない（指示どおり）。events.htmlから対抗戦ペアの登録・一覧・公開スコアAPIまで実際にUI操作で確認し権限エラーが無いことを確認、確認後に削除し原状回復した。`schema_migrations`への適用記録（INSERT）は今回実施しておらず次回判断とする旨を明記した。runbook.mdの既存の所有者問題節（`ALTER TABLE`が対象）には、`CREATE TABLE`はこの問題の対象外である旨を追記した。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 11.9に追記：schema_migrationsへのmigration 011適用記録を追加した旨を記録 | KMT様指示により、staging DBの`schema_migrations`テーブルへ`011_add_event_battles.sql`の適用記録を追加した。`src/db/migrate.js`が実際に使用しているINSERT文（`INSERT INTO schema_migrations (filename) VALUES ($1)`、`applied_at`はデフォルトの`NOW()`）と同じ形式・パラメータ渡しで実行し、既存001〜010のレコード形式（カラム構成・値の入れ方）と一致させた。追加後`SELECT * FROM schema_migrations ORDER BY filename`で001〜011が適用順に揃っていることを確認した。これにより次回`node src/db/migrate.js`をstaging DBに対して実行しても011は`SKIP`され再適用エラーは発生しない。既存記述は削除せず追記で更新した |
+| 2026-09-13 | 8.5「管理API：選手・推し対象（targets）登録・編集・削除」・8.6「チーム別・選手別の応援集計API」・9.6「管理画面：選手・推し対象管理」・9.7「応援ランキング画面」を新設 | KMT様指示により「選手データ管理UI」「チーム別・選手別の応援集計画面」を実装。フェーズ0（実装前調査）で、targets.typeの決め打ち判定はORDER BY (type='mascot')と表示ラベル分岐2箇所（`public/index.html`）のみで実装の妨げにならないこと、devices.current_target_id・cheer_logs.target_idの外部キーがいずれもON DELETE SET NULLであること、public/index.htmlに「チーム選択→推し選手選択」UIが既に完全実装済みであること（WebView側の追加実装は不要）を確認し、想定外の問題は無かったため実装に進んだ。バックエンドは既存のorganizations管理API（8.3章）と同じパターンで`GET/POST/PATCH/DELETE /admin/targets`を新設（マイグレーション無し、既存列のみ使用）、DELETE時はdevices.current_target_id・cheer_logs.target_idの参照有無をアプリ層で事前確認し409 TARGET_IN_USEでブロックするガードを実装（11.7章と同種の孤児レコード化を防ぐため）。集計APIは`GET /events/:id/target-scores`・`GET /target-scores`をevent_battlesスコアAPI（8.4章）と同じ設計方針（認証追加なし、SUM集計）で新設。フロントエンドは`public/admin/targets.html`（masters.htmlと同じ構成）、ランチャーへのリンクカード追加、`public/target-report.html`（battle.htmlと同じ認証方針・ポーリング方式、タブで「試合ごと」「全期間通算」を切替）を新設。staging DBに接続したローカルサーバーで、CRUD・削除ガード（デバイス参照・cheer_logs参照の両経路）・集計API（試合ごと・全期間通算）・フロントエンドの一連の操作を実際に確認し、確認用データはすべて削除・非表示化して原状回復した（削除APIの無いデバイス1件を除く）。本番デプロイは未実施（KMT様指示により今回の対象外）|
