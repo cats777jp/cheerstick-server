@@ -533,6 +533,193 @@ async function updateOrganizationAdmin(organizationId, fields) {
 }
 
 /**
+ * 管理画面：応援対象（targets、選手・マスコット等）一覧を取得（2026-09-13新設）。
+ * organizationId指定時はそのチーム配下のみに絞り込む。
+ * type='mascot'を先頭に出すORDER BYは、listTargetsByOrganization()
+ * （WebView推し選択、既存実装）と同じ並び順の考え方を踏襲している。
+ */
+async function listTargetsAdmin(organizationId) {
+  const whereClauses = [];
+  const values = [];
+  let i = 1;
+
+  if (organizationId) {
+    whereClauses.push(`t.organization_id = $${i}`);
+    values.push(organizationId);
+    i += 1;
+  }
+  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+  const { rows } = await db.query(
+    `SELECT t.id, t.organization_id, o.name AS organization_name, t.name, t.type,
+            t.image_url, t.number, t.profile_text, t.is_active, t.created_at
+     FROM targets t
+     LEFT JOIN organizations o ON o.id = t.organization_id
+     ${whereSql}
+     ORDER BY o.name NULLS LAST, (t.type = 'mascot') DESC, t.number NULLS LAST, t.name`,
+    values
+  );
+  return rows;
+}
+
+/**
+ * 管理画面：応援対象（target）を新規登録する（2026-09-13新設）。
+ * organization_idは必須（DB上のtargets.organization_idはNULL許容だが、所属チームの
+ * 無いtargetはlistTargetsByOrganization()経由のWebView推し選択に一切現れず実質使えなく
+ * なるため、organizations.category_idと同じ考え方でアプリ層で必須とする）。
+ * organization_idが実在しない場合はORGANIZATION_NOT_FOUNDを投げる。
+ * metadataは本APIの対象外（管理画面の入力項目に含まれないため、DB既定値'{}'のまま。
+ * 既存の空枠仕様・profile_text追加時と同じ判断で、種別固有の追加属性は現時点では
+ * 直接SQLでの編集対象のままとする）。
+ */
+async function createTargetAdmin({ name, organizationId, type, imageUrl, number, profileText, isActive }) {
+  await assertOrganizationExists(organizationId);
+
+  const { rows } = await db.query(
+    `INSERT INTO targets (organization_id, name, type, image_url, number, profile_text, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, organization_id, name, type, image_url, number, profile_text, is_active, created_at`,
+    [organizationId, name, type, imageUrl || null, number || null, profileText || null, isActive !== false]
+  );
+  return rows[0];
+}
+
+/**
+ * 管理画面：応援対象（target）を部分更新する（2026-09-13新設。updateOrganizationAdminと
+ * 同じ方式）。fieldsに無いキーは更新しない。organizationIdが含まれる場合は実在確認する。
+ * 対象が無い場合はnullを返す（呼び出し元で404にマッピングする）。
+ */
+async function updateTargetAdmin(targetId, fields) {
+  const columnMap = {
+    name: 'name',
+    organizationId: 'organization_id',
+    type: 'type',
+    imageUrl: 'image_url',
+    number: 'number',
+    profileText: 'profile_text',
+    isActive: 'is_active',
+  };
+
+  if (Object.prototype.hasOwnProperty.call(fields, 'organizationId')) {
+    await assertOrganizationExists(fields.organizationId);
+  }
+
+  const setClauses = [];
+  const values = [];
+  let i = 1;
+
+  for (const [key, column] of Object.entries(columnMap)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      setClauses.push(`${column} = $${i}`);
+      values.push(fields[key]);
+      i += 1;
+    }
+  }
+
+  if (setClauses.length === 0) {
+    const { rows } = await db.query(
+      `SELECT id, organization_id, name, type, image_url, number, profile_text, is_active, created_at
+       FROM targets WHERE id = $1`,
+      [targetId]
+    );
+    return rows[0] || null;
+  }
+
+  values.push(targetId);
+  const { rows } = await db.query(
+    `UPDATE targets SET ${setClauses.join(', ')}
+     WHERE id = $${i}
+     RETURNING id, organization_id, name, type, image_url, number, profile_text, is_active, created_at`,
+    values
+  );
+  return rows[0] || null;
+}
+
+/**
+ * 管理画面：応援対象（target）を削除する（2026-09-13新設。物理削除）。
+ *
+ * devices.current_target_id・cheer_logs.target_idはいずれもON DELETE SET NULLのため、
+ * DB制約上は削除自体を止めない。しかし11.7章（events削除時の同種問題）と同じ理由で、
+ * 「どの選手への応援だったか分からなくなる孤児レコード化」を防ぐため、アプリ層で
+ * 事前に参照有無を確認し、参照されている場合は削除をブロックしてTARGET_IN_USEを投げる。
+ * event_targets・cheer_summaries・awards・user_target_followsはON DELETE CASCADEだが、
+ * これらはいずれも現状未使用の機能（コード上参照箇所が無い）のため、参照チェックの
+ * 対象には含めていない。
+ * 対象が存在しない場合はnullを返す（呼び出し元で404にマッピングする）。
+ */
+async function deleteTargetAdmin(targetId) {
+  const { rows: exists } = await db.query(`SELECT id FROM targets WHERE id = $1`, [targetId]);
+  if (!exists[0]) return null;
+
+  const { rows: deviceRefs } = await db.query(
+    `SELECT id FROM devices WHERE current_target_id = $1 LIMIT 1`,
+    [targetId]
+  );
+  if (deviceRefs[0]) {
+    const err = new Error('target is referenced by a device (current_target_id)');
+    err.code = 'TARGET_IN_USE';
+    throw err;
+  }
+
+  const { rows: cheerLogRefs } = await db.query(
+    `SELECT id FROM cheer_logs WHERE target_id = $1 LIMIT 1`,
+    [targetId]
+  );
+  if (cheerLogRefs[0]) {
+    const err = new Error('target is referenced by cheer_logs');
+    err.code = 'TARGET_IN_USE';
+    throw err;
+  }
+
+  await db.query(`DELETE FROM targets WHERE id = $1`, [targetId]);
+  return true;
+}
+
+/**
+ * チーム別・選手別の応援集計（2026-09-13新設）：指定イベントに絞ってtarget単位で
+ * cheer_logs.intensityの合計を返す（target-report.html「試合ごと」表示用）。
+ * getEventIntensityTotal（event_battlesスコアAPI、既存）と同じSUMパターンをtarget単位の
+ * GROUP BYに拡張したもの。cheer_logs.target_idがNULL（推し未選択のままカウントされた行）は
+ * targetsへのINNER JOINにより自然に除外される。
+ */
+async function getEventTargetScores(eventId) {
+  const { rows } = await db.query(
+    `SELECT t.id AS target_id, t.name AS target_name, t.type AS target_type,
+            t.image_url AS target_image_url, t.number AS target_number,
+            o.id AS organization_id, o.name AS organization_name, o.color AS organization_color,
+            COALESCE(SUM(cl.intensity), 0) AS total_intensity
+     FROM cheer_logs cl
+     JOIN targets t ON t.id = cl.target_id
+     LEFT JOIN organizations o ON o.id = t.organization_id
+     WHERE cl.event_id = $1
+     GROUP BY t.id, o.id
+     ORDER BY total_intensity DESC`,
+    [eventId]
+  );
+  return rows.map((r) => ({ ...r, total_intensity: parseInt(r.total_intensity, 10) }));
+}
+
+/**
+ * チーム別・選手別の応援集計（2026-09-13新設）：全期間・全試合を通算してtarget単位で
+ * intensity合計を返す（target-report.html「全期間通算」表示用）。event_idによる絞り込みが
+ * 無いだけで、getEventTargetScoresと同じ集計方式。
+ */
+async function getAllTimeTargetScores() {
+  const { rows } = await db.query(
+    `SELECT t.id AS target_id, t.name AS target_name, t.type AS target_type,
+            t.image_url AS target_image_url, t.number AS target_number,
+            o.id AS organization_id, o.name AS organization_name, o.color AS organization_color,
+            COALESCE(SUM(cl.intensity), 0) AS total_intensity
+     FROM cheer_logs cl
+     JOIN targets t ON t.id = cl.target_id
+     LEFT JOIN organizations o ON o.id = t.organization_id
+     GROUP BY t.id, o.id
+     ORDER BY total_intensity DESC`
+  );
+  return rows.map((r) => ({ ...r, total_intensity: parseInt(r.total_intensity, 10) }));
+}
+
+/**
  * 管理画面：試合を非表示化する（物理削除ではない。詳細はdocs/proposals/admin-hide-endpoint.md）。
  *
  * cheer_logs -> events の外部キー制約がconfdeltype='n'（SET NULL）であり、
@@ -952,4 +1139,10 @@ module.exports = {
   deleteEventBattle,
   getEventBattleMeta,
   getEventIntensityTotal,
+  listTargetsAdmin,
+  createTargetAdmin,
+  updateTargetAdmin,
+  deleteTargetAdmin,
+  getEventTargetScores,
+  getAllTimeTargetScores,
 };

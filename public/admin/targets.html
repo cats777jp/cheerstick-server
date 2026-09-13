@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>選手・推し対象管理 | 推しフル管理画面</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  /* 選手・推し対象管理（targets、2026-09-13新設）。
+     masters.htmlのチーム管理・デバイス管理と同じ構成（新規登録フォーム＋一覧＋
+     編集モーダル）のため、device-toolbarクラス（フィルタ用）をそのまま流用する。 */
+  .device-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .device-toolbar select { width: auto; flex: 1 1 160px; margin: 0; }
+  label.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 0 4px;
+  }
+  label.checkbox-label input { width: auto; }
+  textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0f141b;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>選手・推し対象管理</h1>
+  <p><a href="index.html">&larr; 管理画面トップ</a></p>
+  <div id="errorBar" class="error-bar"></div>
+
+  <div class="card">
+    <h2>新規登録</h2>
+    <form id="targetCreateForm">
+      <label for="targetCreateName">名前</label>
+      <input id="targetCreateName" type="text" required>
+
+      <label for="targetCreateOrg">所属チーム</label>
+      <select id="targetCreateOrg" required></select>
+
+      <label for="targetCreateType">種別</label>
+      <input id="targetCreateType" type="text" list="targetTypeOptions" placeholder="例：player" required>
+
+      <label for="targetCreateNumber">背番号（任意）</label>
+      <input id="targetCreateNumber" type="text" placeholder="例：7">
+
+      <label for="targetCreateImageUrl">画像URL（任意）</label>
+      <input id="targetCreateImageUrl" type="text" placeholder="https://app.cheerstick.com/images/members/...">
+
+      <label for="targetCreateProfileText">プロフィール文（任意）</label>
+      <textarea id="targetCreateProfileText" placeholder="画面に固定表示するプロフィール文"></textarea>
+
+      <label class="checkbox-label"><input id="targetCreateIsActive" type="checkbox" checked> 有効</label>
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>一覧</h2>
+    <div class="device-toolbar">
+      <select id="targetOrgFilter"></select>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>名前</th>
+          <th>チーム</th>
+          <th>種別</th>
+          <th>背番号</th>
+          <th>状態</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="targetsTableBody">
+        <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 種別のオートコンプリート候補。既存データの値に加え、よく使う既定値も提示する
+     （metadata/typeのコメントに登場する player/team/mascot/artist/unit を初期候補とし、
+     読み込み後に既存データの値をJSで追加する）。 -->
+<datalist id="targetTypeOptions">
+  <option value="player">
+  <option value="mascot">
+  <option value="team">
+  <option value="artist">
+  <option value="unit">
+</datalist>
+
+<div id="targetEditModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2>編集</h2>
+    <form id="targetEditForm">
+      <input type="hidden" id="targetEditId">
+      <label for="targetEditName">名前</label>
+      <input id="targetEditName" type="text" required>
+
+      <label for="targetEditOrg">所属チーム</label>
+      <select id="targetEditOrg" required></select>
+
+      <label for="targetEditType">種別</label>
+      <input id="targetEditType" type="text" list="targetTypeOptions" required>
+
+      <label for="targetEditNumber">背番号（任意）</label>
+      <input id="targetEditNumber" type="text">
+
+      <label for="targetEditImageUrl">画像URL（任意）</label>
+      <input id="targetEditImageUrl" type="text">
+
+      <label for="targetEditProfileText">プロフィール文（任意）</label>
+      <textarea id="targetEditProfileText"></textarea>
+
+      <label class="checkbox-label"><input id="targetEditIsActive" type="checkbox"> 有効</label>
+
+      <div class="actions">
+        <button type="button" id="targetEditCancelBtn">キャンセル</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  const targetCreateForm = document.getElementById('targetCreateForm');
+  const targetCreateOrg = document.getElementById('targetCreateOrg');
+  const targetOrgFilter = document.getElementById('targetOrgFilter');
+  const targetsTableBody = document.getElementById('targetsTableBody');
+  const targetTypeOptions = document.getElementById('targetTypeOptions');
+
+  const targetEditModalOverlay = document.getElementById('targetEditModalOverlay');
+  const targetEditForm = document.getElementById('targetEditForm');
+  const targetEditOrg = document.getElementById('targetEditOrg');
+  const targetEditCancelBtn = document.getElementById('targetEditCancelBtn');
+
+  let organizationsCache = [];
+
+  function populateOrgSelects(organizations) {
+    [targetCreateOrg, targetEditOrg].forEach((selectEl) => {
+      const prevValue = selectEl.value;
+      selectEl.innerHTML = '';
+      organizations.forEach((org) => {
+        selectEl.appendChild(new Option(org.name, org.id));
+      });
+      if (organizations.some((o) => o.id === prevValue)) selectEl.value = prevValue;
+    });
+
+    targetOrgFilter.innerHTML = '';
+    targetOrgFilter.appendChild(new Option('すべてのチーム', ''));
+    organizations.forEach((org) => targetOrgFilter.appendChild(new Option(org.name, org.id)));
+  }
+
+  async function loadOrganizations() {
+    try {
+      organizationsCache = await apiFetch('/organizations');
+      populateOrgSelects(organizationsCache);
+    } catch (e) {
+      showError('チーム一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  // 既存データに登場するtype値をdatalistへ追加する（新規追加分は初期候補として既に含まれる）。
+  function updateTypeOptions(targets) {
+    const existing = new Set([...targetTypeOptions.options].map((o) => o.value));
+    targets.forEach((t) => {
+      if (t.type && !existing.has(t.type)) {
+        existing.add(t.type);
+        targetTypeOptions.appendChild(new Option(t.type, t.type));
+      }
+    });
+  }
+
+  function renderTargetsTable(targets) {
+    targetsTableBody.innerHTML = '';
+
+    if (targets.length === 0) {
+      targetsTableBody.innerHTML = '<tr class="empty-row"><td colspan="6">登録されている応援対象はありません</td></tr>';
+      return;
+    }
+
+    targets.forEach((target) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(target.name)}</td>
+        <td>${escapeHtml(target.organization_name || '（未所属）')}</td>
+        <td>${escapeHtml(target.type)}</td>
+        <td>${escapeHtml(target.number || '-')}</td>
+        <td>${target.is_active ? '有効' : '無効'}</td>
+        <td class="action-cell"></td>
+      `;
+
+      const actionCell = tr.querySelector('.action-cell');
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '編集';
+      editBtn.addEventListener('click', () => openEditModal(target));
+      actionCell.appendChild(editBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '削除';
+      deleteBtn.classList.add('danger');
+      deleteBtn.addEventListener('click', () => handleDelete(target));
+      actionCell.appendChild(deleteBtn);
+
+      targetsTableBody.appendChild(tr);
+    });
+  }
+
+  async function loadTargetsList() {
+    const organizationId = targetOrgFilter.value;
+    const params = new URLSearchParams();
+    if (organizationId) params.set('organization_id', organizationId);
+
+    try {
+      const targets = await apiFetch('/targets' + (params.toString() ? '?' + params.toString() : ''));
+      renderTargetsTable(targets);
+      updateTypeOptions(targets);
+      clearError();
+    } catch (e) {
+      showError('一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  targetOrgFilter.addEventListener('change', loadTargetsList);
+
+  targetCreateForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    try {
+      await apiFetch('/targets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('targetCreateName').value.trim(),
+          organization_id: targetCreateOrg.value,
+          type: document.getElementById('targetCreateType').value.trim(),
+          number: document.getElementById('targetCreateNumber').value.trim() || null,
+          image_url: document.getElementById('targetCreateImageUrl').value.trim() || null,
+          profile_text: document.getElementById('targetCreateProfileText').value.trim() || null,
+          is_active: document.getElementById('targetCreateIsActive').checked,
+        }),
+      });
+      clearError();
+      targetCreateForm.reset();
+      document.getElementById('targetCreateIsActive').checked = true;
+      await loadTargetsList();
+    } catch (e2) {
+      if (e2.status === 400 && e2.body && e2.body.error === 'ORGANIZATION_NOT_FOUND') {
+        showError('指定されたチームが見つかりません');
+      } else {
+        showError('登録に失敗しました: ' + e2.message);
+      }
+    }
+  });
+
+  function openEditModal(target) {
+    document.getElementById('targetEditId').value = target.id;
+    document.getElementById('targetEditName').value = target.name;
+    targetEditOrg.value = target.organization_id || '';
+    document.getElementById('targetEditType').value = target.type;
+    document.getElementById('targetEditNumber').value = target.number || '';
+    document.getElementById('targetEditImageUrl').value = target.image_url || '';
+    document.getElementById('targetEditProfileText').value = target.profile_text || '';
+    document.getElementById('targetEditIsActive').checked = !!target.is_active;
+    targetEditModalOverlay.classList.add('visible');
+  }
+
+  function closeEditModal() {
+    targetEditModalOverlay.classList.remove('visible');
+  }
+
+  targetEditCancelBtn.addEventListener('click', closeEditModal);
+
+  targetEditForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('targetEditId').value;
+
+    try {
+      await apiFetch(`/targets/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('targetEditName').value.trim(),
+          organization_id: targetEditOrg.value,
+          type: document.getElementById('targetEditType').value.trim(),
+          number: document.getElementById('targetEditNumber').value.trim() || null,
+          image_url: document.getElementById('targetEditImageUrl').value.trim() || null,
+          profile_text: document.getElementById('targetEditProfileText').value.trim() || null,
+          is_active: document.getElementById('targetEditIsActive').checked,
+        }),
+      });
+      clearError();
+      closeEditModal();
+      await loadTargetsList();
+    } catch (e2) {
+      if (e2.status === 400 && e2.body && e2.body.error === 'ORGANIZATION_NOT_FOUND') {
+        showError('指定されたチームが見つかりません');
+      } else {
+        showError('更新に失敗しました: ' + e2.message);
+      }
+    }
+  });
+
+  // 削除：devices.current_target_id または cheer_logs.target_id で参照されている場合、
+  // サーバーは409 {error: 'TARGET_IN_USE'}を返す（物理削除のため、参照が残ったまま
+  // 削除すると「誰への応援だったか分からない」孤児レコードになるのを防ぐガード）。
+  async function handleDelete(target) {
+    const ok = confirm(`「${target.name}」を削除しますか？この操作は取り消せません。`);
+    if (!ok) return;
+
+    try {
+      await apiFetch(`/targets/${target.id}`, { method: 'DELETE' });
+      clearError();
+      await loadTargetsList();
+    } catch (e) {
+      if (e.status === 409 && e.body && e.body.error === 'TARGET_IN_USE') {
+        showError(
+          `「${target.name}」は既にデバイスの推し選択または応援ログで使用されているため削除できません。`
+        );
+      } else if (e.status === 404) {
+        showError('対象が見つかりません（既に削除された可能性があります）');
+        await loadTargetsList();
+      } else {
+        showError('削除に失敗しました: ' + e.message);
+      }
+    }
+  }
+
+  loadOrganizations();
+  loadTargetsList();
+})();
+</script>
+</body>
+</html>

@@ -11,6 +11,7 @@ const express = require('express');
 const { Router } = express;
 const adminEventController = require('../controllers/adminEventController');
 const adminDeviceController = require('../controllers/adminDeviceController');
+const adminTargetController = require('../controllers/adminTargetController');
 
 const router = Router();
 
@@ -46,5 +47,11 @@ router.post(
 );
 router.patch('/devices/bulk', adminDeviceController.bulkUpdate);
 router.patch('/devices/:id', adminDeviceController.update);
+
+// 選手・推し対象（targets）管理（2026-09-13新設）
+router.get('/targets', adminTargetController.list);
+router.post('/targets', adminTargetController.create);
+router.patch('/targets/:id', adminTargetController.update);
+router.delete('/targets/:id', adminTargetController.remove);
 
 module.exports = router;

@@ -7,6 +7,7 @@ const cheerRouter = require('./cheer');
 const webviewRouter = require('./webview');
 const adminRouter = require('./admin');
 const eventBattlesRouter = require('./eventBattles');
+const targetScoresRouter = require('./targetScores');
 
 const router = Router();
 
@@ -18,5 +19,8 @@ router.use('/cheer', cheerRouter);
 router.use('/webview', webviewRouter);
 router.use('/admin', adminRouter);
 router.use('/event-battles', eventBattlesRouter);
+// targetScoresRouter自身が絶対パス（/events/:id/target-scores・/target-scores）を
+// 定義しているため、プレフィックス無しでマウントする。
+router.use(targetScoresRouter);
 
 module.exports = router;

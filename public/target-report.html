@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>応援ランキング | 推しフル</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --card-bg: #161b22;
+    --border: #2a323d;
+    --text: #f4f6f8;
+    --text-muted: #9aa4af;
+    --accent: #4d8dff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px 16px 60px;
+  }
+  .container { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+
+  #connErrorBanner {
+    display: none;
+    background: #b3261e;
+    color: #fff;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 14px;
+  }
+  #connErrorBanner.visible { display: block; }
+
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    border-color: var(--accent);
+    color: var(--text);
+    font-weight: bold;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card h2 { font-size: 15px; color: var(--text-muted); margin: 0 0 4px; }
+  .card .sub { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  th { color: var(--text-muted); font-weight: normal; font-size: 12px; }
+  td.rank-cell { width: 32px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  td.score-cell { text-align: right; font-variant-numeric: tabular-nums; font-weight: bold; }
+  .name-cell { display: flex; align-items: center; gap: 8px; }
+  .thumb {
+    width: 32px; height: 32px; border-radius: 50%; object-fit: cover; background: #1f2733; flex: none;
+  }
+  .thumb-fallback {
+    width: 32px; height: 32px; border-radius: 50%; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: bold; color: #fff;
+  }
+  .org-name { font-size: 12px; color: var(--text-muted); }
+
+  .empty-row td { color: var(--text-muted); text-align: center; padding: 20px; }
+
+  button.refresh-btn {
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #1f2733;
+    color: var(--text);
+    cursor: pointer;
+  }
+  button.refresh-btn:hover { border-color: var(--accent); }
+
+  #updatedAt { font-size: 12px; color: var(--text-muted); margin-top: 12px; text-align: right; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>応援ランキング</h1>
+  <div id="connErrorBanner"></div>
+
+  <div class="tabs">
+    <button type="button" id="tabByEvent" class="tab-btn">試合ごと</button>
+    <button type="button" id="tabAllTime" class="tab-btn">全期間通算</button>
+  </div>
+
+  <div id="byEventSection" class="card" hidden>
+    <h2 id="byEventTitle">試合ごとのランキング</h2>
+    <div class="sub" id="byEventSub"></div>
+    <table>
+      <thead>
+        <tr><th class="rank-cell">順位</th><th>対象</th><th class="score-cell">応援量</th></tr>
+      </thead>
+      <tbody id="byEventTableBody">
+        <tr class="empty-row"><td colspan="3">読み込み中...</td></tr>
+      </tbody>
+    </table>
+    <div id="byEventUpdatedAt" class="sub" style="text-align:right; margin-top:8px;"></div>
+  </div>
+
+  <div id="allTimeSection" class="card" hidden>
+    <h2>全期間通算ランキング</h2>
+    <div class="sub">
+      <button type="button" id="allTimeRefreshBtn" class="refresh-btn">更新</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th class="rank-cell">順位</th><th>対象</th><th class="score-cell">応援量</th></tr>
+      </thead>
+      <tbody id="allTimeTableBody">
+        <tr class="empty-row"><td colspan="3">読み込み中...</td></tr>
+      </tbody>
+    </table>
+    <div id="allTimeUpdatedAt" class="sub" style="text-align:right; margin-top:8px;"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? '/api/v1'
+    : 'https://api.cheerstick.com/api/v1';
+
+  const POLL_INTERVAL_MS = 3000;
+
+  const eventId = new URLSearchParams(location.search).get('event_id');
+
+  const connErrorBanner = document.getElementById('connErrorBanner');
+  const tabByEvent = document.getElementById('tabByEvent');
+  const tabAllTime = document.getElementById('tabAllTime');
+  const byEventSection = document.getElementById('byEventSection');
+  const allTimeSection = document.getElementById('allTimeSection');
+  const byEventTableBody = document.getElementById('byEventTableBody');
+  const allTimeTableBody = document.getElementById('allTimeTableBody');
+
+  function showConnError(message) {
+    connErrorBanner.textContent = message;
+    connErrorBanner.classList.add('visible');
+  }
+  function clearConnError() {
+    connErrorBanner.classList.remove('visible');
+  }
+
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString('ja-JP');
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  function colorFor(id) {
+    let h = 0;
+    const s = String(id || '');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    const AVATAR_COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#8338ec', '#3a86ff', '#ff6b6b'];
+    return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  }
+
+  // targetsは順位・チーム名を問わずtotal_intensity降順で既にソート済み（サーバー側ORDER BY）。
+  function renderTable(tbody, targets) {
+    tbody.innerHTML = '';
+
+    if (!targets || targets.length === 0) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">まだ応援データがありません</td></tr>';
+      return;
+    }
+
+    targets.forEach((t, idx) => {
+      const tr = document.createElement('tr');
+      const orgName = t.organization ? t.organization.name : '';
+      const thumb = t.target_image_url
+        ? `<img class="thumb" src="${escapeHtml(t.target_image_url)}" alt="">`
+        : `<div class="thumb-fallback" style="background:${colorFor(t.target_id)}">${escapeHtml((t.target_name || '?').charAt(0))}</div>`;
+
+      tr.innerHTML = `
+        <td class="rank-cell">${idx + 1}</td>
+        <td>
+          <div class="name-cell">
+            ${thumb}
+            <div>
+              <div>${escapeHtml(t.target_name)}</div>
+              <div class="org-name">${escapeHtml(orgName)}</div>
+            </div>
+          </div>
+        </td>
+        <td class="score-cell">${formatNumber(t.total_intensity)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ---- タブ切り替え ----
+  function activateTab(tab) {
+    tabByEvent.classList.toggle('active', tab === 'byEvent');
+    tabAllTime.classList.toggle('active', tab === 'allTime');
+    byEventSection.hidden = tab !== 'byEvent';
+    allTimeSection.hidden = tab !== 'allTime';
+  }
+
+  tabByEvent.addEventListener('click', () => activateTab('byEvent'));
+  tabAllTime.addEventListener('click', () => activateTab('allTime'));
+
+  // ---- 試合ごと（3秒間隔でポーリング） ----
+  let byEventStopped = false;
+
+  async function pollByEvent() {
+    if (byEventStopped) return;
+    if (!eventId) {
+      byEventTableBody.innerHTML =
+        '<tr class="empty-row"><td colspan="3">URLに event_id パラメータがありません。<br>管理画面の試合一覧からevent_idを指定してアクセスしてください。</td></tr>';
+      byEventStopped = true;
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/events/${eventId}/target-scores`);
+      if (res.status === 404) {
+        byEventTableBody.innerHTML = '<tr class="empty-row"><td colspan="3">指定された試合が見つかりません。</td></tr>';
+        byEventStopped = true;
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      clearConnError();
+      document.getElementById('byEventSub').textContent = data.event_title || '';
+      renderTable(byEventTableBody, data.targets);
+      document.getElementById('byEventUpdatedAt').textContent =
+        '最終更新: ' + new Date(data.updated_at).toLocaleTimeString('ja-JP');
+    } catch (e) {
+      // 一時的な通信断は致命エラーにせず、直前の表示を保持したまま次回ポーリングへ続ける
+      showConnError('サーバーに接続できません。再試行しています…');
+    } finally {
+      if (!byEventStopped) setTimeout(pollByEvent, POLL_INTERVAL_MS);
+    }
+  }
+
+  // ---- 全期間通算（読み込み時1回＋手動更新） ----
+  async function loadAllTime() {
+    allTimeTableBody.innerHTML = '<tr class="empty-row"><td colspan="3">読み込み中...</td></tr>';
+    try {
+      const res = await fetch(`${API_BASE}/target-scores`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      clearConnError();
+      renderTable(allTimeTableBody, data.targets);
+      document.getElementById('allTimeUpdatedAt').textContent =
+        '最終更新: ' + new Date(data.updated_at).toLocaleTimeString('ja-JP');
+    } catch (e) {
+      allTimeTableBody.innerHTML = '<tr class="empty-row"><td colspan="3">取得に失敗しました: ' + escapeHtml(e.message) + '</td></tr>';
+    }
+  }
+
+  document.getElementById('allTimeRefreshBtn').addEventListener('click', loadAllTime);
+
+  // 初期表示：URLにevent_idがあれば「試合ごと」を、無ければ「全期間通算」を既定タブにする。
+  activateTab(eventId ? 'byEvent' : 'allTime');
+  pollByEvent();
+  loadAllTime();
+})();
+</script>
+</body>
+</html>
