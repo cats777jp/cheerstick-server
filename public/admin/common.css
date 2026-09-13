@@ -1,0 +1,153 @@
+/* public/admin/common.css
+   管理画面 共通スタイル。
+
+   2026-09-13、管理画面のランチャー方式への再構成（index.html / events.html /
+   masters.html の3ページ分割）に伴い、旧index.html（試合管理・チーム管理・
+   デバイス管理を1ページに同居させていた版）のインライン<style>から、
+   全ページ共通で使う部分のみを切り出した。
+   events.html・masters.html・index.html（ランチャー）の3ファイルすべてから
+   <link rel="stylesheet" href="common.css"> で読み込む。
+
+   ページ固有のスタイル（対抗戦の.bulk-toolbar/.row-error/.battle-url-row、
+   デバイス管理の.device-toolbar/.import-result/.device-pagination等）は
+   各ページ側の<style>に残す。
+*/
+:root {
+  --bg: #0b0f14;
+  --card-bg: #161b22;
+  --border: #2a323d;
+  --text: #f4f6f8;
+  --text-muted: #9aa4af;
+  --accent: #4d8dff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding: 16px 16px 60px;
+}
+h1 { font-size: 18px; margin: 0 0 16px; }
+h2 { font-size: 15px; color: var(--text-muted); margin: 0 0 12px; }
+
+.error-bar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: #b3261e;
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.error-bar.visible { display: block; }
+
+.container { max-width: 900px; margin: 0 auto; }
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+/* 記録状態バナー：ランチャー（index.html）とevents.htmlの両方で使うため共通化 */
+.record-banner {
+  text-align: center;
+  padding: 28px 16px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+.record-banner.live {
+  background: #1b3a24;
+  border: 1px solid #2e7d46;
+}
+.record-banner.stopped {
+  background: #2a2f36;
+  border: 1px solid var(--border);
+}
+.record-banner .headline {
+  font-size: 28px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+.record-banner.live .headline { color: #4ade80; }
+.record-banner.stopped .headline { color: var(--text-muted); }
+.record-banner .detail { font-size: 15px; color: var(--text); }
+.record-banner .note { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { color: var(--text-muted); font-weight: normal; font-size: 12px; }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: bold;
+  color: #0b0f14;
+}
+.badge.live { background: #4ade80; }
+.badge.paused { background: #facc15; }
+.badge.scheduled { background: #9aa4af; }
+.badge.finished { background: #60a5fa; }
+.badge.cancelled { background: #f87171; }
+
+button {
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #1f2733;
+  color: var(--text);
+  cursor: pointer;
+  margin-right: 4px;
+  margin-bottom: 4px;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { background: #b3261e; border-color: #b3261e; color: #fff; }
+
+label { display: block; font-size: 13px; color: var(--text-muted); margin: 10px 0 4px; }
+input, select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0f141b;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  padding: 16px;
+}
+.modal-overlay.visible { display: flex; }
+.modal-box {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  width: 100%;
+  max-width: 420px;
+}
+.modal-box .actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+
+.empty-row td { color: var(--text-muted); text-align: center; padding: 20px; }
+
+/* チェックボックス列：events.html（試合一覧の一括選択）・masters.html
+   （デバイス一覧の一括選択）の両方で使うため共通化 */
+td.checkbox-cell, th.checkbox-cell { width: 32px; }
+td.checkbox-cell input, th.checkbox-cell input { width: auto; }

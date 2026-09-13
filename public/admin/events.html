@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>試合管理 | 推しフル管理画面</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  /* 対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11追加）。
+     2026-09-13、管理画面3ページ分割に伴い、旧index.htmlのインライン<style>から
+     events.htmlページ固有分としてそのまま移設。 */
+  .bulk-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .bulk-toolbar span { font-size: 13px; color: var(--text-muted); }
+  .row-error {
+    color: #f87171;
+    font-size: 12px;
+    margin-top: 4px;
+  }
+  .battle-url-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .battle-url-row input {
+    width: auto;
+    flex: 1 1 220px;
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>試合管理</h1>
+  <p><a href="index.html">&larr; 管理画面トップ</a></p>
+  <div id="errorBar" class="error-bar"></div>
+
+  <!-- (A) 現在の記録状態 -->
+  <div id="recordBanner" class="record-banner stopped">
+    <div class="headline">■ 記録停止中</div>
+    <div class="note">応援データは保存されません</div>
+  </div>
+
+  <!-- (C) 新規登録フォーム -->
+  <div class="card">
+    <h2>新規試合登録</h2>
+    <form id="createForm">
+      <label for="createTitle">試合名</label>
+      <input id="createTitle" type="text" required>
+
+      <label for="createOrg">チーム</label>
+      <select id="createOrg" required></select>
+
+      <label for="createStartsAt">開始日時</label>
+      <input id="createStartsAt" type="datetime-local" required>
+
+      <label for="createEndsAt">終了日時（任意）</label>
+      <input id="createEndsAt" type="datetime-local">
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- (B) 試合一覧 -->
+  <div class="card">
+    <h2>試合一覧</h2>
+
+    <!-- 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
+         既存のPATCH /events/:id/statusをチェック済みの試合IDに対して1件ずつ順番に呼ぶだけで、
+         現在のstatusに応じた遷移可否のチェックは行わない（既存APIの検証にそのまま委ねる）。 -->
+    <div class="bulk-toolbar">
+      <span id="eventSelectedCount">0件選択中</span>
+      <button id="bulkStartBtn">開始</button>
+      <button id="bulkPauseBtn">停止</button>
+      <button id="bulkFinishBtn" class="danger">終了</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="checkbox-cell"><input id="eventSelectAllCheckbox" type="checkbox"></th>
+          <th>試合名</th>
+          <th>チーム</th>
+          <th>開始日時</th>
+          <th>状態</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="eventsTableBody">
+        <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- (G) 対抗戦ペア管理（2チーム対抗応援合戦機能、2026-09-11追加）。
+       対抗戦ペア登録フォームのプルダウンは同ページ内の試合一覧データ(lastEventsList)を
+       使うため、2026-09-13の3ページ分割でも試合一覧(B)と同じevents.htmlに留めている
+       （populateBattleEventSelects(events)の呼び出し方は変更していない）。 -->
+  <div class="card">
+    <h2>対抗戦ペア登録</h2>
+    <form id="battleCreateForm">
+      <label for="battleEventA">試合A（画面左側）</label>
+      <select id="battleEventA" required></select>
+
+      <label for="battleEventB">試合B（画面右側）</label>
+      <select id="battleEventB" required></select>
+
+      <label for="battleLabel">ラベル（任意）</label>
+      <input id="battleLabel" type="text" placeholder="例：RED vs BLUE">
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>対抗戦ペア一覧</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ラベル</th>
+          <th>試合A</th>
+          <th>試合B</th>
+          <th>スクリーン表示URL</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="battlesTableBody">
+        <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- (D) 編集モーダル -->
+<div id="editModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2>試合を編集</h2>
+    <form id="editForm">
+      <input type="hidden" id="editId">
+      <label for="editTitle">試合名</label>
+      <input id="editTitle" type="text" required>
+
+      <label for="editOrg">チーム</label>
+      <select id="editOrg" required></select>
+
+      <label for="editStartsAt">開始日時</label>
+      <input id="editStartsAt" type="datetime-local" required>
+
+      <label for="editEndsAt">終了日時（任意）</label>
+      <input id="editEndsAt" type="datetime-local">
+
+      <div class="actions">
+        <button type="button" id="editCancelBtn">キャンセル</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  const errorBar = document.getElementById('errorBar');
+  const recordBanner = document.getElementById('recordBanner');
+  const eventsTableBody = document.getElementById('eventsTableBody');
+
+  const createForm = document.getElementById('createForm');
+  const createOrg = document.getElementById('createOrg');
+
+  const editModalOverlay = document.getElementById('editModalOverlay');
+  const editForm = document.getElementById('editForm');
+  const editOrg = document.getElementById('editOrg');
+  const editCancelBtn = document.getElementById('editCancelBtn');
+
+  const STATUS_LABELS = {
+    live: 'live',
+    paused: 'paused',
+    scheduled: 'scheduled',
+    finished: 'finished',
+    cancelled: 'cancelled',
+  };
+
+  function populateOrgSelect(selectEl, organizations) {
+    selectEl.innerHTML = '';
+    organizations.forEach((org) => {
+      const opt = document.createElement('option');
+      opt.value = org.id;
+      opt.textContent = org.name;
+      selectEl.appendChild(opt);
+    });
+  }
+
+  function renderBanner(events) {
+    const liveEvents = events.filter((e) => e.status === 'live');
+
+    if (liveEvents.length > 0) {
+      recordBanner.className = 'record-banner live';
+      recordBanner.innerHTML =
+        '<div class="headline">● 記録中</div>' +
+        liveEvents.map((e) => `<div class="detail">${escapeHtml(e.title)}</div>`).join('');
+    } else {
+      recordBanner.className = 'record-banner stopped';
+      recordBanner.innerHTML =
+        '<div class="headline">■ 記録停止中</div>' +
+        '<div class="note">応援データは保存されません</div>';
+    }
+  }
+
+  function actionButtonsFor(event) {
+    const buttons = [];
+    const finishConfirm = `「${event.title}」を終了します。この操作は取り消せません。よろしいですか？`;
+
+    if (event.status === 'scheduled') {
+      buttons.push({ label: '開始', nextStatus: 'live', confirm: false });
+    } else if (event.status === 'live') {
+      buttons.push({ label: '停止', nextStatus: 'paused', confirm: false });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true, confirmMessage: finishConfirm });
+    } else if (event.status === 'paused') {
+      buttons.push({ label: '再開', nextStatus: 'live', confirm: false });
+      buttons.push({ label: '終了', nextStatus: 'finished', confirm: true, confirmMessage: finishConfirm });
+    } else if (event.status === 'finished') {
+      // B-1（11.6、2026-08-19追加）：finishedからの復帰導線。戻り先はpausedのみ
+      // （liveへ直接戻すとupdateEventStatusのLIVE_EVENT_CONFLICT検査を踏む経路があるため）。
+      // ボタン文言は「再開」ではなく「終了を取り消す」＝誤操作の取り消しであることを伝える。
+      buttons.push({
+        label: '終了を取り消す',
+        nextStatus: 'paused',
+        confirm: true,
+        confirmMessage: `「${event.title}」（現在：終了）の終了を取り消し、停止中に戻します。よろしいですか？`,
+      });
+    }
+    return buttons;
+  }
+
+  // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
+  // 選択状態・行エラーは再描画（refreshAll）をまたいで保持する必要があるため、
+  // イベントIDをキーにモジュールスコープで保持する。
+  const selectedEventIds = new Set();
+  const eventRowErrors = new Map(); // eventId -> エラーメッセージ
+  let lastEventsList = []; // 対抗戦ペア登録フォームのプルダウン用に最新の一覧を保持
+
+  function updateEventSelectedCount() {
+    document.getElementById('eventSelectedCount').textContent = `${selectedEventIds.size}件選択中`;
+  }
+
+  function renderTable(events) {
+    eventsTableBody.innerHTML = '';
+
+    if (events.length === 0) {
+      eventsTableBody.innerHTML = '<tr class="empty-row"><td colspan="6">登録されている試合はありません</td></tr>';
+      return;
+    }
+
+    events.forEach((event) => {
+      const tr = document.createElement('tr');
+
+      const statusLabel = STATUS_LABELS[event.status] || event.status;
+      const rowError = eventRowErrors.get(event.id);
+
+      tr.innerHTML = `
+        <td class="checkbox-cell"><input type="checkbox" class="event-row-checkbox" data-id="${escapeHtml(event.id)}"></td>
+        <td>${escapeHtml(event.title)}</td>
+        <td>${escapeHtml(event.organization_name || '-')}</td>
+        <td>${escapeHtml(formatDisplayDate(event.starts_at))}</td>
+        <td><span class="badge ${escapeHtml(event.status)}">${escapeHtml(statusLabel)}</span></td>
+        <td class="action-cell"></td>
+      `;
+
+      const checkbox = tr.querySelector('.event-row-checkbox');
+      checkbox.checked = selectedEventIds.has(event.id);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) selectedEventIds.add(event.id);
+        else selectedEventIds.delete(event.id);
+        updateEventSelectedCount();
+      });
+
+      const actionCell = tr.querySelector('.action-cell');
+
+      actionButtonsFor(event).forEach((btnDef) => {
+        const btn = document.createElement('button');
+        btn.textContent = btnDef.label;
+        if (btnDef.confirm) btn.classList.add('danger');
+        btn.addEventListener('click', () => handleStatusChange(event, btnDef));
+        actionCell.appendChild(btn);
+      });
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '編集';
+      editBtn.addEventListener('click', () => openEditModal(event));
+      actionCell.appendChild(editBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '削除';
+      deleteBtn.classList.add('danger');
+      deleteBtn.addEventListener('click', () => handleDelete(event));
+      actionCell.appendChild(deleteBtn);
+
+      if (rowError) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'row-error';
+        errorDiv.textContent = rowError;
+        actionCell.appendChild(errorDiv);
+      }
+
+      eventsTableBody.appendChild(tr);
+    });
+
+    document.getElementById('eventSelectAllCheckbox').checked = false;
+  }
+
+  async function handleStatusChange(event, btnDef) {
+    if (btnDef.confirm) {
+      const ok = confirm(btnDef.confirmMessage || `「${event.title}」の状態を変更します。よろしいですか？`);
+      if (!ok) return;
+    }
+
+    try {
+      await apiFetch(`/events/${event.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: btnDef.nextStatus }),
+      });
+      eventRowErrors.delete(event.id);
+      clearError();
+    } catch (e) {
+      if (e.status === 409 && e.body) {
+        const conflict = e.body.conflicting_event;
+        alert(
+          '既に同じチームでlive中の試合があるため開始できません。\n' +
+          (conflict ? `該当試合: ${conflict.title}（id: ${conflict.id}）` : '')
+        );
+      } else {
+        showError('状態の更新に失敗しました: ' + e.message);
+      }
+    } finally {
+      await refreshAll();
+    }
+  }
+
+  async function handleDelete(event) {
+    const ok = confirm(`「${event.title}」を本当に削除しますか？`);
+    if (!ok) return;
+
+    try {
+      await apiFetch(`/events/${event.id}`, { method: 'DELETE' });
+      eventRowErrors.delete(event.id);
+      selectedEventIds.delete(event.id);
+      clearError();
+    } catch (e) {
+      if (e.status === 409 && e.body) {
+        showError(e.body.message || '進行中の試合は削除できません。');
+      } else {
+        showError('試合の削除に失敗しました: ' + e.message);
+      }
+    } finally {
+      await refreshAll();
+    }
+  }
+
+  // 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加、
+  // 2026-09-14に状態遷移ルール適用を追加、同日中に「停止」のlive限定を追加）。
+  // 選択中の試合IDに対し、既存のPATCH /events/:id/statusを1件ずつ順番に呼び出すだけ
+  // （バックエンドAPIの新規追加は無し）。
+  //
+  // 状態遷移ルールは基本的に individual ボタン（actionButtonsFor()）と全く同じ関数の
+  // 結果をそのまま使う（ルールを二重管理して食い違うことを避けるため）。個別ボタンとして
+  // 表示されない遷移（例：finished→liveへの直接遷移）は、一括操作でも実行しない。
+  //
+  // ただし一括「停止」（nextStatus === 'paused'）のみ例外的に、対象をstatus==='live'の
+  // 行に限定する特別扱いをしている。actionButtonsFor()ベースの判定だけに頼ると、
+  // finishedの試合も（「終了を取り消す」と同じpaused遷移のため）許可されてしまい、
+  // 「停止」というラベルの意図（live中の試合を一時中断する）と実際の挙動
+  // （finishedの試合を復活させてしまう）がずれる。個別ボタンの「終了を取り消す」は
+  // 単発ボタンでのみ実行可能なままとし、一括操作からは除外する。
+  //
+  // 対象外の行はAPIを呼ばずスキップし、失敗行と同様にチェックを残したまま
+  // 「対象外（現在の状態では実行できません）」を表示する。
+  //
+  // 部分成功を許容：成功した行は選択解除、失敗・対象外の行は選択を残しエラー内容を
+  // 行に表示する（個別ボタンでの手動対応用）。
+  async function bulkChangeStatus(nextStatus, confirmMessage) {
+    if (selectedEventIds.size === 0) {
+      showError('試合を選択してください');
+      return;
+    }
+    if (confirmMessage) {
+      const ok = confirm(confirmMessage);
+      if (!ok) return;
+    }
+
+    const ids = [...selectedEventIds];
+    for (const id of ids) {
+      const event = lastEventsList.find((e) => e.id === id);
+      if (!event) {
+        // refreshAll()後に一覧から消えた（削除された等）試合。
+        eventRowErrors.set(id, '試合が見つかりません（一覧から削除された可能性があります）');
+        continue;
+      }
+
+      // 一括「停止」だけはactionButtonsFor()の遷移先一致に頼らず、
+      // 現在の状態がliveの行にのみ限定する（上記コメント参照。事故防止のため）。
+      const isAllowedTransition = nextStatus === 'paused'
+        ? event.status === 'live'
+        : actionButtonsFor(event).some((btnDef) => btnDef.nextStatus === nextStatus);
+      if (!isAllowedTransition) {
+        const statusLabel = STATUS_LABELS[event.status] || event.status;
+        eventRowErrors.set(id, `対象外（現在の状態「${statusLabel}」ではこの操作は実行できません）`);
+        continue; // APIは呼ばない。チェックも外さない。
+      }
+
+      try {
+        await apiFetch(`/events/${id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        selectedEventIds.delete(id);
+        eventRowErrors.delete(id);
+      } catch (e) {
+        let message = e.message;
+        if (e.status === 409 && e.body && e.body.conflicting_event) {
+          message = `同じチームでlive中の試合があります（${e.body.conflicting_event.title}）`;
+        } else if (e.status === 404) {
+          message = '試合が見つかりません';
+        }
+        eventRowErrors.set(id, message);
+        // 失敗した行は選択を残す（手動での個別対応用）。
+      }
+    }
+    clearError();
+    await refreshAll();
+  }
+
+  document.getElementById('bulkStartBtn').addEventListener('click', () => bulkChangeStatus('live', null));
+  document.getElementById('bulkPauseBtn').addEventListener('click', () => bulkChangeStatus('paused', null));
+  document.getElementById('bulkFinishBtn').addEventListener('click', () => {
+    bulkChangeStatus(
+      'finished',
+      `選択した${selectedEventIds.size}件の試合を終了します。この操作は取り消せません。よろしいですか？`
+    );
+  });
+
+  document.getElementById('eventSelectAllCheckbox').addEventListener('change', (e) => {
+    eventsTableBody.querySelectorAll('.event-row-checkbox').forEach((cb) => {
+      cb.checked = e.target.checked;
+      const id = cb.getAttribute('data-id');
+      if (e.target.checked) selectedEventIds.add(id);
+      else selectedEventIds.delete(id);
+    });
+    updateEventSelectedCount();
+  });
+
+  function openEditModal(event) {
+    document.getElementById('editId').value = event.id;
+    document.getElementById('editTitle').value = event.title;
+    document.getElementById('editStartsAt').value = isoToDatetimeLocal(event.starts_at);
+    document.getElementById('editEndsAt').value = isoToDatetimeLocal(event.ends_at);
+    editOrg.value = event.organization_id;
+    editModalOverlay.classList.add('visible');
+  }
+
+  function closeEditModal() {
+    editModalOverlay.classList.remove('visible');
+  }
+
+  editCancelBtn.addEventListener('click', closeEditModal);
+
+  editForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('editId').value;
+
+    try {
+      await apiFetch(`/events/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: document.getElementById('editTitle').value.trim(),
+          organization_id: editOrg.value,
+          starts_at: datetimeLocalToIso(document.getElementById('editStartsAt').value),
+          ends_at: datetimeLocalToIso(document.getElementById('editEndsAt').value),
+        }),
+      });
+      clearError();
+      closeEditModal();
+    } catch (e2) {
+      showError('試合の更新に失敗しました: ' + e2.message);
+    } finally {
+      await refreshAll();
+    }
+  });
+
+  createForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    try {
+      await apiFetch('/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: document.getElementById('createTitle').value.trim(),
+          organization_id: createOrg.value,
+          starts_at: datetimeLocalToIso(document.getElementById('createStartsAt').value),
+          ends_at: datetimeLocalToIso(document.getElementById('createEndsAt').value),
+        }),
+      });
+      clearError();
+      createForm.reset();
+    } catch (e2) {
+      showError('試合の登録に失敗しました: ' + e2.message);
+    } finally {
+      await refreshAll();
+    }
+  });
+
+  async function loadOrganizations() {
+    try {
+      const organizations = await apiFetch('/organizations');
+      populateOrgSelect(createOrg, organizations);
+      populateOrgSelect(editOrg, organizations);
+    } catch (e) {
+      showError('チーム一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  async function refreshAll() {
+    try {
+      const events = await apiFetch('/events');
+      lastEventsList = events;
+      renderBanner(events);
+      renderTable(events);
+      updateEventSelectedCount();
+      populateBattleEventSelects(events);
+    } catch (e) {
+      showError('試合一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  loadOrganizations();
+  refreshAll();
+
+  // ==========================================================
+  // (G) 対抗戦ペア（event_battles）管理：2チーム対抗応援合戦機能（2026-09-11追加）
+  // ==========================================================
+  const battleCreateForm = document.getElementById('battleCreateForm');
+  const battleEventA = document.getElementById('battleEventA');
+  const battleEventB = document.getElementById('battleEventB');
+  const battleLabel = document.getElementById('battleLabel');
+  const battlesTableBody = document.getElementById('battlesTableBody');
+
+  function battleScreenUrl(battleId) {
+    return `${APP_BASE}/battle.html?battle_id=${battleId}`;
+  }
+
+  // 試合一覧（events）が更新されるたびに呼ばれる。プルダウンの選択状態は
+  // 可能な限り保持する（登録フォーム入力中に一覧が再取得されても選択が飛ばないように）。
+  function populateBattleEventSelects(events) {
+    [battleEventA, battleEventB].forEach((selectEl) => {
+      const prevValue = selectEl.value;
+      selectEl.innerHTML = '';
+      events.forEach((ev) => {
+        const opt = document.createElement('option');
+        opt.value = ev.id;
+        opt.textContent = `${ev.title}（${ev.organization_name || 'チーム未設定'}・${STATUS_LABELS[ev.status] || ev.status}）`;
+        selectEl.appendChild(opt);
+      });
+      if (events.some((ev) => ev.id === prevValue)) {
+        selectEl.value = prevValue;
+      }
+    });
+  }
+
+  function renderBattlesTable(battles) {
+    battlesTableBody.innerHTML = '';
+
+    if (battles.length === 0) {
+      battlesTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">登録されている対抗戦ペアはありません</td></tr>';
+      return;
+    }
+
+    battles.forEach((battle) => {
+      const tr = document.createElement('tr');
+      const url = battleScreenUrl(battle.id);
+
+      tr.innerHTML = `
+        <td>${escapeHtml(battle.label || '-')}</td>
+        <td>${escapeHtml(battle.event_a_title)}（${escapeHtml(battle.event_a_organization_name || 'チーム未設定')}）</td>
+        <td>${escapeHtml(battle.event_b_title)}（${escapeHtml(battle.event_b_organization_name || 'チーム未設定')}）</td>
+        <td>
+          <div class="battle-url-row">
+            <input type="text" readonly value="${escapeHtml(url)}">
+            <button type="button" class="battle-copy-btn">コピー</button>
+          </div>
+        </td>
+        <td class="action-cell"></td>
+      `;
+
+      tr.querySelector('.battle-copy-btn').addEventListener('click', async (e) => {
+        const btn = e.target;
+        try {
+          await navigator.clipboard.writeText(url);
+          const original = btn.textContent;
+          btn.textContent = 'コピーしました';
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        } catch (err) {
+          // クリップボードAPIが使えない環境（非HTTPS等）向けのフォールバック
+          window.prompt('以下のURLを手動でコピーしてください', url);
+        }
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '削除';
+      deleteBtn.classList.add('danger');
+      deleteBtn.addEventListener('click', () => handleBattleDelete(battle));
+      tr.querySelector('.action-cell').appendChild(deleteBtn);
+
+      battlesTableBody.appendChild(tr);
+    });
+  }
+
+  async function loadBattles() {
+    try {
+      const battles = await apiFetch('/event-battles');
+      renderBattlesTable(battles);
+      clearError();
+    } catch (e) {
+      showError('対抗戦ペア一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  battleCreateForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (battleEventA.value && battleEventA.value === battleEventB.value) {
+      showError('試合Aと試合Bには異なる試合を選択してください');
+      return;
+    }
+
+    try {
+      await apiFetch('/event-battles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: battleLabel.value.trim() || null,
+          event_a_id: battleEventA.value,
+          event_b_id: battleEventB.value,
+        }),
+      });
+      clearError();
+      battleLabel.value = '';
+      await loadBattles();
+    } catch (e2) {
+      if (e2.status === 400 && e2.body && e2.body.error === 'SAME_EVENT') {
+        showError('試合Aと試合Bには異なる試合を選択してください');
+      } else {
+        showError('対抗戦ペアの登録に失敗しました: ' + e2.message);
+      }
+    }
+  });
+
+  async function handleBattleDelete(battle) {
+    const ok = confirm(`対抗戦ペア「${battle.label || '(ラベル無し)'}」を削除しますか？（元の試合自体は削除されません）`);
+    if (!ok) return;
+
+    try {
+      await apiFetch(`/event-battles/${battle.id}`, { method: 'DELETE' });
+      clearError();
+    } catch (e) {
+      showError('対抗戦ペアの削除に失敗しました: ' + e.message);
+    } finally {
+      await loadBattles();
+    }
+  }
+
+  loadBattles();
+})();
+</script>
+</body>
+</html>
