@@ -4,6 +4,93 @@
 
 ---
 
+## 2026-09-13 リポジトリバックアップ「20260913ver」の取得
+
+### 背景
+
+KMT様より、過去に一度行われたという「GitHubバックアップ」と同じ形式でのバックアップ
+（名称「20260913ver」）取得を依頼された。
+
+### 実施したこと（依頼1：過去のバックアップ方式の確認）
+
+- `git tag -l`：タグは1件も存在しないことを確認
+- `git remote -v`：`origin`（本リポジトリ、`cats777jp/cheerstick-server`）1件のみ、
+  バックアップ用の別リモートは無いことを確認
+- `git branch -a`：`main`／`feature/reference-data`／`feature/category-support`の3件のみ、
+  バックアップ用の別ブランチは無いことを確認
+- `git log --all --grep`でコミットメッセージ中の「backup」「バックアップ」「ver」を検索したが、
+  リポジトリのバックアップ操作に該当するものは見つからなかった
+  （「verification-checklist」「v10」等、無関係な一致のみ）
+- `docs/spec.md`・`docs/runbook.md`・`docs/worklog.md`内の「バックアップ」「backup」の
+  記述を確認したが、いずれも本番EC2上のDBバックアップ（`pg_dump`）・設定ファイルの
+  退避コピー（`.env.bak_*`、`sites-available.bak_*`等）に関するものであり、
+  **「GitHubバックアップ」（タグ・別ブランチ・別リポジトリ等）に該当する記録は
+  見つからなかった**
+- `gh`（GitHub CLI）はローカル環境に未インストールのため、GitHub側のリリース・タグを
+  直接確認する手段が無かった（`git ls-remote --tags origin`では上記のとおりタグ0件を
+  確認済みのため、少なくともこのリポジトリにタグとしての痕跡は無いと判断できる）
+
+**結論**：過去の「GitHubバックアップ」の具体的な方式は、このリポジトリの記録
+（タグ・ブランチ・コミット履歴・docs）からは特定できなかった。KMT様のご依頼文中で
+提案いただいていた命名（`main-20260913ver`／`feature-reference-data-20260913ver`の
+ようにブランチが分かる形のgitタグ）を、今回合意済みの方式として採用した。
+
+### 実施したこと（依頼2：バックアップの実施）
+
+1. タグ付け前に、ローカルの`main`・`feature/reference-data`がそれぞれ`origin`の
+   同名ブランチと完全一致していること（差分無し）を確認した
+2. 注釈付きタグ（`git tag -a`）を作成：
+   - `main-20260913ver` → `main`のHEAD（`7388540`）
+   - `feature-reference-data-20260913ver` → `feature/reference-data`のHEAD（`8f9fd4a`、
+     管理画面ランチャー化・pageshow修正・staging DB migration 011適用の記録を含む）
+3. `git push origin main-20260913ver feature-reference-data-20260913ver`でoriginへpush、
+   `git ls-remote --tags origin`で両タグがリモートに存在し、参照先コミットが
+   意図したものと一致することを確認した
+4. 本番DBバックアップ（`pg_dump`）を、既存の命名規則
+   （`cheerstick_production_YYYYMMDD_HHMMSS.sql`、11.8章で実際に使われた方式）に
+   沿って取得した：
+   ```
+   /home/ubuntu/backups/cheerstick_production_20260913_074456.sql（49,996バイト）
+   ```
+   取得後、ファイル先頭・末尾（`-- PostgreSQL database dump`〜
+   `-- PostgreSQL database dump complete`）を読み取り専用で確認し、正常なダンプ
+   ファイルであることを確認した。本番DBへの変更は無し（読み取り専用の`pg_dump`のみ）
+
+### 判明した事実 / 想定と違ったこと
+
+- 過去の「GitHubバックアップ」について、少なくとも本リポジトリのgit履歴・docsからは
+  痕跡を確認できなかった。別の手段（例：ローカルPCへのzipアーカイブ、GitHub上の
+  private forkなど、gitのタグ・ブランチ・コミット履歴に残らない方法）で行われていた
+  可能性、あるいはKMT様の記憶違いの可能性のいずれもあり得るため、今回この場での
+  特定は断念し、ご依頼文中の提案方式をそのまま採用する形とした
+
+### 変更したファイル
+
+- コード変更・DB変更（本番DBバックアップの取得を除く）・デプロイは無し
+- git：新規タグ2件（`main-20260913ver`・`feature-reference-data-20260913ver`）を作成し
+  originへpush
+- 本番EC2：`~/backups/cheerstick_production_20260913_074456.sql`（新規、DBの変更は無し）
+- `docs/worklog.md`（本エントリ）
+
+### 次回への申し送り
+
+1. 過去の「GitHubバックアップ」の実体（もし別の場所に存在するなら）について、
+   KMT様のご記憶や手元の記録（メール、別フォルダ等）を辿っていただけると、
+   今後のバックアップ方式の統一に役立つ
+2. 今回のタグ命名（`<ブランチ名>-YYYYMMDDver`）を今後の標準方式とするかどうか、
+   継続するならdocs/runbook.mdへの手順化を検討する
+3. 前回までのその他の残課題（staging DBの検証用データの削除タイミング、実機ブラウザでの
+   「戻る」操作によるpageshow修正の最終確認、`cheer_logs`が0件である根本原因の切り分け、
+   Vanstoneブリッジ仕様、管理API認証追加、負荷試験、静的ファイル2箇所デプロイ恒久対応、
+   `cheerstick-ws`の要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 過去の「GitHubバックアップ」の実体の特定（上記申し送り1）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-13 schema_migrationsへの011適用記録の追加
 
 ### 背景
