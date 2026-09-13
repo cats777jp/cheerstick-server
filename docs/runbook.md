@@ -481,6 +481,83 @@ git log --oneline -1
 
 ---
 
+## リポジトリバックアップ手順（gitタグ方式、2026-09-13新設）
+
+**実施タイミングの目安**：大きな機能追加の後、本番デプロイ前など、要所での実施を想定する。
+毎回の細かいコミットで行うものではない。
+
+過去に一度「GitHubバックアップ」が行われたとの認識があったが、2026-09-13時点で
+`git tag -l`・`git remote -v`・全ブランチ・docs内の記述のいずれからも過去の具体的な
+方式を特定できなかった（詳細は`docs/worklog.md`2026-09-13エントリ「リポジトリバックアップ
+『20260913ver』の取得」参照）。そのため、以下を今後の標準手順として新たに定める。
+
+### タグ命名規則
+
+```
+<ブランチ名を安全な形に変換>-<YYYYMMDDver>
+```
+
+ブランチ名の`/`はタグ名として使えない（あるいは紛らわしい）ため`-`に置き換える。
+
+例：
+- `main` ブランチ → `main-20260913ver`
+- `feature/reference-data` ブランチ → `feature-reference-data-20260913ver`
+
+### 手順
+
+```bash
+# 1. 対象ブランチのローカルがoriginの同名ブランチと完全一致していることを確認
+#    （差分が出る場合はpull/pushで揃えてから進める。ズレたままタグを打つと
+#    「バックアップのつもりが実は古い/新しい版だった」という事故につながるため）
+git fetch origin
+git log <ブランチ名>..origin/<ブランチ名> --oneline
+git log origin/<ブランチ名>..<ブランチ名> --oneline
+# 両方とも出力が空であることを確認
+
+# 2. タグを作成（対象ブランチのHEADに対して）
+git tag <タグ名> <ブランチ名>
+
+# 3. タグをoriginへpush（通常のgit pushではタグは送られないため、タグ名を明示する）
+git push origin <タグ名>
+
+# 4. リモートに反映されたことを確認
+git ls-remote --tags origin
+```
+
+### 本番DBバックアップの併用（推奨）
+
+コードのバックアップ（gitタグ）と合わせて、**本番DBバックアップ（`pg_dump`）も同じ
+タイミングで取得することを推奨する。** 命名規則は既存のもの（11.8章の本番デプロイ時等で
+実際に使われている方式）をそのまま使う。
+
+```bash
+# 本番EC2上で実行
+mkdir -p ~/backups
+FILE=~/backups/cheerstick_production_$(date +%Y%m%d_%H%M%S).sql
+sudo -u postgres pg_dump cheerstick_production > $FILE
+ls -la $FILE   # サイズが非ゼロであることを確認
+```
+
+### 実施例（2026-09-13）
+
+```
+git tag main-20260913ver main
+git tag feature-reference-data-20260913ver feature/reference-data
+git push origin main-20260913ver feature-reference-data-20260913ver
+```
+
+作成したタグ：
+
+| タグ名 | 参照コミット |
+|---|---|
+| `main-20260913ver` | `7388540` |
+| `feature-reference-data-20260913ver` | `8f9fd4a`（管理画面ランチャー化・pageshow修正・staging DB migration 011適用の記録を含む） |
+
+同日、本番DBバックアップも取得済み：`~/backups/cheerstick_production_20260913_074456.sql`
+（49,996バイト）。詳細は`docs/worklog.md`2026-09-13エントリ参照。
+
+---
+
 ## 未確認・保留中のファイル
 
 - `cheerstick-ws`：**2026-07-31、内容確認済み。** nginx設定の下書きであることを確認した。
