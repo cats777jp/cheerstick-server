@@ -155,6 +155,30 @@ pm2 restart cheerstick-server
 **恒久対応（未実施）**：nginx の root を `cheerstick-server-new/public/` に統一するか、
 デプロイスクリプトでコピーを自動化する。
 
+### ⚠️ 管理画面は5ファイル構成になった（2026-09-13追記・未反映）
+
+**理由：** `public/admin/index.html`（試合管理・チーム管理・デバイス管理が同居する
+単一ファイル）を、ランチャー方式（index.html／events.html／masters.html／common.css／
+common.js の5ファイル）へ再構成した（`docs/spec.md` 9.5章参照）。**本項目は
+2026-09-13時点でローカル確認のみであり、本番デプロイは未実施。** 実際にデプロイする際は、
+上記の単一ファイルcp（`sudo cp public/admin/index.html /var/www/cheerstick-admin/`）では
+新設した4ファイルがコピーされず、旧デプロイ漏れ事故と同じ問題が再発する。デプロイ時は
+以下の5ファイルすべてを対象にすること。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+sudo cp public/admin/index.html    /var/www/cheerstick-admin/
+sudo cp public/admin/events.html   /var/www/cheerstick-admin/
+sudo cp public/admin/masters.html  /var/www/cheerstick-admin/
+sudo cp public/admin/common.css    /var/www/cheerstick-admin/
+sudo cp public/admin/common.js     /var/www/cheerstick-admin/
+pm2 restart cheerstick-server
+```
+
+反映確認は下記「★必須：コピー後は『反映されたこと』をdiffで確認する」の方針に倣い、
+5ファイルすべてに対して`diff`を実行してから完了とすること。
+
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 
 **理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能
@@ -276,6 +300,10 @@ sudo systemctl reload nginx
 
 ```
 配信元       : /var/www/cheerstick-admin/（新設。git管理下の原本は public/admin/index.html）
+               ※2026-09-13、原本をindex.html／events.html／masters.html／common.css／
+               common.jsの5ファイルへ再構成（上記「管理画面は5ファイル構成になった」参照）。
+               本項の所有者・nginx設定・IP制限の記載自体（ディレクトリ単位の設定）は
+               ファイル分割の影響を受けないため変更していない
 所有者       : ubuntu:ubuntu（手順書は www-data:www-data を想定していたが、
                既存の /var/www/cheerstick-app/ が ubuntu:ubuntu だったため、
                それに合わせた。ディレクトリ755、index.html 664）
