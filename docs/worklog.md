@@ -4,6 +4,101 @@
 
 ---
 
+## 2026-09-13 「管理画面ランチャー化」「選手データ管理UI・応援集計画面」の本番デプロイ
+
+### 背景
+
+`feature/reference-data`ブランチに溜まっていた2件（管理画面のランチャー方式への
+再構成、選手データ管理UI・チーム別/選手別応援集計画面）を、KMT様指示により本番反映した。
+マイグレーション（DB変更）は無し（選手データ管理UIは既存の`targets`テーブルをそのまま
+使用しているため）。
+
+### 事前確認
+
+- `git status`／`git log --oneline -1`：ローカルは`feature/reference-data`、
+  未コミット変更なし、HEAD `1589ec3`（push済み）
+- `ss -tnp state established '( sport = :3000 )'`：本番EC2で該当接続0件
+  （実施可能な状態と判断）
+
+### 実施したこと（手順どおり）
+
+**手順①：git pull・バックエンドコード反映**
+- `cd /home/ubuntu/cheerstick-server-new && git pull`：`7c9ce59..1589ec3`を
+  fast-forwardで反映（16ファイル、4078行追加・1414行削除）
+- `git log --oneline -10`でランチャー化・選手管理関連のコミットが反映されたことを確認
+
+**手順②：静的ファイル反映（管理画面：6ファイル構成）**
+- `index.html`・`events.html`・`masters.html`・`targets.html`（新規）・`common.css`・
+  `common.js`（新規）を`/var/www/cheerstick-admin/`へ`sudo cp`、6ファイルすべて`diff`で
+  差分なしを確認
+- **新規コピーされた5ファイル（`targets.html`含む）の所有者が`root:root`（644）に
+  なっていた（過去`battle.html`で発生したのと同じ事象、`docs/worklog.md`2026-09-11
+  エントリ参照）。** 既存ファイルの慣習（`ubuntu:ubuntu`、664）に合わせ、
+  `chown ubuntu:ubuntu`・`chmod 664`で統一した
+
+**手順③：静的ファイル反映（公開ページ）**
+- `public/index.html`・`battle.html`：`diff`で今回変更を含まないことを確認（反映不要）
+- `public/target-report.html`（新規）：`/var/www/cheerstick-app/`へ`sudo cp`、`ls -la`・
+  `cat`で存在・内容を確認。こちらも所有者が`root:root`になっていたため、既存ファイル
+  （`ubuntu:ubuntu`、664）に合わせて統一した
+
+**手順④：pm2再起動**
+- `pm2 restart cheerstick-server`：成功、`status: online`
+- `pm2 logs --lines 30 --nostream`で確認。ログ末尾は起動メッセージ（`CheerStick server
+  running on port 3000`）で新規エラーは無し（表示された`SyntaxError`等は全て2026-09-11
+  時点の古いログの残存であり、今回の再起動とは無関係と確認）
+
+**手順⑤：疎通確認**
+- `GET /api/v1/admin/categories`（既存API回帰確認）：`200 OK`
+- `https://admin.cheerstick.com/targets.html`：`200 OK`
+- `https://app.cheerstick.com/target-report.html`：`200 OK`
+- `GET /api/v1/admin/targets`：**`200 OK`、権限エラーなし。** 本番の既存4件
+  （ヴィヴィくん・サンプル選手A/B/C）を正しく返すことを確認。今回は既存の`targets`
+  テーブルをそのまま使い新規テーブル作成が無いため、`event_battles`（11.8章）の時の
+  ような所有者問題はそもそも発生し得ない構成だった
+- `GET /api/v1/target-scores`：`200 OK`、`{"targets":[],...}`（本番`cheer_logs`が
+  0件のため妥当）
+
+### 判明した事実 / 想定と違ったこと
+
+- **新規コピーした静的ファイルの所有者が`root:root`になる事象が、`battle.html`
+  （2026-09-11）に続き今回も再発した。** `sudo cp`で新規ファイルをコピーすると
+  コピー先のデフォルト所有者（root）になるという、`sudo cp`自体の一般的な挙動が
+  原因と考えられる。今後、新規ファイルを含むデプロイでは、`cp`直後に所有者を
+  必ず確認する（既存ファイルと異なる所有者になっていないか）ことを標準の
+  確認項目に加えるべきと考えられる（runbook.mdへの反映は次回検討）
+- 既存機能への影響は無い（`GET /api/v1/admin/categories`の200応答、および
+  `pm2 logs`に新規エラーが無いことで回帰確認済み）
+
+### 変更したファイル
+
+- 本番EC2：`git pull`（`7c9ce59`→`1589ec3`）、`/var/www/cheerstick-admin/`へ6ファイル
+  （`index.html`・`events.html`・`masters.html`・`targets.html`・`common.css`・
+  `common.js`）反映＋所有者修正、`/var/www/cheerstick-app/target-report.html`新規反映＋
+  所有者修正、`pm2 restart`
+- 本番DB：変更なし（マイグレーション無し）
+- `docs/worklog.md`（本エントリ）
+- コード自体（`src/`・`public/`・`migrations/`）の変更は無し（既にローカルに存在した
+  内容をそのまま本番へ反映したのみ）
+
+### 次回への申し送り
+
+1. 静的ファイルデプロイ時の「新規ファイルの所有者がrootになる」事象について、
+   runbook.mdのデプロイ手順に恒久的な確認項目として追記するかを次回検討する
+2. staging DBに残存した検証用データ（複数セッション分の検証用チーム・デバイス）の
+   整理要否は継続検討
+3. 前回までのその他の残課題（実機ブラウザでのpageshow最終確認、`cheer_logs`が0件で
+   ある根本原因の切り分け、Vanstoneブリッジ仕様、管理API認証追加、負荷試験、
+   静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 静的ファイルデプロイ時の所有者確認手順の恒久化（上記申し送り1）
+- staging DBに残存した検証用データの整理（継続）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-13 選手データ管理UI・チーム別/選手別応援集計画面の追加
 
 ### 背景
