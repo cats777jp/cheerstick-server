@@ -418,6 +418,16 @@ KMT様と相談のうえ判断する。
 **本番環境（`cheerstick_production`）には無関係。** 本番の`cheerstick`ロールは
 元々全テーブルの所有者であり、この問題は発生しない。
 
+**追記（2026-09-13、`CREATE TABLE`は対象外であることを確認）：** 本節の問題は
+既存テーブルへの`ALTER TABLE`（所有者が`cheerstick`のまま変更されていないテーブルを
+`cheerstick_stg`で書き換えようとする）に限った話であり、**新規テーブルを追加する
+`CREATE TABLE`系マイグレーションには当てはまらない。** `cheerstick_stg`は`public`
+スキーマへの`CREATE`権限を持っており（`has_schema_privilege`で確認済み）、
+`cheerstick_stg`接続で`CREATE TABLE`を実行すればそのロール自身が新規テーブルの
+所有者になるため、所有者不一致は起きない。`migrations/011_add_event_battles.sql`
+（`event_battles`新設）をこの方法でstaging DBへ適用し、所有者が`cheerstick_stg`
+（`events`等と同じ）になることを実際に確認した。詳細は`docs/spec.md` 11.9章参照。
+
 ---
 
 ## デモ用デバイスの登録（審査・デモンストレーション用、is_demo方式・未実行）

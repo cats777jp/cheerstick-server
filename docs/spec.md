@@ -1093,7 +1093,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
 `PATCH .../status`を呼ぶのみで`event_battles`テーブルを参照しないため、
 本問題による影響は受けない）。
 
-### 11.9 staging DB（`cheerstick_staging`）に migration 011（`event_battles`）が未適用（2026-09-13発見・未対応）
+### 11.9 staging DB（`cheerstick_staging`）に migration 011（`event_battles`）が未適用（2026-09-13発見・同日解消）
+
+> **2026-09-13解消：** staging DBへ`migrations/011_add_event_battles.sql`を適用した。
+> 本番（11.8章）と異なり所有者問題は発生していない（適用方法は下記「対応」参照）。
+> events.htmlから対抗戦ペアの登録・一覧・公開スコアAPIまで一連の動作を実データで確認し、
+> 権限エラーが無いことを確認した。以下は問題発生時点（本節新設時）の記録として残す。
 
 **事象**
 
@@ -1117,6 +1122,36 @@ staging側は「テーブル自体が存在しない」状態である。
 `migrations/011_add_event_battles.sql`を適用するかは、本番と同様
 `sudo -u postgres psql`経由で実行すると11.8章と同じ所有者問題が再発する可能性があるため、
 適用方法も含めKMT様と相談のうえ判断すること。
+
+**解消（2026-09-13）**
+
+本番（11.8章）で発生した所有者問題（`sudo -u postgres`経由で実行したため、作成された
+テーブルの所有者が`postgres`になり、アプリのDB接続ロールに権限が無い状態になった）を
+踏まえ、staging DBでは異なる方法で適用した。
+
+- `.env`の`DATABASE_URL`（`cheerstick_stg@localhost:5433`、KMT様確立のSSHトンネル経由）を
+  そのまま使い、Node（`pg`ライブラリ）経由で**アプリの接続ロール`cheerstick_stg`自身**が
+  `migrations/011_add_event_battles.sql`の7文を1文ずつ実行した
+- 事前に読み取り専用で確認した内容：`cheerstick_stg`が`public`スキーマへの`CREATE`権限を
+  持っていること（`has_schema_privilege`で確認）、`schema_migrations`に001〜010が
+  適用済みで011が未適用であること、`event_battles`テーブルがまだ存在しないこと
+- **接続ロール自身がテーブルを作成すれば、そのロールが自動的に所有者になる**ため、
+  本番のような所有者不一致（アプリロールに権限が無い状態）は原理的に発生しない。
+  適用後、`event_battles`・`events`とも所有者が`cheerstick_stg`で一致していることを
+  実際に確認した（`pg_tables`参照）。`OWNER TO`・`GRANT`文はいずれも実行していない
+  （指示どおり、所有者変更操作は行っていない）
+- 構造（列・PK・CHECK制約・2本のFK・2本のインデックス）も仕様どおりであることを確認した
+- 動作確認：events.htmlから対抗戦ペア（テスト試合１×テスト試合4）を実際に登録→
+  一覧表示→公開スコアAPI（`GET /api/v1/event-battles/:id/score`、`total_intensity: 0`。
+  staging DBの`cheer_logs`が空のため妥当）→削除、の一連の流れをUI操作で確認し、
+  権限エラーが一切発生しないことを確認した。確認後に削除し、`event_battles`は0行
+  （適用直後と同じ状態）に戻している。対象イベント（テスト試合1/4）のstatusは
+  ペア登録・削除の前後で変化していないことも確認した（仕様どおり）
+- **`schema_migrations`テーブルへの適用記録（INSERT）は今回実施していない。**
+  指示された作業範囲（migration本体の適用・所有者確認）に含まれていなかったため、
+  記録の要否は次回判断とする。未記録のままだと、次回`node src/db/migrate.js`を
+  staging DBに対して実行した際、011を再適用しようとして`already exists`エラーに
+  なる可能性がある点に注意
 
 ---
 
@@ -1149,3 +1184,4 @@ staging側は「テーブル自体が存在しない」状態である。
 | 2026-09-13 | 9.5「管理画面のランチャー方式への再構成」を新設 | `public/admin/index.html`（試合管理・対抗戦・チーム管理・デバイス管理が同居する1,468行の単一ファイル）を、ランチャー（index.html）＋events.html（試合・対抗戦）＋masters.html（チーム・デバイス）＋共通ファイル（common.css/common.js）の構成に再編した。8.0・8.1・8.2・8.3・8.4・9.3節が説明する機能自体（バックエンドAPI・DB）に変更は無く、フロントエンドのファイル分割のみ。既存記述は削除せず、現在の参照先を9.5にまとめた。ローカルの静的ファイルサーバーによる表示・遷移・コンソールエラー無しの確認までで、staging DBに接続した実データでの動作確認・本番デプロイは未実施（KMT様指示により今回の対象外）。nginxのIP制限（本番の実ファイルを読み取り専用で確認済み）は追加設定なしで新規ファイルにも適用される見込みであることを確認した |
 | 2026-09-13 | 9.5に追記：events.htmlでのチーム一覧の自動再取得（pageshow対応）を記録 | masters.htmlでチーム登録後、ブラウザの「戻る」でevents.htmlに戻ってもbfcache復元によりスクリプトが再実行されず、試合登録フォームのチームプルダウンが更新されない問題への対処として、`window.addEventListener('pageshow', () => loadOrganizations())`をevents.htmlに追加した。新規API・設計変更は無い。ローカルの擬似APIサーバーで、pageshow未発火時はプルダウンが更新されないこと、`pageshow`イベント発火時（bfcache復元時にブラウザが実際に発火させるものと同一）に試合登録フォーム・編集モーダル双方のチームプルダウンが最新化されることを確認した。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 9.5に追記：staging DBでの実データ動作確認結果を記録、11.9「staging DBにmigration 011が未適用」を新設 | KMT様がSSHトンネルを確立したstaging DBに接続し、3ページ（index.html/events.html/masters.html）を実データで確認した。events.htmlの試合一覧・新規登録・編集・個別状態変更・一括操作（対象外スキップ・部分成功含む）、masters.htmlのチーム一覧・編集・新規登録、デバイス一覧・単体登録・CSV取込・一括適用がいずれも正常動作することを確認。pageshow修正も実データ環境で再確認した（実際のブラウザ戻る操作は自動化環境の制約で不可のため前回同様pageshowイベント発火による検証）。一方、staging DBに`migrations/011_add_event_battles.sql`が未適用で`event_battles`テーブルが存在せず、対抗戦関連機能の実データ確認ができなかったため11.9章に新規課題として記録した（本番の11.8章とは別問題、修正は未実施）。検証用に新規登録したチーム2件・デバイス2件はUI上に削除手段が無いためstaging DBに残存している旨、およびデバイス一括適用の誤操作で既存デバイス2件のデモ機フラグを一時的に変更したが直後に復元した旨も記録した。既存記述は削除せず追記で更新した |
+| 2026-09-13 | 11.9に追記：staging DBへのmigration 011適用完了・対抗戦機能の実データ確認結果を記録、runbook.md「staging環境マイグレーション適用時の注意」に追記 | 本番（11.8章）の所有者問題（`sudo -u postgres`経由が原因）を踏まえ、staging DBでは`.env`のアプリ接続ロール（`cheerstick_stg`）自身で`migrations/011_add_event_battles.sql`を1文ずつ実行する方法に変更した（接続ロール自身が新規テーブルを作成すればそのロールが所有者になるため、所有者不一致が原理的に発生しない）。適用前に`cheerstick_stg`のCREATE権限・schema_migrations適用状況・テーブル未存在を読み取り専用で確認したうえで実行し、適用後に所有者一致（`cheerstick_stg`）を確認した。`OWNER TO`等の所有者変更操作は行っていない（指示どおり）。events.htmlから対抗戦ペアの登録・一覧・公開スコアAPIまで実際にUI操作で確認し権限エラーが無いことを確認、確認後に削除し原状回復した。`schema_migrations`への適用記録（INSERT）は今回実施しておらず次回判断とする旨を明記した。runbook.mdの既存の所有者問題節（`ALTER TABLE`が対象）には、`CREATE TABLE`はこの問題の対象外である旨を追記した。既存記述は削除せず追記で更新した |
