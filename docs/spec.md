@@ -1153,6 +1153,16 @@ staging側は「テーブル自体が存在しない」状態である。
   staging DBに対して実行した際、011を再適用しようとして`already exists`エラーに
   なる可能性がある点に注意
 
+> **2026-09-13追記（同日中に対応）：** 上記の`schema_migrations`未記録の状態を本日中に
+> 解消した。KMT様指示により、`src/db/migrate.js`が実際に使用しているINSERT文
+> （`INSERT INTO schema_migrations (filename) VALUES ($1)`、`applied_at`はデフォルトの
+> `NOW()`に委ねる）と全く同じ形式で`'011_add_event_battles.sql'`の1行を追加した。
+> 追加後、`SELECT * FROM schema_migrations ORDER BY filename`で001〜011が
+> `filename`昇順（＝適用順）で揃っており、011の`applied_at`が実行時刻（他の行と同じ
+> カラム構成・型）で記録されていることを確認した。これにより、次回staging DBに対して
+> `node src/db/migrate.js`を実行しても011は`SKIP`扱いとなり、再適用エラーは発生しない。
+> 詳細は`docs/worklog.md`同日エントリ（「schema_migrationsへの011適用記録の追加」）参照
+
 ---
 
 ## 変更履歴
@@ -1185,3 +1195,4 @@ staging側は「テーブル自体が存在しない」状態である。
 | 2026-09-13 | 9.5に追記：events.htmlでのチーム一覧の自動再取得（pageshow対応）を記録 | masters.htmlでチーム登録後、ブラウザの「戻る」でevents.htmlに戻ってもbfcache復元によりスクリプトが再実行されず、試合登録フォームのチームプルダウンが更新されない問題への対処として、`window.addEventListener('pageshow', () => loadOrganizations())`をevents.htmlに追加した。新規API・設計変更は無い。ローカルの擬似APIサーバーで、pageshow未発火時はプルダウンが更新されないこと、`pageshow`イベント発火時（bfcache復元時にブラウザが実際に発火させるものと同一）に試合登録フォーム・編集モーダル双方のチームプルダウンが最新化されることを確認した。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 9.5に追記：staging DBでの実データ動作確認結果を記録、11.9「staging DBにmigration 011が未適用」を新設 | KMT様がSSHトンネルを確立したstaging DBに接続し、3ページ（index.html/events.html/masters.html）を実データで確認した。events.htmlの試合一覧・新規登録・編集・個別状態変更・一括操作（対象外スキップ・部分成功含む）、masters.htmlのチーム一覧・編集・新規登録、デバイス一覧・単体登録・CSV取込・一括適用がいずれも正常動作することを確認。pageshow修正も実データ環境で再確認した（実際のブラウザ戻る操作は自動化環境の制約で不可のため前回同様pageshowイベント発火による検証）。一方、staging DBに`migrations/011_add_event_battles.sql`が未適用で`event_battles`テーブルが存在せず、対抗戦関連機能の実データ確認ができなかったため11.9章に新規課題として記録した（本番の11.8章とは別問題、修正は未実施）。検証用に新規登録したチーム2件・デバイス2件はUI上に削除手段が無いためstaging DBに残存している旨、およびデバイス一括適用の誤操作で既存デバイス2件のデモ機フラグを一時的に変更したが直後に復元した旨も記録した。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 11.9に追記：staging DBへのmigration 011適用完了・対抗戦機能の実データ確認結果を記録、runbook.md「staging環境マイグレーション適用時の注意」に追記 | 本番（11.8章）の所有者問題（`sudo -u postgres`経由が原因）を踏まえ、staging DBでは`.env`のアプリ接続ロール（`cheerstick_stg`）自身で`migrations/011_add_event_battles.sql`を1文ずつ実行する方法に変更した（接続ロール自身が新規テーブルを作成すればそのロールが所有者になるため、所有者不一致が原理的に発生しない）。適用前に`cheerstick_stg`のCREATE権限・schema_migrations適用状況・テーブル未存在を読み取り専用で確認したうえで実行し、適用後に所有者一致（`cheerstick_stg`）を確認した。`OWNER TO`等の所有者変更操作は行っていない（指示どおり）。events.htmlから対抗戦ペアの登録・一覧・公開スコアAPIまで実際にUI操作で確認し権限エラーが無いことを確認、確認後に削除し原状回復した。`schema_migrations`への適用記録（INSERT）は今回実施しておらず次回判断とする旨を明記した。runbook.mdの既存の所有者問題節（`ALTER TABLE`が対象）には、`CREATE TABLE`はこの問題の対象外である旨を追記した。既存記述は削除せず追記で更新した |
+| 2026-09-13 | 11.9に追記：schema_migrationsへのmigration 011適用記録を追加した旨を記録 | KMT様指示により、staging DBの`schema_migrations`テーブルへ`011_add_event_battles.sql`の適用記録を追加した。`src/db/migrate.js`が実際に使用しているINSERT文（`INSERT INTO schema_migrations (filename) VALUES ($1)`、`applied_at`はデフォルトの`NOW()`）と同じ形式・パラメータ渡しで実行し、既存001〜010のレコード形式（カラム構成・値の入れ方）と一致させた。追加後`SELECT * FROM schema_migrations ORDER BY filename`で001〜011が適用順に揃っていることを確認した。これにより次回`node src/db/migrate.js`をstaging DBに対して実行しても011は`SKIP`され再適用エラーは発生しない。既存記述は削除せず追記で更新した |

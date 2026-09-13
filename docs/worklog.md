@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-09-13 schema_migrationsへの011適用記録の追加
+
+### 背景
+
+前回セッションの申し送り事項（`docs/spec.md` 11.9章）の解消。staging DBへ
+migration 011（`event_battles`）を適用した際、`schema_migrations`テーブルへの
+適用記録（INSERT）は依頼範囲外として実施していなかった。今回、KMT様指示により
+この記録追加のみを実施した（DB変更を伴う唯一の作業。コード変更・その他のDB変更・
+デプロイは行っていない）。
+
+### 実施したこと
+
+1. 追加前に`schema_migrations`テーブルの構造（`filename VARCHAR(255) PRIMARY KEY`、
+   `applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`）と既存001〜010のレコード内容を
+   読み取り専用で確認した
+2. `src/db/migrate.js`が実際のマイグレーション適用時に使用しているINSERT文
+   （`INSERT INTO schema_migrations (filename) VALUES ($1)`、`applied_at`は
+   指定せずデフォルトの`NOW()`に委ねる）と全く同じ形式・パラメータ渡しで、
+   `'011_add_event_battles.sql'`の1行を追加した
+3. 追加後、`SELECT * FROM schema_migrations ORDER BY filename`で001〜011が
+   `filename`昇順（＝適用順）で揃っており、011の`applied_at`が実行時刻で、
+   他の行と同じカラム構成・型で記録されていることを確認した
+
+### 判明した事実 / 想定と違ったこと
+
+- 特になし。事前確認どおりの形式でシンプルに追加できた
+
+### 変更したファイル
+
+- staging DB（`cheerstick_staging`）：`schema_migrations`テーブルへ1行追加
+  （`011_add_event_battles.sql`の適用記録）
+- `docs/spec.md`（11.9章に追記、変更履歴に追記）
+- `docs/worklog.md`（本エントリ）
+- コード変更・その他のDB変更・デプロイは無し
+
+### 次回への申し送り
+
+1. これにより、次回`node src/db/migrate.js`をstaging DBに対して実行しても
+   011は`SKIP`され、再適用エラーは発生しない
+2. staging DBに残る検証用データ（チーム2件・デバイス2件、前回セッション参照）は
+   引き続き削除せず保持中。後日KMT様の判断のタイミングで削除予定
+3. 実機ブラウザでの「戻る」操作によるpageshow修正の最終確認（継続）
+4. 前回までのその他の残課題（`cheer_logs`が0件である根本原因の切り分け、Vanstoneブリッジ
+   仕様、管理API認証追加、負荷試験、静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の
+   要否判断）は継続
+
+### 未解決のまま残した課題
+
+- staging DBに残存した検証用データの削除タイミング（前回からの継続、当面は意図的に保持）
+- 実機ブラウザでの「戻る」操作によるpageshow修正の最終確認（前回からの継続）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-13 staging DBへのmigration 011適用・対抗戦機能の実データ確認
 
 ### 背景
