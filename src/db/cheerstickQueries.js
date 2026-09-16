@@ -4,6 +4,8 @@
 
 'use strict';
 
+const crypto = require('crypto');
+
 const db = require('./index');
 
 /**
@@ -770,6 +772,59 @@ async function listCategoriesForAdmin() {
 }
 
 /**
+ * categories.slug（NOT NULL UNIQUE、migrations/004_add_category.sql）用の値を生成する。
+ * この列はアプリコードのどこからも参照されない（`docs/spec.md`調査済み）ため、
+ * organizations.type（8.3章）と同じ扱いでUI入力項目としては公開せず、サーバー側で
+ * 自動生成する。nameが日本語のみの場合スラグ化すると空文字になるため、常にランダムな
+ * サフィックスを付与して一意性を保証する（衝突検知・リトライは行わない）。
+ */
+function generateCategorySlug(name) {
+  const base = String(name)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const suffix = crypto.randomBytes(4).toString('hex');
+  return base ? `${base}-${suffix}` : `category-${suffix}`;
+}
+
+/**
+ * 管理画面：ジャンルを新規登録する（改善3件フェーズ1、2026-09-16新設）。
+ * nameのみを入力項目とする（slugの扱いはgenerateCategorySlug参照）。
+ */
+async function createCategoryAdmin({ name }) {
+  const slug = generateCategorySlug(name);
+  const { rows } = await db.query(
+    `INSERT INTO categories (name, slug) VALUES ($1, $2)
+     RETURNING id, name, slug, created_at`,
+    [name, slug]
+  );
+  return rows[0];
+}
+
+/**
+ * 管理画面：ジャンルを部分更新する（改善3件フェーズ1、2026-09-16新設。
+ * updateOrganizationAdminと同じ部分更新方式）。nameのみ更新可能（slugは更新対象外）。
+ * 対象が無い場合はnullを返す（呼び出し元で404にマッピングする）。
+ */
+async function updateCategoryAdmin(categoryId, fields) {
+  if (!Object.prototype.hasOwnProperty.call(fields, 'name')) {
+    const { rows } = await db.query(
+      `SELECT id, name, slug, created_at FROM categories WHERE id = $1`,
+      [categoryId]
+    );
+    return rows[0] || null;
+  }
+
+  const { rows } = await db.query(
+    `UPDATE categories SET name = $1 WHERE id = $2
+     RETURNING id, name, slug, created_at`,
+    [fields.name, categoryId]
+  );
+  return rows[0] || null;
+}
+
+/**
  * 管理画面：デバイス一覧をページング付きで取得。
  * unsetOnly指定時はcategory_id IS NULLのみ、categoryId指定時はそのジャンルのみに絞り込む
  * （両方同時指定は呼び出し元で起きない前提。unsetOnlyを優先する）。
@@ -1128,6 +1183,8 @@ module.exports = {
   updateOrganizationAdmin,
   assertCategoryExists,
   listCategoriesForAdmin,
+  createCategoryAdmin,
+  updateCategoryAdmin,
   listDevicesAdmin,
   updateDeviceAdmin,
   bulkUpdateDevicesByIds,

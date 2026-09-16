@@ -26,6 +26,8 @@ router.post('/organizations', adminEventController.createOrganization);
 router.patch('/organizations/:id', adminEventController.updateOrganization);
 
 router.get('/categories', adminDeviceController.listCategories);
+router.post('/categories', adminDeviceController.createCategory);
+router.patch('/categories/:id', adminDeviceController.updateCategory);
 
 // 対抗戦ペア（event_battles）管理：2チーム対抗応援合戦機能（2026-09-11新設）
 router.get('/event-battles', adminEventController.listBattles);

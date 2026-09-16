@@ -37,6 +37,34 @@
   <p><a href="index.html">&larr; 管理画面トップ</a></p>
   <div id="errorBar" class="error-bar"></div>
 
+  <!-- (G) ジャンル管理（改善3件フェーズ1、2026-09-16新設） -->
+  <div class="card">
+    <h2>ジャンル新規登録</h2>
+    <form id="categoryCreateForm">
+      <label for="categoryCreateName">ジャンル名</label>
+      <input id="categoryCreateName" type="text" required placeholder="例：Bリーグ">
+
+      <div style="margin-top: 16px;">
+        <button type="submit" class="primary">登録</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>ジャンル一覧</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ジャンル名</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="categoriesTableBody">
+        <tr class="empty-row"><td colspan="2">読み込み中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <!-- (F) チーム管理（B-4、2026-08-19追加） -->
   <div class="card">
     <h2>チーム新規登録</h2>
@@ -135,6 +163,23 @@
   </div>
 </div>
 
+<!-- (G) ジャンル編集モーダル（改善3件フェーズ1、2026-09-16新設） -->
+<div id="categoryEditModalOverlay" class="modal-overlay">
+  <div class="modal-box">
+    <h2>ジャンルを編集</h2>
+    <form id="categoryEditForm">
+      <input type="hidden" id="categoryEditId">
+      <label for="categoryEditName">ジャンル名</label>
+      <input id="categoryEditName" type="text" required>
+
+      <div class="actions">
+        <button type="button" id="categoryEditCancelBtn">キャンセル</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- (F) チーム編集モーダル（B-4、2026-08-19追加） -->
 <div id="orgEditModalOverlay" class="modal-overlay">
   <div class="modal-box">
@@ -161,6 +206,106 @@
 <script src="common.js"></script>
 <script>
 (function () {
+  // ==========================================================
+  // (G) ジャンル（categories）管理（改善3件フェーズ1、2026-09-16新設）
+  // 削除機能は無し（既存の組織・デバイス管理と同じ、登録・編集のみの方針）。
+  // ==========================================================
+  const categoryCreateForm = document.getElementById('categoryCreateForm');
+  const categoriesTableBody = document.getElementById('categoriesTableBody');
+  const categoryEditModalOverlay = document.getElementById('categoryEditModalOverlay');
+  const categoryEditForm = document.getElementById('categoryEditForm');
+  const categoryEditCancelBtn = document.getElementById('categoryEditCancelBtn');
+
+  function renderCategoriesTable(categories) {
+    categoriesTableBody.innerHTML = '';
+
+    if (categories.length === 0) {
+      categoriesTableBody.innerHTML = '<tr class="empty-row"><td colspan="2">登録されているジャンルはありません</td></tr>';
+      return;
+    }
+
+    categories.forEach((category) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(category.name)}</td>
+        <td class="action-cell"></td>
+      `;
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '編集';
+      editBtn.addEventListener('click', () => openCategoryEditModal(category));
+      tr.querySelector('.action-cell').appendChild(editBtn);
+
+      categoriesTableBody.appendChild(tr);
+    });
+  }
+
+  // ジャンル一覧の再取得に加え、チーム・デバイス管理側のジャンルプルダウンも
+  // 最新化する（新規登録・編集の直後に反映されるようにするため）。
+  async function loadCategoriesList() {
+    try {
+      const categories = await apiFetch('/categories');
+      renderCategoriesTable(categories);
+      clearError();
+    } catch (e) {
+      showError('ジャンル一覧の取得に失敗しました: ' + e.message);
+    }
+    await Promise.all([loadOrgCategories(), loadDeviceCategories()]);
+  }
+
+  categoryCreateForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    try {
+      await apiFetch('/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('categoryCreateName').value.trim(),
+        }),
+      });
+      clearError();
+      categoryCreateForm.reset();
+      await loadCategoriesList();
+    } catch (e2) {
+      showError('ジャンルの登録に失敗しました: ' + e2.message);
+    }
+  });
+
+  function openCategoryEditModal(category) {
+    document.getElementById('categoryEditId').value = category.id;
+    document.getElementById('categoryEditName').value = category.name;
+    categoryEditModalOverlay.classList.add('visible');
+  }
+
+  function closeCategoryEditModal() {
+    categoryEditModalOverlay.classList.remove('visible');
+  }
+
+  categoryEditCancelBtn.addEventListener('click', closeCategoryEditModal);
+
+  categoryEditForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('categoryEditId').value;
+
+    try {
+      await apiFetch(`/categories/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('categoryEditName').value.trim(),
+        }),
+      });
+      clearError();
+      closeCategoryEditModal();
+      await loadCategoriesList();
+    } catch (e2) {
+      showError('ジャンルの更新に失敗しました: ' + e2.message);
+    }
+  });
+
+  loadCategoriesList();
+
   // ==========================================================
   // (F) チーム（organizations）管理（B-4、2026-08-19追加）
   // ==========================================================

@@ -29,6 +29,55 @@ exports.listCategories = async (req, res, next) => {
   }
 };
 
+/**
+ * 管理画面：ジャンルを新規登録する（改善3件フェーズ1、2026-09-16新設。
+ * organizations管理API（createOrganization、src/controllers/adminEventController.js）
+ * と同じパターン）。削除機能は無し（既存の組織・デバイス管理と同じ方針）。
+ */
+exports.createCategory = async (req, res, next) => {
+  const { name } = req.body || {};
+
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+
+  try {
+    const created = await cheerQueries.createCategoryAdmin({ name: String(name).trim() });
+    res.status(201).json(created);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * 管理画面：ジャンルを部分更新する（改善3件フェーズ1、2026-09-16新設）。
+ */
+exports.updateCategory = async (req, res, next) => {
+  const { id } = req.params;
+  if (!UUID_RE.test(id)) {
+    return res.status(400).json({ error: 'INVALID_ID' });
+  }
+
+  const { name } = req.body || {};
+  const fields = {};
+  if (name !== undefined) {
+    if (!String(name).trim()) {
+      return res.status(400).json({ error: 'name must not be empty' });
+    }
+    fields.name = String(name).trim();
+  }
+
+  try {
+    const updated = await cheerQueries.updateCategoryAdmin(id, fields);
+    if (!updated) {
+      return res.status(404).json({ error: 'CATEGORY_NOT_FOUND' });
+    }
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.list = async (req, res, next) => {
   const { category_id: categoryIdParam, mac, page: pageParam, page_size: pageSizeParam } = req.query;
 
