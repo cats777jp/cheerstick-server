@@ -75,8 +75,14 @@
       <label for="orgCreateCategory">ジャンル</label>
       <select id="orgCreateCategory" required></select>
 
-      <label for="orgCreateLogoUrl">ロゴURL（任意）</label>
-      <input id="orgCreateLogoUrl" type="text" placeholder="https://app.cheerstick.com/images/teams/...">
+      <label>チームロゴ（任意）</label>
+      <div id="orgCreateLogoDropzone" class="upload-dropzone">
+        ドラッグ＆ドロップ、またはクリックしてファイルを選択（jpg/png、5MBまで）
+      </div>
+      <input id="orgCreateLogoFile" type="file" accept="image/jpeg,image/png" class="hidden">
+      <div id="orgCreateLogoStatus" class="upload-status"></div>
+      <img id="orgCreateLogoPreview" class="upload-preview hidden" alt="ロゴプレビュー">
+      <input id="orgCreateLogoUrl" type="hidden">
 
       <div style="margin-top: 16px;">
         <button type="submit" class="primary">登録</button>
@@ -192,8 +198,14 @@
       <label for="orgEditCategory">ジャンル</label>
       <select id="orgEditCategory" required></select>
 
-      <label for="orgEditLogoUrl">ロゴURL（任意）</label>
-      <input id="orgEditLogoUrl" type="text">
+      <label>チームロゴ（任意）</label>
+      <div id="orgEditLogoDropzone" class="upload-dropzone">
+        ドラッグ＆ドロップ、またはクリックしてファイルを選択（jpg/png、5MBまで）
+      </div>
+      <input id="orgEditLogoFile" type="file" accept="image/jpeg,image/png" class="hidden">
+      <div id="orgEditLogoStatus" class="upload-status"></div>
+      <img id="orgEditLogoPreview" class="upload-preview hidden" alt="ロゴプレビュー">
+      <input id="orgEditLogoUrl" type="hidden">
 
       <div class="actions">
         <button type="button" id="orgEditCancelBtn">キャンセル</button>
@@ -319,6 +331,22 @@
   const orgEditCategory = document.getElementById('orgEditCategory');
   const orgEditCancelBtn = document.getElementById('orgEditCancelBtn');
 
+  // チームロゴのアップロードUI（改善3件フェーズ2、2026-09-16新設）
+  const orgCreateLogoWidget = setupImageUploadWidget({
+    dropZoneEl: document.getElementById('orgCreateLogoDropzone'),
+    fileInputEl: document.getElementById('orgCreateLogoFile'),
+    previewImgEl: document.getElementById('orgCreateLogoPreview'),
+    urlInputEl: orgCreateLogoUrl,
+    statusEl: document.getElementById('orgCreateLogoStatus'),
+  });
+  const orgEditLogoWidget = setupImageUploadWidget({
+    dropZoneEl: document.getElementById('orgEditLogoDropzone'),
+    fileInputEl: document.getElementById('orgEditLogoFile'),
+    previewImgEl: document.getElementById('orgEditLogoPreview'),
+    urlInputEl: document.getElementById('orgEditLogoUrl'),
+    statusEl: document.getElementById('orgEditLogoStatus'),
+  });
+
   async function loadOrgCategories() {
     try {
       const categories = await apiFetch('/categories');
@@ -395,6 +423,7 @@
       });
       clearError();
       orgCreateForm.reset();
+      orgCreateLogoWidget.setUrl(null);
       await loadOrganizationsList();
       // 旧index.htmlではここで試合登録フォーム（同一ページ内）のチームプルダウンも
       // 更新していたが、2026-09-13の3ページ分割でそのプルダウンはevents.html側に
@@ -408,7 +437,7 @@
   function openOrgEditModal(org) {
     document.getElementById('orgEditId').value = org.id;
     document.getElementById('orgEditName').value = org.name;
-    document.getElementById('orgEditLogoUrl').value = org.logo_url || '';
+    orgEditLogoWidget.setUrl(org.logo_url);
     orgEditCategory.value = org.category_id || '';
     orgEditModalOverlay.classList.add('visible');
   }

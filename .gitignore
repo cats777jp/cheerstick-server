@@ -22,3 +22,8 @@ Csv import category spec.md
 
 # 出所不明ファイルのレビュー用退避コピー（2026-07-30）。調査完了後に削除予定
 /_review_20260728/
+
+# ローカル開発時のアップロード画像保存先（デフォルト値、UPLOAD_DIR未設定時）。
+# 本番は/var/www/cheerstick-app/images/uploads/（git管理外）に保存するため、
+# こちらはローカル動作確認用の一時保存先であり正本ではない（改善3件フェーズ2、2026-09-16新設）。
+/public/uploads/

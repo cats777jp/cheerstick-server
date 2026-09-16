@@ -8,12 +8,34 @@
 // 必要になった時点でBasic認証等への移行を検討する。
 
 const express = require('express');
+const multer = require('multer');
 const { Router } = express;
 const adminEventController = require('../controllers/adminEventController');
 const adminDeviceController = require('../controllers/adminDeviceController');
 const adminTargetController = require('../controllers/adminTargetController');
+const uploadController = require('../controllers/uploadController');
 
 const router = Router();
+
+// 画像アップロード（改善3件フェーズ2、2026-09-16新設）：メモリストレージ＋5MB上限。
+// ディスクへの書き込みはuploadController側でマジックバイト検証後に行うため、
+// multer自体はディスクに触れないmemoryStorageを使う。
+const uploadImageMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+function handleImageUpload(req, res, next) {
+  uploadImageMiddleware.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'FILE_TOO_LARGE', message: 'ファイルサイズは5MBまでです' });
+      }
+      return res.status(400).json({ error: 'UPLOAD_ERROR', message: err.message });
+    }
+    next();
+  });
+}
 
 router.get('/events', adminEventController.list);
 router.post('/events', adminEventController.create);
@@ -55,5 +77,8 @@ router.get('/targets', adminTargetController.list);
 router.post('/targets', adminTargetController.create);
 router.patch('/targets/:id', adminTargetController.update);
 router.delete('/targets/:id', adminTargetController.remove);
+
+// 画像アップロード（チームロゴ・選手/推し対象写真、改善3件フェーズ2、2026-09-16新設）
+router.post('/uploads/image', handleImageUpload, uploadController.uploadImage);
 
 module.exports = router;

@@ -93,3 +93,101 @@ function formatDisplayDate(value) {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 }
+
+// 画像アップロードUI（ドラッグ＆ドロップ／ファイル選択、改善3件フェーズ2、2026-09-16新設）。
+// masters.html（チームロゴ）・targets.html（選手/推し対象写真）で共通利用する。
+//
+// urlInputEl（type="hidden"）にアップロード後のURLを保持する設計にすることで、
+// 既存のorganizations/targets create/update送信処理（urlInputEl.valueを読むだけ）を
+// 変更せずに済むようにしている。POST /uploads/imageはサイズ制限（413）・形式エラー（400）を
+// 返しうるため、ここでもエラー内容に応じたメッセージ分けを行う。
+function setupImageUploadWidget({ dropZoneEl, fileInputEl, previewImgEl, urlInputEl, statusEl }) {
+  const ALLOWED_TYPES = ['image/jpeg', 'image/png'];
+  const MAX_SIZE_BYTES = 5 * 1024 * 1024;
+
+  function setStatus(text) {
+    if (statusEl) statusEl.textContent = text || '';
+  }
+
+  function setPreview(url) {
+    if (url) {
+      previewImgEl.src = url;
+      previewImgEl.classList.remove('hidden');
+    } else {
+      previewImgEl.removeAttribute('src');
+      previewImgEl.classList.add('hidden');
+    }
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      showError('画像はjpgまたはpngのみアップロードできます');
+      return;
+    }
+    if (file.size > MAX_SIZE_BYTES) {
+      showError('画像サイズは5MBまでです');
+      return;
+    }
+
+    setStatus('アップロード中...');
+    const formData = new FormData();
+    formData.append('file', file);
+
+    let res;
+    try {
+      res = await fetch(API_BASE + '/uploads/image', { method: 'POST', body: formData });
+    } catch (e) {
+      setStatus('');
+      showError('サーバーに接続できませんでした: ' + e.message);
+      return;
+    }
+
+    let body = null;
+    try { body = await res.json(); } catch (e) { /* ボディ無しの場合もある */ }
+
+    if (!res.ok) {
+      setStatus('');
+      if (res.status === 413) {
+        showError('画像サイズは5MBまでです');
+      } else if (body && body.error === 'UNSUPPORTED_FILE_TYPE') {
+        showError('画像はjpgまたはpngのみアップロードできます');
+      } else {
+        showError('画像のアップロードに失敗しました: ' + ((body && body.error) || `HTTP ${res.status}`));
+      }
+      return;
+    }
+
+    urlInputEl.value = body.url;
+    setPreview(body.url);
+    setStatus('アップロード完了');
+    clearError();
+  }
+
+  dropZoneEl.addEventListener('click', () => fileInputEl.click());
+  dropZoneEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZoneEl.classList.add('dragover');
+  });
+  dropZoneEl.addEventListener('dragleave', () => dropZoneEl.classList.remove('dragover'));
+  dropZoneEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZoneEl.classList.remove('dragover');
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    handleFile(file);
+  });
+  fileInputEl.addEventListener('change', () => {
+    handleFile(fileInputEl.files[0]);
+    fileInputEl.value = ''; // 同じファイルを選び直した時もchangeイベントが発火するようにする
+  });
+
+  return {
+    // 編集モーダルを開く際、既存のURLをプレビュー・隠しフィールドへ反映するために使う。
+    setUrl(url) {
+      urlInputEl.value = url || '';
+      setPreview(url || '');
+      setStatus('');
+    },
+  };
+}

@@ -147,6 +147,40 @@ input, select {
 
 .empty-row td { color: var(--text-muted); text-align: center; padding: 20px; }
 
+.hidden { display: none !important; }
+
+/* 画像アップロードUI（ドラッグ＆ドロップ／ファイル選択、改善3件フェーズ2、2026-09-16新設）。
+   masters.html（チームロゴ）・targets.html（選手/推し対象写真）で共通利用する。 */
+.upload-dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.upload-dropzone:hover,
+.upload-dropzone.dragover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.upload-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  min-height: 16px;
+}
+.upload-preview {
+  display: block;
+  max-width: 120px;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-top: 8px;
+}
+
 /* チェックボックス列：events.html（試合一覧の一括選択）・masters.html
    （デバイス一覧の一括選択）の両方で使うため共通化 */
 td.checkbox-cell, th.checkbox-cell { width: 32px; }

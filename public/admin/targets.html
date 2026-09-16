@@ -59,8 +59,14 @@
       <label for="targetCreateNumber">背番号（任意）</label>
       <input id="targetCreateNumber" type="text" placeholder="例：7">
 
-      <label for="targetCreateImageUrl">画像URL（任意）</label>
-      <input id="targetCreateImageUrl" type="text" placeholder="https://app.cheerstick.com/images/members/...">
+      <label>画像（任意）</label>
+      <div id="targetCreateImageDropzone" class="upload-dropzone">
+        ドラッグ＆ドロップ、またはクリックしてファイルを選択（jpg/png、5MBまで）
+      </div>
+      <input id="targetCreateImageFile" type="file" accept="image/jpeg,image/png" class="hidden">
+      <div id="targetCreateImageStatus" class="upload-status"></div>
+      <img id="targetCreateImagePreview" class="upload-preview hidden" alt="画像プレビュー">
+      <input id="targetCreateImageUrl" type="hidden">
 
       <label for="targetCreateProfileText">プロフィール文（任意）</label>
       <textarea id="targetCreateProfileText" placeholder="画面に固定表示するプロフィール文"></textarea>
@@ -124,8 +130,14 @@
       <label for="targetEditNumber">背番号（任意）</label>
       <input id="targetEditNumber" type="text">
 
-      <label for="targetEditImageUrl">画像URL（任意）</label>
-      <input id="targetEditImageUrl" type="text">
+      <label>画像（任意）</label>
+      <div id="targetEditImageDropzone" class="upload-dropzone">
+        ドラッグ＆ドロップ、またはクリックしてファイルを選択（jpg/png、5MBまで）
+      </div>
+      <input id="targetEditImageFile" type="file" accept="image/jpeg,image/png" class="hidden">
+      <div id="targetEditImageStatus" class="upload-status"></div>
+      <img id="targetEditImagePreview" class="upload-preview hidden" alt="画像プレビュー">
+      <input id="targetEditImageUrl" type="hidden">
 
       <label for="targetEditProfileText">プロフィール文（任意）</label>
       <textarea id="targetEditProfileText"></textarea>
@@ -153,6 +165,22 @@
   const targetEditForm = document.getElementById('targetEditForm');
   const targetEditOrg = document.getElementById('targetEditOrg');
   const targetEditCancelBtn = document.getElementById('targetEditCancelBtn');
+
+  // 画像のアップロードUI（改善3件フェーズ2、2026-09-16新設）
+  const targetCreateImageWidget = setupImageUploadWidget({
+    dropZoneEl: document.getElementById('targetCreateImageDropzone'),
+    fileInputEl: document.getElementById('targetCreateImageFile'),
+    previewImgEl: document.getElementById('targetCreateImagePreview'),
+    urlInputEl: document.getElementById('targetCreateImageUrl'),
+    statusEl: document.getElementById('targetCreateImageStatus'),
+  });
+  const targetEditImageWidget = setupImageUploadWidget({
+    dropZoneEl: document.getElementById('targetEditImageDropzone'),
+    fileInputEl: document.getElementById('targetEditImageFile'),
+    previewImgEl: document.getElementById('targetEditImagePreview'),
+    urlInputEl: document.getElementById('targetEditImageUrl'),
+    statusEl: document.getElementById('targetEditImageStatus'),
+  });
 
   let organizationsCache = [];
 
@@ -264,6 +292,7 @@
       clearError();
       targetCreateForm.reset();
       document.getElementById('targetCreateIsActive').checked = true;
+      targetCreateImageWidget.setUrl(null);
       await loadTargetsList();
     } catch (e2) {
       if (e2.status === 400 && e2.body && e2.body.error === 'ORGANIZATION_NOT_FOUND') {
@@ -280,7 +309,7 @@
     targetEditOrg.value = target.organization_id || '';
     document.getElementById('targetEditType').value = target.type;
     document.getElementById('targetEditNumber').value = target.number || '';
-    document.getElementById('targetEditImageUrl').value = target.image_url || '';
+    targetEditImageWidget.setUrl(target.image_url);
     document.getElementById('targetEditProfileText').value = target.profile_text || '';
     document.getElementById('targetEditIsActive').checked = !!target.is_active;
     targetEditModalOverlay.classList.add('visible');
