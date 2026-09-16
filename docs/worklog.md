@@ -4,6 +4,118 @@
 
 ---
 
+## 2026-09-16 管理画面の改善3件（ジャンル管理API/UI・ロゴURL欄デプロイ確認・画像アップロード機能）
+
+### 背景
+
+前回セッション（調査のみ）で報告した3件の調査結果を踏まえ、KMT様指示により実装に着手。
+`feature/reference-data`ブランチのまま、コード本体の本番デプロイは対象外（ローカル・
+pg-mem疑似DBによる動作確認まで）。フェーズごとに区切って実施した。
+
+### 実施したこと
+
+**フェーズ0：masters.htmlのデプロイ状態確認**
+- 本番`/var/www/cheerstick-admin/masters.html`とリポジトリ`public/admin/masters.html`を
+  SSH経由で`diff`し、差分無しを確認（ロゴURL入力欄を含め完全一致）。EC2のgit HEADは
+  ローカルより2コミット遅れていたが、いずれも`docs/`のみの変更でmasters.htmlは無関係
+- 前回報告した「masters.htmlにロゴURL入力欄が無い」という認識は、ブラウザキャッシュが
+  原因と判断。コード変更・再デプロイは実施せず
+
+**フェーズ1：ジャンル（categories）管理API/UI**
+- バックエンド：`POST /admin/categories`・`PATCH /admin/categories/:id`を新設
+  （`src/db/cheerstickQueries.js`の`createCategoryAdmin`/`updateCategoryAdmin`、
+  `src/controllers/adminDeviceController.js`。organizations管理API・8.3章と同じパターン）。
+  `categories.slug`列（NOT NULL UNIQUE、アプリコード未参照）はUI非公開のままサーバー側で
+  自動生成する設計とした。削除機能は既存方針に合わせ未実装
+- フロントエンド：`public/admin/masters.html`に「ジャンル管理」セクション（新規登録
+  フォーム＋一覧＋編集モーダル）を追加。登録・編集成功時にチーム・デバイス管理側の
+  ジャンルプルダウンも自動再取得するようにした
+
+**フェーズ2：画像アップロード機能**
+- 事前確認：pm2実行ユーザーは`ubuntu`、`/var/www/cheerstick-app/images/`も
+  `ubuntu:ubuntu`所有（755）のため追加の権限変更は不要と判明
+- 本番インフラ準備（コード本体のデプロイとは別に実施）：
+  `/var/www/cheerstick-app/images/uploads/`ディレクトリを新規作成、
+  `/etc/nginx/sites-available/cheerstick-api`の`location /api/v1/admin/`へ
+  `client_max_body_size 5m;`を追加（`sites-available`一式のバックアップ→
+  `nginx -t`成功確認→`systemctl reload nginx`の順で実施）。**ユーザー指示は
+  `cheerstick-app`への追加だったが、実際にアップロードAPIが経由するのは
+  `cheerstick-api`（api.cheerstick.com、Node appへのproxy）であり`cheerstick-app`
+  （app.cheerstick.com、静的ファイル配信のみでNode appへのproxy無し）ではないため、
+  ユーザーに確認のうえ`cheerstick-api`へ適用した**
+- バックエンド：`npm install multer`（`package.json`へ保存）、
+  `POST /admin/uploads/image`を新設（`src/controllers/uploadController.js`、
+  `src/routes/admin.js`）。拡張子とマジックバイト（JPEG/PNG）の両方を検証、
+  UUIDファイル名で`UPLOAD_DIR`環境変数の指す先へ保存、5MB超過は413
+- フロントエンド：`public/admin/common.js`に`setupImageUploadWidget()`を新設し、
+  `masters.html`（チームロゴ）・`targets.html`（選手/推し対象画像）双方の
+  「URLをテキスト直接指定」入力欄をドラッグ＆ドロップ／ファイル選択UIに置き換えた。
+  既存のcreate/update送信処理（隠しURL入力の`.value`を読むだけ）は変更していない
+- `.env.example`に`UPLOAD_DIR`/`UPLOAD_URL_BASE`を追加、`.gitignore`に
+  ローカル既定保存先`/public/uploads/`を追加
+
+### 動作確認方法（今回新規に確立）
+
+本番/stagingへのSSHトンネル確立がこのセッションでは権限上の制約でできなかった
+（過去のセッションと同じ制約）ため、代わりに`pg-mem`（インメモリPostgres疑似実装）を
+`--no-save`で一時導入し、migrationsファイル（トリガー・拡張・COMMENT ON等pg-mem未対応の
+構文のみ検証用に除去したコピー）を適用した疑似DB上で実サーバー（`src/app.js`相当）を
+起動してテストした。検証専用スクリプトはリポジトリ外（セッションのスクラッチパッド）に
+置き、リポジトリには一切コミットしていない。ブラウザでの操作確認は
+`mcp__claude-in-chrome`（Chrome拡張連携）でこの疑似サーバーに対して実施した。
+
+- カテゴリーCRUD：作成・一覧・部分更新・404・400を一通りHTTPレベルで確認
+- 画像アップロードAPI：有効なPNG/JPEG成功、拡張子偽装・拡張子不一致・6MB超過（413）・
+  fileフィールド欠如、いずれも想定通りのエラーを確認。実際のファイル書き込み有無も確認
+- ブラウザ操作：`masters.html`でジャンル新規登録・編集、チームロゴのファイル選択
+  アップロード→新規チーム登録→一覧反映→編集モーダルでの既存ロゴプレビュー表示、
+  `targets.html`で画像アップロード→新規選手登録→一覧反映を実際に操作して確認。
+  コンソールエラー無し
+
+### 判明した事実 / 想定と違ったこと
+
+- masters.htmlのロゴURL入力欄は本番・リポジトリともに実在しており、前回セッションの
+  調査結果とKMT様の認識に食い違いがあった（フェーズ0参照。原因はブラウザキャッシュと推定）
+- `client_max_body_size`の追加先について、ユーザー指示（`cheerstick-app`）と実際に
+  必要な適用先（`cheerstick-api`）が異なっていた（フェーズ2参照）。実装前に気づき、
+  ユーザーに確認のうえ正しい適用先へ変更した
+- pm2実行ユーザーがディレクトリ所有者と一致していたため、chmod/chown等の権限変更は
+  不要だった（ユーザー指示は「権限が無ければ設定」だったが、確認の結果不要と判明）
+
+### 変更したファイル
+
+- バックエンド：`src/db/cheerstickQueries.js`・`src/controllers/adminDeviceController.js`・
+  `src/controllers/uploadController.js`（新規）・`src/routes/admin.js`
+- フロントエンド：`public/admin/masters.html`・`public/admin/targets.html`・
+  `public/admin/common.js`・`public/admin/common.css`
+- 設定：`package.json`・`package-lock.json`（multer追加）・`.env.example`・`.gitignore`
+- ドキュメント：`docs/spec.md`（8.7・8.8・9.8・9.9章新設、6章に追記）・`docs/runbook.md`
+  （画像アップロード本番インフラ準備・アップロード画像バックアップ手順を追加）・
+  `docs/worklog.md`（本エントリ）
+- 本番EC2：`/var/www/cheerstick-app/images/uploads/`ディレクトリ新規作成、
+  `/etc/nginx/sites-available/cheerstick-api`へ`client_max_body_size 5m;`追加（`nginx -t`
+  成功確認後`systemctl reload nginx`実施）。**コード本体（`src/`・`public/admin/`の
+  今回変更分）は本番未反映**
+- 本番DB：変更なし（新規マイグレーション無し）
+
+### 次回への申し送り
+
+1. コード本体（フェーズ1・2）の本番デプロイは未実施。デプロイ時は`npm install`
+   （multer新規依存）・本番`.env`への`UPLOAD_DIR`/`UPLOAD_URL_BASE`追加が必要
+   （`docs/runbook.md`「画像アップロード機能の本番インフラ準備」参照）
+2. staging/本番DBでの実データ確認は未実施（ローカルpg-mem疑似DBのみ）
+3. 前回までの残課題（staging DBに残存した検証用データの整理、実機ブラウザでのpageshow
+   最終確認、`cheer_logs`が0件である根本原因の切り分け、Vanstoneブリッジ仕様、
+   管理API認証追加、負荷試験、静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の
+   要否判断）は継続
+
+### 未解決のまま残した課題
+
+- コード本体の本番デプロイ・実データ確認（上記申し送り1・2）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-13 デプロイ記録のpush・静的ファイルデプロイ手順への chown 恒久組み込み
 
 ### 実施したこと

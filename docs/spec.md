@@ -208,6 +208,11 @@ psql -U cheerstick -d cheerstick_production -c "SELECT filename FROM schema_migr
 > 初回リリースはV・ファーレン長崎単独のため、新ジャンル追加の実地検証は8月リリース後でも間に合う。
 > ただし本番DBへのmigration適用状況の確認（上記コマンド）は先に済ませておくこと。
 
+> **2026-09-16追記：** 新ジャンルの登録手段として管理API（`POST /admin/categories`）・
+> 管理画面UI（8.7・9.8章）を新設した。ただし上記「INSERTのみで完結するか未検証」の
+> 論点自体は解消していない（既存デバイス・organizationsへの割当作業やアプリ側対応の
+> 要否は、実際に新ジャンルを追加する運用が発生した際に改めて確認が必要なまま）。
+
 ### 6.1 `targets` テーブルの設計（選手専用テーブルではない）
 
 **注意：`targets` は「選手テーブル」ではなく、`type` 列で選手・チーム・マスコット・
@@ -584,6 +589,87 @@ INNER JOINにより自然に除外される）。
 集計されること）・全期間通算（複数イベント分が合算されること）の両方を確認した。
 存在しないイベントIDでの404も確認した。確認後、テストデータはすべて削除・非表示化した。
 
+### 8.7 管理API：ジャンル（categories）登録・編集（改善3件フェーズ1、2026-09-16実装・ローカル確認まで）
+
+6章の通りcategoriesテーブル自体は`migrations/004_add_category.sql`で実装済みだったが、
+新規ジャンルの投入経路がマイグレーションファイルへの直書きSQL（またはDBへの直接INSERT）
+しか無かったため、管理画面からの登録・編集手段を新設した。既存の`organizations`管理API
+（8.3章）と同じパターンで実装した。
+
+```
+GET /admin/categories
+  一覧をname順で取得（既存実装、B-5当時から存在）
+
+POST /admin/categories
+  body: { name }
+  nameのみが入力項目。categories.slug列（NOT NULL UNIQUE）はアプリコードのどこからも
+  参照されない内部用の値であることを実装前に確認済み（organizations.typeと同種の扱い）
+  のため、UI入力項目としては公開せず、nameから生成した値にランダムなサフィックスを
+  付与してサーバー側で自動生成する（nameが日本語のみの場合スラグ化すると空文字になるため、
+  常にサフィックスを付与して一意性を保証する設計。衝突検知・リトライは行わない）
+
+PATCH /admin/categories/:id
+  body: { name }
+  nameのみ更新可能（updateOrganizationAdminと同じ部分更新方式）。
+  対象が無ければ404 { error: "CATEGORY_NOT_FOUND" }
+
+⚠️ 削除（DELETE）は実装していない（B-4のorganizations管理APIと同じ方針。
+   organizations.category_id・devices.category_idから参照されるテーブルのため、
+   削除を実装する場合は8.5章のTARGET_IN_USEと同種の参照ガードが別途必要になる）
+⚠️ 認証は他の管理APIと同じくnginx側のIP制限のみ（アプリケーションレベル認証なし）
+```
+
+**動作確認（2026-09-16、pg-mem疑似DBによるローカルHTTP検証）**：新規登録・一覧取得・
+部分更新・存在しないIDでの404・不正なUUID形式での400を確認。既存の`GET /organizations`
+が引き続き正常応答することも確認した（回帰無し）。実DB（staging/本番）での確認は未実施。
+
+### 8.8 画像アップロードAPI（改善3件フェーズ2、2026-09-16実装・ローカル確認まで）
+
+9.1章の通り、チームロゴ（`organizations.logo_url`）・選手/推し対象写真
+（`targets.image_url`）はいずれも「URLをテキストで直接指定し、画像ファイル自体は
+`/var/www/cheerstick-app/images/`配下へ手動配置する」方式のみだった。ドラッグ＆ドロップ
+／ファイル選択によるアップロードに対応するため新設した。DBスキーマ変更は無し
+（既存のlogo_url/image_url列へアップロード後のURLを保存するだけで、8.3・8.5章の
+既存API・入力項目自体は変更していない）。
+
+```
+POST /admin/uploads/image
+  multipart/form-data、フィールド名 file。jpg/pngのみ受け付ける
+  - 拡張子（.jpg/.jpeg/.png）とファイル内容の先頭バイト（マジックバイト、
+    JPEG: FF D8 FF / PNG: 89 50 4E 47 0D 0A 1A 0A）の両方を確認する
+    （拡張子の詐称対策。いずれか一方でも一致しなければ400 UNSUPPORTED_FILE_TYPE）
+  - ファイル名はUUID＋判定された拡張子で採番し、既存ファイルとの衝突を回避する
+  - 保存先はUPLOAD_DIR環境変数（本番は/var/www/cheerstick-app/images/uploads/、
+    未設定時はpublic/uploads/）。公開URLのベースはUPLOAD_URL_BASE環境変数
+    （本番はhttps://app.cheerstick.com/images/uploads、未設定時はhttp://localhost:3000/uploads）
+  - サイズ上限5MB。超過時は413 { error: "FILE_TOO_LARGE" }
+  - 成功時は201 { "url": "<UPLOAD_URL_BASE>/<uuid>.<ext>" } を返す
+
+⚠️ 認証は他の管理APIと同じくnginx側のIP制限のみ（アプリケーションレベル認証なし）
+```
+
+ディスクへの書き込みはmulter本体では行わず、`multer.memoryStorage()`でメモリ上に
+受け取ってからマジックバイト検証→書き込みの順で行う（検証前のファイルを一切
+ディスクに残さないための設計）。
+
+**画像配信の仕組み（実装前調査で確認した事実）**：本番の`/var/www/cheerstick-app/`は
+nginx（`cheerstick-app`サイト）が`root`として静的配信している構成で、`/images/`専用の
+location設定は無い。アップロード先`/var/www/cheerstick-app/images/uploads/`もこの
+延長で配信される（追加のnginx設定は不要）。`client_max_body_size`は本番nginx設定の
+どこにも設定されておらずデフォルト値（1MB）だったため、本APIが受け付ける5MBの
+アップロードに対応するには変更が必要と判明し、`/etc/nginx/sites-available/cheerstick-api`
+の`location /api/v1/admin/`ブロックへ`client_max_body_size 5m;`を追加した
+（詳細・実施記録は`docs/runbook.md`参照）。**なお本APIのリクエストは
+api.cheerstick.com（cheerstick-apiがNode appへproxy）経由であり、app.cheerstick.com
+（cheerstick-app、静的ファイル配信のみでNode appへのproxyなし）は一切経由しない**
+（8.3章までの他の管理APIと同じ経路）。
+
+**動作確認（2026-09-16、pg-mem疑似DBによるローカルHTTP検証）**：有効なPNG／JPEG（拡張子・
+マジックバイト一致）のアップロード成功、拡張子偽装（内容はテキストだが`.png`拡張子）・
+拡張子不一致（内容はPNGだが`.txt`拡張子）・6MBファイル（413）・fileフィールド欠如（400）の
+いずれも想定通りのエラーになることを確認。アップロードされたファイルが実際にディスクへ
+書き込まれること、拒否されたケースではファイルが書き込まれないことも確認した。
+
 ## 9. フロントエンド（public/index.html）
 
 ```
@@ -930,6 +1016,51 @@ window.addEventListener('pageshow', () => {
   パターン）・名前・所属チーム名・応援量（`total_intensity`降順、サーバー側で整列済み）
 - デプロイ時の配置先は`battle.html`と同じ`/var/www/cheerstick-app/`配下
   （runbook.md「デプロイ手順」の対象に本ページも追加が必要。本番反映時に注意）
+
+### 9.8 管理画面：ジャンル管理UI（`masters.html`、改善3件フェーズ1、2026-09-16新設・ローカル確認まで）
+
+8.7章のAPIに対応するUI。既存の「チーム管理」（9.5章、B-4）と同じ構成
+（新規登録フォーム＋一覧＋編集モーダル）で、`masters.html`内チーム管理セクションの
+直前に追加した。
+
+- 新規登録フォーム：ジャンル名のみ（必須）
+- 一覧：ジャンル名と編集ボタンのみ（削除機能は8.7章の方針により無し）
+- ジャンルの新規登録・編集に成功すると、同一ページ内のチーム管理・デバイス管理の
+  ジャンルプルダウン（`GET /categories`を参照している箇所）も自動的に再取得する
+  （新規ジャンル追加直後にチーム登録フォームへ反映されるようにするため）
+- チーム登録フォームのジャンルドロップダウン自体（`GET /categories`の呼び出し方）は
+  変更していない
+
+### 9.9 画像アップロードUI（`masters.html`・`targets.html`、改善3件フェーズ2、2026-09-16新設・ローカル確認まで）
+
+8.8章のAPIに対応するUI。チームロゴ（`masters.html`）・選手/推し対象写真
+（`targets.html`）の入力欄を、「URLをテキストで直接指定」方式から
+「ドラッグ＆ドロップ／ファイル選択」方式へ置き換えた。
+
+- 共通実装：`public/admin/common.js`に`setupImageUploadWidget()`を新設し、両ページで
+  共通利用する。ドロップゾーン（クリックでファイル選択も可）・隠しファイル入力・
+  アップロード状態表示・プレビュー画像・隠しURL入力（`type="hidden"`）の5要素一式で
+  構成する
+- **既存のcreate/update送信処理（organizations/targetsの各API呼び出し）は変更していない**：
+  アップロード成功時にウィジェットが隠しURL入力（従来`orgCreateLogoUrl`等として
+  テキスト入力欄だった要素をそのまま`type="hidden"`に変更して流用）へURLをセットする
+  ことで、送信側コード（`.value`を読むだけ）に手を加えずに済む設計にした
+- クライアント側で先に形式（jpg/png）・サイズ（5MB）をチェックしてからアップロードする
+  （サーバー側の検証と二重になるが、明らかに対象外のファイルで無駄なリクエストを
+  送らないためのUX目的。サーバー側の検証（8.8章のマジックバイト確認等）を置き換える
+  ものではない）
+- 編集モーダルを開く際は、既存のURL（`organizations.logo_url`／`targets.image_url`）を
+  ウィジェットの`setUrl()`でプレビュー・隠しURL入力へ反映する
+- 新規登録フォームは送信成功後、フォームリセットに合わせてウィジェットの表示（プレビュー・
+  状態表示）もリセットする
+- 初期・既定画像（`assets/images/`配下、git管理下でデプロイ時にコピーする従来方式）の
+  運用フローは変更していない。本UIは今後の新規登録・差し替え時にのみ使う想定
+  （両方式の共存についての論点整理は`docs/worklog.md`該当日エントリ参照）
+
+**動作確認（2026-09-16、pg-mem疑似DBを使ったローカルサーバー＋ブラウザ自動操作で実施）**：
+`masters.html`でファイル選択によるチームロゴアップロード→新規チーム登録→一覧反映→
+編集モーダルでの既存ロゴプレビュー表示、`targets.html`で同様の画像アップロード→
+新規選手登録→一覧反映を、実際のブラウザ操作で確認した。コンソールエラー無し。
 
 ## 10. 未実施の検証
 
@@ -1347,3 +1478,4 @@ staging側は「テーブル自体が存在しない」状態である。
 | 2026-09-13 | 11.9に追記：staging DBへのmigration 011適用完了・対抗戦機能の実データ確認結果を記録、runbook.md「staging環境マイグレーション適用時の注意」に追記 | 本番（11.8章）の所有者問題（`sudo -u postgres`経由が原因）を踏まえ、staging DBでは`.env`のアプリ接続ロール（`cheerstick_stg`）自身で`migrations/011_add_event_battles.sql`を1文ずつ実行する方法に変更した（接続ロール自身が新規テーブルを作成すればそのロールが所有者になるため、所有者不一致が原理的に発生しない）。適用前に`cheerstick_stg`のCREATE権限・schema_migrations適用状況・テーブル未存在を読み取り専用で確認したうえで実行し、適用後に所有者一致（`cheerstick_stg`）を確認した。`OWNER TO`等の所有者変更操作は行っていない（指示どおり）。events.htmlから対抗戦ペアの登録・一覧・公開スコアAPIまで実際にUI操作で確認し権限エラーが無いことを確認、確認後に削除し原状回復した。`schema_migrations`への適用記録（INSERT）は今回実施しておらず次回判断とする旨を明記した。runbook.mdの既存の所有者問題節（`ALTER TABLE`が対象）には、`CREATE TABLE`はこの問題の対象外である旨を追記した。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 11.9に追記：schema_migrationsへのmigration 011適用記録を追加した旨を記録 | KMT様指示により、staging DBの`schema_migrations`テーブルへ`011_add_event_battles.sql`の適用記録を追加した。`src/db/migrate.js`が実際に使用しているINSERT文（`INSERT INTO schema_migrations (filename) VALUES ($1)`、`applied_at`はデフォルトの`NOW()`）と同じ形式・パラメータ渡しで実行し、既存001〜010のレコード形式（カラム構成・値の入れ方）と一致させた。追加後`SELECT * FROM schema_migrations ORDER BY filename`で001〜011が適用順に揃っていることを確認した。これにより次回`node src/db/migrate.js`をstaging DBに対して実行しても011は`SKIP`され再適用エラーは発生しない。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 8.5「管理API：選手・推し対象（targets）登録・編集・削除」・8.6「チーム別・選手別の応援集計API」・9.6「管理画面：選手・推し対象管理」・9.7「応援ランキング画面」を新設 | KMT様指示により「選手データ管理UI」「チーム別・選手別の応援集計画面」を実装。フェーズ0（実装前調査）で、targets.typeの決め打ち判定はORDER BY (type='mascot')と表示ラベル分岐2箇所（`public/index.html`）のみで実装の妨げにならないこと、devices.current_target_id・cheer_logs.target_idの外部キーがいずれもON DELETE SET NULLであること、public/index.htmlに「チーム選択→推し選手選択」UIが既に完全実装済みであること（WebView側の追加実装は不要）を確認し、想定外の問題は無かったため実装に進んだ。バックエンドは既存のorganizations管理API（8.3章）と同じパターンで`GET/POST/PATCH/DELETE /admin/targets`を新設（マイグレーション無し、既存列のみ使用）、DELETE時はdevices.current_target_id・cheer_logs.target_idの参照有無をアプリ層で事前確認し409 TARGET_IN_USEでブロックするガードを実装（11.7章と同種の孤児レコード化を防ぐため）。集計APIは`GET /events/:id/target-scores`・`GET /target-scores`をevent_battlesスコアAPI（8.4章）と同じ設計方針（認証追加なし、SUM集計）で新設。フロントエンドは`public/admin/targets.html`（masters.htmlと同じ構成）、ランチャーへのリンクカード追加、`public/target-report.html`（battle.htmlと同じ認証方針・ポーリング方式、タブで「試合ごと」「全期間通算」を切替）を新設。staging DBに接続したローカルサーバーで、CRUD・削除ガード（デバイス参照・cheer_logs参照の両経路）・集計API（試合ごと・全期間通算）・フロントエンドの一連の操作を実際に確認し、確認用データはすべて削除・非表示化して原状回復した（削除APIの無いデバイス1件を除く）。本番デプロイは未実施（KMT様指示により今回の対象外）|
+| 2026-09-16 | 6章「マルチスポーツ対応（新ジャンル追加）について」に追記、8.7「管理API：ジャンル（categories）登録・編集」・8.8「画像アップロードAPI」・9.8「管理画面：ジャンル管理UI」・9.9「画像アップロードUI」を新設 | KMT様指示による「管理画面の改善3件」（ジャンル管理API/UI、ロゴURL欄のデプロイ確認、画像アップロード機能）を実装。フェーズ0（前回セッションの調査で「masters.htmlにロゴURL入力欄が無い」との認識だった点を、本番`/var/www/cheerstick-admin/masters.html`とリポジトリのdiffで再確認したところ差分無し、ブラウザキャッシュが原因と判断）はコード変更なし。フェーズ1（ジャンルCRUD）はorganizations管理API（8.3章）と同じパターンで実装、categories.slug列（NOT NULL UNIQUE・アプリコード未参照）はUI非公開のままサーバー側自動生成とした。フェーズ2（画像アップロード）はmulter（メモリストレージ・5MB上限）を新規導入し、拡張子とマジックバイトの両方を検証したうえでUUIDファイル名でUPLOAD_DIR（本番は/var/www/cheerstick-app/images/uploads/）へ保存するAPIを新設、既存のURL直接入力方式は置き換えつつ既存のcreate/update送信処理自体は変更しない設計とした。本番nginx（cheerstick-api）へのclient_max_body_size追加・uploads/ディレクトリ作成は実施済み（詳細はdocs/runbook.md参照）。コード本体（アプリケーション・管理画面）の本番デプロイは今回対象外（ローカル・pg-mem疑似DBによる動作確認まで）。詳細はdocs/worklog.md該当日エントリ参照 |

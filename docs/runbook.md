@@ -270,6 +270,44 @@ sudo cp -r assets/images/. /var/www/cheerstick-app/images/
 新しい画像を追加する場合も同様に、まずローカルで `assets/images/` 配下へ
 配置してコミット・pushし、本番では上記コマンドで反映する。
 
+### 画像アップロード機能の本番インフラ準備（改善3件フェーズ2、2026-09-16実施）
+
+**理由：** 画像アップロード機能（`docs/spec.md` 8.8章）の新設に伴い、アプリケーション
+コードの本番デプロイに先立って、本番インフラ側の準備（保存先ディレクトリ・
+nginxのアップロードサイズ上限）のみを実施した。**コード本体（`src/`・`public/admin/`の
+今回変更分）は今回デプロイしていない。** アプリが実際にこのディレクトリへ書き込みを
+開始するのは、コード本体を本番反映した後になる。
+
+**実施内容（2026-09-16）：**
+
+1. pm2実行ユーザーの確認：`cheerstick-server`は`ubuntu`ユーザーで稼働しており、
+   `/var/www/cheerstick-app/images/`の所有者も`ubuntu:ubuntu`（755）だったため、
+   **追加の権限変更（chmod/chown）は不要だった**（pm2実行ユーザー＝ディレクトリ所有者の
+   ため、755のままでも所有者は書き込み可能）
+2. アップロード保存先ディレクトリを新規作成：
+   ```bash
+   mkdir -p /var/www/cheerstick-app/images/uploads
+   ```
+   （既存の`assets/images/`正本方式とは別の、運用中に随時追加されるアップロード画像専用の
+   ディレクトリ。既存の「デプロイ時の注意」（index.html等が2箇所に分かれる問題）とは
+   無関係。既存の画像・素材フロー〔上記〕とも独立している）
+3. `/etc/nginx/sites-available/cheerstick-api`の`location /api/v1/admin/`ブロックへ
+   `client_max_body_size 5m;`を追加（変更前に`sites-available`一式をバックアップ、
+   `sudo nginx -t`で構文チェック成功を確認したうえで`systemctl reload nginx`を実施）。
+   **`cheerstick-app`（app.cheerstick.com、静的ファイル配信のみ）ではなく`cheerstick-api`
+   （api.cheerstick.com、Node appへのproxy）側に適用した**：
+   `POST /api/v1/admin/uploads/image`は他の管理API（8.3章等）と同じくapi.cheerstick.com
+   経由でNode appへ到達し、app.cheerstick.comは一切経由しないため
+   （`cheerstick-app`は`root`＋`try_files`の静的配信のみで、Node appへのproxy設定を
+   持たない構成であることを確認済み）
+
+**次回コード本体を本番デプロイする際に必要な追加作業（未実施）：**
+- 本番`.env`に`UPLOAD_DIR=/var/www/cheerstick-app/images/uploads`・
+  `UPLOAD_URL_BASE=https://app.cheerstick.com/images/uploads`を追加
+  （`.env.example`参照。未設定の場合ローカル開発用の既定値にフォールバックしてしまうため、
+  本番では明示的な設定が必須）
+- `npm install`（`multer`が新規依存として`package.json`に追加されているため）
+
 ### 環境変数を変更した場合
 
 ```bash
@@ -610,6 +648,28 @@ git push origin main-20260913ver feature-reference-data-20260913ver
 
 同日、本番DBバックアップも取得済み：`~/backups/cheerstick_production_20260913_074456.sql`
 （49,996バイト）。詳細は`docs/worklog.md`2026-09-13エントリ参照。
+
+### アップロード画像のバックアップ（改善3件フェーズ2、2026-09-16追加）
+
+**理由：** 画像アップロード機能（`docs/spec.md` 8.8章）の新設に伴い、
+`/var/www/cheerstick-app/images/uploads/`にDB外・git管理外の資産（アップロードされた
+画像ファイル）が本番にのみ存在する状態になる。既存の「gitタグ＋DBダンプ」の
+バックアップ運用（上記）だけではこれを取りこぼすため、同じタイミングでの
+tar.gz化を追加の手順として定める。既存の「git管理下に画像を置きデプロイ時にコピーする」
+フロー（`assets/images/`、上記デプロイ手順参照）とは別の資産であり、置き換えるものではない
+（初期・既定画像は引き続き`assets/images/`が正本。運用中に随時追加・差し替えられる
+アップロード画像のみが本節の対象）。
+
+```bash
+# 本番EC2上で実行。DBダンプ取得と同じタイミングで行う想定
+mkdir -p ~/backups
+FILE=~/backups/cheerstick_uploads_$(date +%Y%m%d_%H%M%S).tar.gz
+tar czf $FILE -C /var/www/cheerstick-app/images uploads
+ls -la $FILE   # サイズが非ゼロであることを確認（uploads/が空の場合はほぼ0バイトになる点に注意）
+```
+
+命名規則はDBダンプ（`cheerstick_production_<YYYYMMDD_HHMMSS>.sql`）に揃え、
+`cheerstick_uploads_<YYYYMMDD_HHMMSS>.tar.gz`とした。
 
 ---
 
