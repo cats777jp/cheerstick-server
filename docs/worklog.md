@@ -4,6 +4,94 @@
 
 ---
 
+## 2026-09-17 管理画面改善3件（ジャンル管理API/UI・画像アップロード機能）の本番デプロイ
+
+### 背景
+
+前回セッション（2026-09-16）でローカル・pg-mem疑似DB上まで実装・検証済みだった2件
+（ジャンル管理API/UI、画像アップロード機能）を本番反映した。インフラ側準備
+（uploads/ディレクトリ・nginx `client_max_body_size`）は前回セッションで実施済み。
+DBマイグレーションなし（既存テーブルをそのまま使用）。
+
+### 実施したこと
+
+1. 事前確認：EC2側`git log -1`（`1589ec3`、ローカルより6コミット遅れ）、
+   `ss -tnp state established '( sport = :3000 )'`でWS接続数1件を確認し、実施可能と判断
+2. 本番`.env`に`UPLOAD_DIR=/var/www/cheerstick-app/images/uploads`・
+   `UPLOAD_URL_BASE=https://app.cheerstick.com/images/uploads`を追加
+   （`.env.example`のコメントに明記された本番用の値をそのまま採用）。
+   追加前に`.env.bak_20260917`としてバックアップを取得
+3. `git pull`（`1589ec3..7811ccd`、3コミット反映）、`npm install`
+   （`multer` 2.4.0が`node_modules`に追加されたことを確認）
+4. 静的ファイル反映：`masters.html`・`targets.html`を`/var/www/cheerstick-admin/`へ
+   `sudo cp`、`diff`で差分無しを確認
+5. `pm2 restart cheerstick-server --update-env`（環境変数変更を伴うため`--update-env`付き
+   で実施。`pm2 logs`でエラー無しを確認。ログ末尾に出ていたJSONパースエラーは
+   2026-09-16の別件の古いログで今回のデプロイとは無関係と判断）
+6. 疎通確認：
+   - `https://api.cheerstick.com/api/v1/admin/categories`はEC2からのcurlで`403`
+     （nginx IP制限により想定通り。KMT様オフィスからの実疎通確認は別途必要）
+   - アプリ自体の動作検証のため`http://127.0.0.1:3000`（nginxのIP制限を経由しない
+     エンドポイント）でカテゴリー作成`POST`→`201`、画像アップロード`POST`→`201`と
+     URL返却を確認
+   - 返却されたアップロード画像URLに外部から`curl`でアクセスし`200`（69バイトのPNG、
+     ETag一致）を確認
+   - `admin.cheerstick.com/masters.html`・`/targets.html`をブラウザで開き、
+     ジャンル管理セクション・画像アップロードUIの表示を確認
+
+### 判明した事実 / 想定と違ったこと
+
+- **静的ファイル反映の手順漏れを検知・修正した。** 今回の指示書は
+  `masters.html`・`targets.html`のみを対象としていたが、今回のコミット
+  （`7811ccd`）は`public/admin/common.js`（`setupImageUploadWidget`関数を新設）・
+  `common.css`も変更しており、この2ファイルは`docs/runbook.md`の
+  「管理画面は6ファイル構成になった」節（2026-09-13追記）に既に明記されている
+  デプロイ対象だった。`common.js`/`common.css`を反映しないまま`masters.html`を
+  開いたところ、ブラウザで`ReferenceError: setupImageUploadWidget is not defined`が
+  発生（赤いエラーバナー「ジャンル一覧の取得に失敗しました」も表示。実際の原因は
+  ジャンル一覧取得ではなく画像アップロードUI初期化の失敗だったため、エラー
+  メッセージの粒度に改善余地がある）。`common.js`・`common.css`を追加で
+  `/var/www/cheerstick-admin/`へ`cp`・`diff`確認し、ブラウザのハードリロード
+  （`ctrl+shift+r`。反映直後は旧`common.js`がキャッシュされ、通常リロードでは
+  エラーが再現し続けた）後に解消を確認した。**`runbook.md`の6ファイル手順自体は
+  正しかったが、今回のチャット指示がそれと食い違っていた点に注意。**
+- 動作確認用に登録したジャンル「本番デプロイ確認用ジャンル 20260917」は、
+  指示に従い削除せず本番DBに残置（ジャンルは削除機能が無い設計のため）
+- 動作確認用にアップロードした1x1px PNG（`/var/www/cheerstick-app/images/uploads/
+  f34bafc2-e469-4b64-ab63-4119c6d75bce.png`）も削除せず残置。今回の指示書に
+  削除要否の言及が無かったため、カテゴリーと同様の扱い（残置）とした
+
+### 変更したファイル
+
+- 本番EC2：`.env`（`UPLOAD_DIR`/`UPLOAD_URL_BASE`追加、`.env.bak_20260917`作成）、
+  `git pull`で`src/`・`public/admin/`等を`7811ccd`に更新、`npm install`（multer導入）、
+  `/var/www/cheerstick-admin/`の`masters.html`・`targets.html`・`common.js`・
+  `common.css`を上書き、`pm2 restart --update-env`
+- 本番DB：変更なし（マイグレーション無し。テストデータとしてcategories 1件が増加）
+- ローカル：`docs/worklog.md`（本エントリ）
+- コード変更：無し（前回セッションで実装済みのものを反映したのみ）
+
+### 次回への申し送り
+
+1. 本番動作確認は`127.0.0.1`経由・EC2上curlの範囲にとどまる。KMT様オフィスから
+   `https://api.cheerstick.com/api/v1/admin/`配下（categories POST・uploads/image POST含む）
+   の実疎通確認、および`admin.cheerstick.com`のブラウザ実地確認（他ブラウザ・
+   キャッシュクリア状態）を別途お願いしたい
+2. 今回検知した「チャット指示とrunbook.mdのデプロイ対象ファイル一覧の食い違い」を
+   踏まえ、今後`public/admin/`配下に変更がある回は、指示の個別ファイル名によらず
+   `docs/runbook.md`の6ファイル手順を都度参照して対象を確定する運用とする
+3. 前回までの残課題（staging DBに残存した検証用データの整理、実機ブラウザでのpageshow
+   最終確認、`cheer_logs`が0件である根本原因の切り分け、Vanstoneブリッジ仕様、
+   管理API認証追加、負荷試験、静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の
+   要否判断）は継続
+
+### 未解決のまま残した課題
+
+- KMT様オフィスからの実疎通確認（上記申し送り1）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-16 管理画面の改善3件（ジャンル管理API/UI・ロゴURL欄デプロイ確認・画像アップロード機能）
 
 ### 背景
