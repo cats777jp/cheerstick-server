@@ -4,6 +4,96 @@
 
 ---
 
+## 2026-09-17 チームカラー設定機能（organizations.color）の実装
+
+### 背景
+
+migration 007（2026-07-31）で追加済みながら管理API・管理画面のいずれからも設定手段が無く
+未使用のまま残っていた`organizations.color`列を、KMT様指示により管理画面から設定できる
+ようにした。`feature/reference-data`ブランチのまま、本番デプロイは対象外（ローカル・
+pg-mem疑似DBによる動作確認まで）。
+
+### 実施したこと
+
+**バックエンド**
+- `src/controllers/adminEventController.js`：`HEX_COLOR_RE`（`/^#[0-9A-Fa-f]{6}$/`）を追加。
+  `createOrganization`・`updateOrganization`の両方で`color`を受け取り、不正形式は
+  `400 {"error":"INVALID_COLOR_FORMAT"}`を返すようにした。新規登録時に未指定なら
+  `color: null`のまま作成（既存動作維持）、更新時に空文字なら「変更しない」扱いとした
+  （他フィールドの「空欄で送ると変更される」運用とは意図的に区別。誤操作による
+  チームカラーのNULL化を避けるため）
+- `src/db/cheerstickQueries.js`：`createOrganizationAdmin`・`updateOrganizationAdmin`・
+  `listOrganizationsForAdmin`のSELECT/INSERT/UPDATE/RETURNING句に`color`列を追加
+
+**フロントエンド（`public/admin/masters.html`）**
+- チーム新規登録フォーム・編集モーダルの両方に「チームカラー」項目を追加。
+  `<input type="color">`のカラーピッカーとHEXテキスト入力をセットで配置し、`input`
+  イベントで双方向に同期する処理を実装（テキスト欄が不正な値の間はピッカー側を
+  更新しない）
+- HEXテキスト欄に簡易バリデーションを実装し、不正な間はエラーメッセージ表示＋
+  登録・保存ボタンを`disabled`化
+- 新規登録フォームのデフォルト色は`#3B82F6`（既存データにHEX形式のデフォルト値を
+  持つ列定義が無いため、指示書に例示された初期色をそのまま採用）
+- チーム一覧テーブルに「カラー」列を追加し、`organizations.color`を背景色とした
+  正方形のスウォッチ（`.color-swatch`）を表示。値が無い・不正な場合はグレー
+  （`#cccccc`）で表示
+- `common.css`に`button:disabled`のスタイル（半透明化・`cursor: not-allowed`）を新設。
+  本UI実装中に、`disabled`属性が付いていても見た目が通常時と区別できないことに
+  気づいたため（他の`disabled`ボタン全般に影響する副次的な改善）
+
+### 動作確認方法
+
+前回セッション（2026-09-16）と同じ方式：pg-mem（インメモリPostgres疑似実装）を
+`--no-save`で一時導入し、migrationsファイル（トリガー・拡張・COMMENT ON等pg-mem
+未対応の構文のみ検証用に除去したコピー）を適用した疑似DB上で実サーバー
+（`src/app.js`相当）を起動し、管理画面の静的ファイルも同一オリジンで配信してテストした。
+検証専用スクリプトはリポジトリ外（セッションのスクラッチパッド）に置き、リポジトリには
+一切コミットしていない。ブラウザでの操作確認は`mcp__claude-in-chrome`（Chrome拡張連携）
+でこの疑似サーバーに対して実施した。
+
+- API（curl）：POST/PATCHとも、不正形式で400 `INVALID_COLOR_FORMAT`、正常形式で
+  201/200・color保存、未指定（POST）・空文字（PATCH）で既存動作維持（null／元の値保持）
+  をそれぞれ確認
+- ブラウザ操作：HEXテキスト欄への正しい入力でピッカーが追従すること、不正な値
+  （`red`・`#zzz`）でエラー表示と登録ボタンの無効化（見た目・`disabled`属性の両方）が
+  働くこと、新規登録したチームが一覧にカラー付きで反映されること、編集モーダルで
+  既存色が正しくプリフィルされ、変更後保存すると一覧のスウォッチが即時更新される
+  ことを確認した。コンソールエラー無し
+
+### 判明した事実 / 想定と違ったこと
+
+- pg-memの`gen_random_uuid()`をカスタム関数として登録する際、`impure: true`を
+  指定しないと同一クエリ実行内でUUID生成結果がメモ化され、複数INSERTで同じUUIDが
+  返って主キー重複エラーになる事象が発生した。`impure: true`を指定することで解消した
+  （pg-memの副作用最適化に起因する検証環境固有の問題で、実際のPostgresでは発生しない）
+- ローカル検証用に`app.js`をそのまま`require`すると、内部で登録済みの404キャッチオール
+  ミドルウェアが静的ファイル配信より先に応答してしまうため、`app`自体は変更せず、
+  外側に新しいrootAppを用意して静的配信を先に処理してから`app`へ委譲する構成にした
+
+### 変更したファイル
+
+- バックエンド：`src/controllers/adminEventController.js`・`src/db/cheerstickQueries.js`
+- フロントエンド：`public/admin/masters.html`・`public/admin/common.css`
+- ドキュメント：`docs/spec.md`（8.3章末尾に追記、9.10章新設、変更履歴に追記）・
+  `docs/worklog.md`（本エントリ）
+- 本番EC2・本番DB：変更なし（DBマイグレーションも不要。`organizations.color`列は
+  migration 007で既に存在）
+
+### 次回への申し送り
+
+1. 本番デプロイは未実施。デプロイ時はコード反映（`git pull`・`masters.html`・`common.css`の
+   コピー、DBマイグレーション不要）のみで、`.env`変更やnpm installは不要
+2. 実データ（staging/本番DB）での動作確認は未実施（ローカルpg-mem疑似DBのみ）
+3. 前回までの残課題（Vanstoneブリッジ仕様、管理API認証追加、負荷試験、静的ファイル
+   2箇所デプロイ恒久対応、`cheerstick-ws`の要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 実データでの動作確認・本番デプロイ（上記申し送り1・2）
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-17 管理画面改善3件（ジャンル管理API/UI・画像アップロード機能）の本番デプロイ
 
 ### 背景

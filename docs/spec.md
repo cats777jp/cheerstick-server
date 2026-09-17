@@ -373,6 +373,25 @@ PATCH /admin/organizations/:id
 `'football_club'`をサーバー側デフォルト値として設定する（UI上の入力項目としては
 非公開）。アプリコードからは`type`列を参照する箇所は無い。
 
+**追記（チームカラー設定機能、2026-09-17実装・ローカル確認まで）：**
+`POST`/`PATCH`の両方に`color`（HEX形式、例: `#1E3A8A`）を追加した。
+`organizations.color`列自体はmigration 007（2026-07-31）で既に追加済みで
+未使用のまま残っていたものを、今回初めて管理APIから設定可能にした
+（5.3章のLED制御・フロントの`--team-color`カスタムプロパティが参照する列）。
+
+```
+POST /admin/organizations
+  body: { name, category_id, logo_url?, color? }
+  colorは`/^#[0-9A-Fa-f]{6}$/`形式チェックのみ（重複チェック等は無し）。
+  不正な形式は400 { error: "INVALID_COLOR_FORMAT" }。未指定・空文字ならNULLのまま
+  （既存データが無い新規チームはこの状態から始まる想定）
+
+PATCH /admin/organizations/:id
+  body: { name?, category_id?, logo_url?, color? }
+  colorが空文字の場合は「変更しない」として扱う（他フィールドの空欄運用とは異なり、
+  誤操作でチームカラーがNULL化されることを避けるため）。不正な形式は同じく400
+```
+
 ### 8.4 対抗戦ペア管理・スコアAPI（2チーム対抗応援合戦機能、2026-09-11実装・同日本番反映）
 
 > **2026-09-11追記：本番デプロイ完了、ただし現時点では機能未使用可。**
@@ -1062,6 +1081,38 @@ window.addEventListener('pageshow', () => {
 編集モーダルでの既存ロゴプレビュー表示、`targets.html`で同様の画像アップロード→
 新規選手登録→一覧反映を、実際のブラウザ操作で確認した。コンソールエラー無し。
 
+### 9.10 管理画面：チームカラー設定UI（`masters.html`、2026-09-17新設・ローカル確認まで）
+
+8.3章追記のAPI（`organizations.color`）に対応するUI。チーム新規登録フォーム・
+編集モーダルの両方に「チームカラー」項目を追加した。
+
+- `<input type="color">`のカラーピッカーと、隣にHEXコードのテキスト入力欄をセットで配置。
+  `input`イベントで双方向に同期する（ピッカー変更→テキスト欄反映、テキスト欄への
+  正しいHEX入力→ピッカー反映。テキスト欄が不正な値の間はピッカー側を更新しない）
+- テキスト欄には`/^#[0-9A-Fa-f]{6}$/`によるクライアント側チェックを実装し、不正な間は
+  エラーメッセージ表示＋登録・保存ボタンを`disabled`にする（8.3章のAPI側バリデーションと
+  二重になるが、明らかに不正な値での無駄なリクエストを避けるUX目的。サーバー側検証を
+  置き換えるものではない。9.9章の画像アップロードUIと同じ考え方）
+- 新規登録フォームのデフォルト色は`#3B82F6`（既存organizationsレコードにHEX形式の
+  デフォルト値を持つ列定義は無いため、指示書に例示された初期色をそのまま採用）
+- 編集モーダルを開く際、既存の`color`が正しいHEX形式ならそのままピッカー・テキスト欄へ
+  反映、未設定（NULL）や不正な形式ならデフォルト色にフォールバックする
+- チーム一覧テーブルに「カラー」列を追加し、`organizations.color`を背景色とした
+  小さい正方形のスウォッチ（`.color-swatch`）を表示する。値が無い・不正な場合は
+  グレー（`#cccccc`）で表示する
+- 併せて`common.css`に`button:disabled`のスタイル（半透明化・`cursor: not-allowed`）を
+  新設した。従来`disabled`状態の見た目が通常時と区別できなかったため
+  （本UI実装時に気づいたもので、他の`disabled`ボタン全般に影響する）
+
+**動作確認（2026-09-17、pg-mem疑似DBを使ったローカルサーバー＋ブラウザ自動操作で実施）**：
+バックエンドAPI（`POST`/`PATCH /admin/organizations`）に対し、不正な形式（`"blue"`等）で
+400 `INVALID_COLOR_FORMAT`、正しいHEX形式で201/200、未指定・空文字で既存動作維持
+（新規はNULL、更新時は元の値を保持）となることを確認した。ブラウザ操作では、
+テキスト欄への正しいHEX入力でピッカーが追従すること、不正な値でエラー表示と
+登録ボタンの無効化（見た目・`disabled`属性の両方）が働くこと、新規登録したチームが
+一覧にカラー付きで反映されること、編集モーダルで既存色が正しくプリフィルされ、
+変更後保存すると一覧のスウォッチが即時更新されることを確認した。コンソールエラー無し。
+
 ## 10. 未実施の検証
 
 **2,000〜20,000本規模の負荷試験は一度も実施していない。**
@@ -1479,3 +1530,4 @@ staging側は「テーブル自体が存在しない」状態である。
 | 2026-09-13 | 11.9に追記：schema_migrationsへのmigration 011適用記録を追加した旨を記録 | KMT様指示により、staging DBの`schema_migrations`テーブルへ`011_add_event_battles.sql`の適用記録を追加した。`src/db/migrate.js`が実際に使用しているINSERT文（`INSERT INTO schema_migrations (filename) VALUES ($1)`、`applied_at`はデフォルトの`NOW()`）と同じ形式・パラメータ渡しで実行し、既存001〜010のレコード形式（カラム構成・値の入れ方）と一致させた。追加後`SELECT * FROM schema_migrations ORDER BY filename`で001〜011が適用順に揃っていることを確認した。これにより次回`node src/db/migrate.js`をstaging DBに対して実行しても011は`SKIP`され再適用エラーは発生しない。既存記述は削除せず追記で更新した |
 | 2026-09-13 | 8.5「管理API：選手・推し対象（targets）登録・編集・削除」・8.6「チーム別・選手別の応援集計API」・9.6「管理画面：選手・推し対象管理」・9.7「応援ランキング画面」を新設 | KMT様指示により「選手データ管理UI」「チーム別・選手別の応援集計画面」を実装。フェーズ0（実装前調査）で、targets.typeの決め打ち判定はORDER BY (type='mascot')と表示ラベル分岐2箇所（`public/index.html`）のみで実装の妨げにならないこと、devices.current_target_id・cheer_logs.target_idの外部キーがいずれもON DELETE SET NULLであること、public/index.htmlに「チーム選択→推し選手選択」UIが既に完全実装済みであること（WebView側の追加実装は不要）を確認し、想定外の問題は無かったため実装に進んだ。バックエンドは既存のorganizations管理API（8.3章）と同じパターンで`GET/POST/PATCH/DELETE /admin/targets`を新設（マイグレーション無し、既存列のみ使用）、DELETE時はdevices.current_target_id・cheer_logs.target_idの参照有無をアプリ層で事前確認し409 TARGET_IN_USEでブロックするガードを実装（11.7章と同種の孤児レコード化を防ぐため）。集計APIは`GET /events/:id/target-scores`・`GET /target-scores`をevent_battlesスコアAPI（8.4章）と同じ設計方針（認証追加なし、SUM集計）で新設。フロントエンドは`public/admin/targets.html`（masters.htmlと同じ構成）、ランチャーへのリンクカード追加、`public/target-report.html`（battle.htmlと同じ認証方針・ポーリング方式、タブで「試合ごと」「全期間通算」を切替）を新設。staging DBに接続したローカルサーバーで、CRUD・削除ガード（デバイス参照・cheer_logs参照の両経路）・集計API（試合ごと・全期間通算）・フロントエンドの一連の操作を実際に確認し、確認用データはすべて削除・非表示化して原状回復した（削除APIの無いデバイス1件を除く）。本番デプロイは未実施（KMT様指示により今回の対象外）|
 | 2026-09-16 | 6章「マルチスポーツ対応（新ジャンル追加）について」に追記、8.7「管理API：ジャンル（categories）登録・編集」・8.8「画像アップロードAPI」・9.8「管理画面：ジャンル管理UI」・9.9「画像アップロードUI」を新設 | KMT様指示による「管理画面の改善3件」（ジャンル管理API/UI、ロゴURL欄のデプロイ確認、画像アップロード機能）を実装。フェーズ0（前回セッションの調査で「masters.htmlにロゴURL入力欄が無い」との認識だった点を、本番`/var/www/cheerstick-admin/masters.html`とリポジトリのdiffで再確認したところ差分無し、ブラウザキャッシュが原因と判断）はコード変更なし。フェーズ1（ジャンルCRUD）はorganizations管理API（8.3章）と同じパターンで実装、categories.slug列（NOT NULL UNIQUE・アプリコード未参照）はUI非公開のままサーバー側自動生成とした。フェーズ2（画像アップロード）はmulter（メモリストレージ・5MB上限）を新規導入し、拡張子とマジックバイトの両方を検証したうえでUUIDファイル名でUPLOAD_DIR（本番は/var/www/cheerstick-app/images/uploads/）へ保存するAPIを新設、既存のURL直接入力方式は置き換えつつ既存のcreate/update送信処理自体は変更しない設計とした。本番nginx（cheerstick-api）へのclient_max_body_size追加・uploads/ディレクトリ作成は実施済み（詳細はdocs/runbook.md参照）。コード本体（アプリケーション・管理画面）の本番デプロイは今回対象外（ローカル・pg-mem疑似DBによる動作確認まで）。詳細はdocs/worklog.md該当日エントリ参照 |
+| 2026-09-17 | 8.3に追記：`organizations.color`設定APIを追加、9.10「管理画面：チームカラー設定UI」を新設 | KMT様指示により、migration 007（2026-07-31）で追加済みながら未使用のまま残っていた`organizations.color`列を、管理API（`POST`/`PATCH /admin/organizations`への`color`パラメータ追加、HEX形式`/^#[0-9A-Fa-f]{6}$/`のバリデーション、不正時400 `INVALID_COLOR_FORMAT`）と`masters.html`のUI（カラーピッカー⇔HEXテキストの双方向同期、一覧のカラースウォッチ列）から設定可能にした。空文字・未指定は既存動作を変えない（更新時は値を変更しない、新規登録時はNULLのまま）方針とした。実装中に`disabled`ボタンの見た目が通常時と区別できないことに気づき、`common.css`に`button:disabled`のスタイルを追加した（他の`disabled`ボタン全般に影響する副次的な改善）。ローカル・pg-mem疑似DBによるAPI（バリデーション正常系・異常系）とブラウザ操作（双方向同期・エラー表示・一覧反映）の確認まで完了。本番デプロイは今回対象外（KMT様指示）。詳細はdocs/worklog.md該当日エントリ参照 |
