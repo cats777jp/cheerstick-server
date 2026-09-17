@@ -4,6 +4,65 @@
 
 ---
 
+## 2026-09-17 チームカラー設定機能の本番デプロイ
+
+### 背景
+
+前回セッションでローカル・pg-mem疑似DB上まで実装・検証済みだったチームカラー設定機能
+（`organizations.color`管理API・`masters.html` UI）を本番反映した。DBマイグレーション
+なし（`organizations.color`列はmigration 007で既存）。
+
+### 実施したこと
+
+1. 事前確認：EC2側`git log -1`（`7811ccd`、ローカルより3コミット遅れ）、WS接続数4件を
+   確認し、深夜帯のため実施可能と判断
+2. `git pull`：`7811ccd..4b8fad6`で3コミット反映（`a444e79`・`ec1de5b`・`4b8fad6`）。
+   前回セッション終了時点で`a444e79`（docsのみのコミット）がEC2へ未反映のまま
+   残っていたため、指示書が想定していた「2コミット」より1件多く反映された
+   （実害なし、内容はdocsのみ）
+3. 静的ファイル反映：`masters.html`・`common.css`を`/var/www/cheerstick-admin/`へ
+   `sudo cp`、`diff`で差分無し・所有者/パーミッションも既存ファイルと一致することを確認
+4. `pm2 restart cheerstick-server`（バックエンドのcolor対応を含むため実施）。
+   `pm2 logs`でエラー無しを確認（ログ末尾の過去のJSONパースエラー等は無関係の既知のもの）
+5. 疎通確認：
+   - `https://api.cheerstick.com/api/v1/admin/categories`はEC2からのcurlで`403`
+     （nginx IP制限により想定通り）
+   - `localhost:3000`経由で、V・ファーレン長崎（既存組織）の`color`を`#005AAA`→
+     `#00FF00`へPATCH（200）→動作確認後`#005AAA`へ復元（200）
+   - 不正な色（`"red"`）でのPOST/PATCHがいずれも`400 INVALID_COLOR_FORMAT`を返す
+     ことを確認（この過程でテストデータは作成されず、一覧は1件・色も元のまま）
+   - `admin.cheerstick.com/masters.html`をブラウザで開き、チームカラーのカラー
+     ピッカー・HEX入力欄、一覧の「カラー」列（V・ファーレン長崎の青いスウォッチ、
+     `#005AAA`が正しく反映）を確認。コンソールエラー無し
+
+### 判明した事実 / 想定と違ったこと
+
+- 前回セッションでpushした`a444e79`（デプロイ記録のみのdocsコミット）がEC2へ
+  未反映のまま残っていた。今回のデプロイ対象（チームカラー機能）には影響しない
+  内容だったため、通常の`git pull`でまとめて反映し、特別な対応は不要だった
+- 既存本番データ（V・ファーレン長崎の`color`）を用いた検証のため、PATCH確認は
+  一時変更→即時復元の手順で実施し、本番データへの実害が残らないようにした
+
+### 変更したファイル
+
+- 本番EC2：`git pull`で`src/`・`public/admin/`等を`4b8fad6`に更新、
+  `/var/www/cheerstick-admin/`の`masters.html`・`common.css`を上書き、
+  `pm2 restart cheerstick-server`
+- 本番DB：一時的にV・ファーレン長崎の`color`を変更→復元（最終的に変更なし）。
+  マイグレーションは無し
+- ローカル：`docs/worklog.md`（本エントリ）
+
+### 次回への申し送り
+
+- 前回までの残課題（実データでの動作確認、Vanstoneブリッジ仕様、管理API認証追加、
+  負荷試験、静的ファイル2箇所デプロイ恒久対応、`cheerstick-ws`の要否判断）は継続
+
+### 未解決のまま残した課題
+
+- 前回までの残課題（継続）
+
+---
+
 ## 2026-09-17 チームカラー設定機能（organizations.color）の実装
 
 ### 背景
