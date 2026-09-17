@@ -112,6 +112,11 @@ button {
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.danger { background: #b3261e; border-color: #b3261e; color: #fff; }
+button:disabled, button:disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--border);
+}
 
 label { display: block; font-size: 13px; color: var(--text-muted); margin: 10px 0 4px; }
 input, select {
@@ -185,3 +190,39 @@ input, select {
    （デバイス一覧の一括選択）の両方で使うため共通化 */
 td.checkbox-cell, th.checkbox-cell { width: 32px; }
 td.checkbox-cell input, th.checkbox-cell input { width: auto; }
+
+/* チームカラー設定UI（organizations.color、masters.htmlのチーム新規登録・編集で使用）。
+   カラーピッカーとHEXテキスト入力を横並びにし、双方向同期する。 */
+.color-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.color-field input[type="color"] {
+  width: 40px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.color-field input[type="text"] {
+  width: 100px;
+  flex: none;
+}
+.color-error {
+  font-size: 12px;
+  color: #ef4444;
+  margin-top: 2px;
+}
+
+/* チーム一覧の色見本スウォッチ */
+.color-swatch {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}

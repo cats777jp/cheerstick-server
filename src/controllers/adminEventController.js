@@ -9,6 +9,8 @@
 const cheerQueries = require('../db/cheerstickQueries');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// organizations.color（migrations/007_organization_color.sql、VARCHAR(7)）の形式チェック用。
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 
 // WS接続ログ（src/websocket/index.js）と同じ方式：X-Real-IPヘッダー優先、
 // 無ければsocketのremoteAddressにフォールバックする（B-2、2026-08-19追加）。
@@ -102,14 +104,22 @@ exports.listOrganizations = async (req, res, next) => {
  * 実質使えないため、登録時点で必須とした）。logo_urlは任意。
  */
 exports.createOrganization = async (req, res, next) => {
-  const { name, category_id: categoryId, logo_url: logoUrl } = req.body || {};
+  const { name, category_id: categoryId, logo_url: logoUrl, color } = req.body || {};
 
   if (!name || !categoryId) {
     return res.status(400).json({ error: 'name and category_id are required' });
   }
+  if (color && !HEX_COLOR_RE.test(color)) {
+    return res.status(400).json({ error: 'INVALID_COLOR_FORMAT' });
+  }
 
   try {
-    const created = await cheerQueries.createOrganizationAdmin({ name, categoryId, logoUrl });
+    const created = await cheerQueries.createOrganizationAdmin({
+      name,
+      categoryId,
+      logoUrl,
+      color: color || null,
+    });
     res.status(201).json(created);
   } catch (err) {
     if (err.code === 'CATEGORY_NOT_FOUND') {
@@ -128,11 +138,18 @@ exports.updateOrganization = async (req, res, next) => {
     return res.status(400).json({ error: 'INVALID_ID' });
   }
 
-  const { name, category_id: categoryId, logo_url: logoUrl } = req.body || {};
+  const { name, category_id: categoryId, logo_url: logoUrl, color } = req.body || {};
+  if (color && !HEX_COLOR_RE.test(color)) {
+    return res.status(400).json({ error: 'INVALID_COLOR_FORMAT' });
+  }
+
   const fields = {};
   if (name !== undefined) fields.name = name;
   if (categoryId !== undefined) fields.categoryId = categoryId;
   if (logoUrl !== undefined) fields.logoUrl = logoUrl;
+  // 空文字は「変更しない」として扱う（既存logoUrl等の空欄運用とは異なり、
+  // colorは未入力時に既存値をNULL化させたくないため）。
+  if (color) fields.color = color;
 
   try {
     const updated = await cheerQueries.updateOrganizationAdmin(id, fields);

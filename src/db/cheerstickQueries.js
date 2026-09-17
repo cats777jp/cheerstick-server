@@ -458,7 +458,7 @@ async function listOrganizationsForAdmin(categoryId) {
   const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   const { rows } = await db.query(
-    `SELECT o.id, o.name, o.logo_url, o.category_id, c.name AS category_name,
+    `SELECT o.id, o.name, o.logo_url, o.color, o.category_id, c.name AS category_name,
             o.is_active, o.created_at
      FROM organizations o
      LEFT JOIN categories c ON c.id = o.category_id
@@ -479,14 +479,14 @@ async function listOrganizationsForAdmin(categoryId) {
  * 指示書に登場しないため、指定が無ければ既存データ（V・ファーレン長崎）と同じ
  * 'football_club'をデフォルトとする。UI上の入力項目としては公開していない。
  */
-async function createOrganizationAdmin({ name, categoryId, logoUrl, type }) {
+async function createOrganizationAdmin({ name, categoryId, logoUrl, type, color }) {
   await assertCategoryExists(categoryId);
 
   const { rows } = await db.query(
-    `INSERT INTO organizations (name, type, category_id, logo_url)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, name, type, category_id, logo_url, is_active, created_at`,
-    [name, type || 'football_club', categoryId, logoUrl || null]
+    `INSERT INTO organizations (name, type, category_id, logo_url, color)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, name, type, category_id, logo_url, color, is_active, created_at`,
+    [name, type || 'football_club', categoryId, logoUrl || null, color || null]
   );
   return rows[0];
 }
@@ -497,7 +497,7 @@ async function createOrganizationAdmin({ name, categoryId, logoUrl, type }) {
  * 対象が無い場合はnullを返す（呼び出し元で404にマッピングする）。
  */
 async function updateOrganizationAdmin(organizationId, fields) {
-  const columnMap = { name: 'name', categoryId: 'category_id', logoUrl: 'logo_url' };
+  const columnMap = { name: 'name', categoryId: 'category_id', logoUrl: 'logo_url', color: 'color' };
 
   if (Object.prototype.hasOwnProperty.call(fields, 'categoryId') && fields.categoryId != null) {
     await assertCategoryExists(fields.categoryId);
@@ -517,7 +517,7 @@ async function updateOrganizationAdmin(organizationId, fields) {
 
   if (setClauses.length === 0) {
     const { rows } = await db.query(
-      `SELECT id, name, type, category_id, logo_url, is_active, created_at
+      `SELECT id, name, type, category_id, logo_url, color, is_active, created_at
        FROM organizations WHERE id = $1`,
       [organizationId]
     );
@@ -528,7 +528,7 @@ async function updateOrganizationAdmin(organizationId, fields) {
   const { rows } = await db.query(
     `UPDATE organizations SET ${setClauses.join(', ')}
      WHERE id = $${i}
-     RETURNING id, name, type, category_id, logo_url, is_active, created_at`,
+     RETURNING id, name, type, category_id, logo_url, color, is_active, created_at`,
     values
   );
   return rows[0] || null;
