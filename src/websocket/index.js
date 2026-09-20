@@ -25,6 +25,13 @@ const { generateReferenceToken } = require('../utils/referenceToken');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENABLE_REFERENCE_TOKEN = process.env.ENABLE_REFERENCE_TOKEN === 'true';
 
+// --- ping/pongハートビート（幽霊接続対策、2026-09-20実装） -----------------
+// 30秒間隔でpingを送り、90秒間pong応答が無い接続をterminate()する。
+// 20,000接続規模を想定し、setInterval発火のたびに全クライアントへ同時にping()を
+// 呼ぶと送信が一瞬に集中するため、各接続ごとにジッターを挟んで送信タイミングを散らす。
+const HEARTBEAT_INTERVAL_MS = 30000;
+const HEARTBEAT_TIMEOUT_MS = 90000;
+
 // --- connect接続ログ（2026-08-18追加） ------------------------------------
 // 目的：どのデバイスがいつ接続を試み、どのstatusが返ったかを事後に追えるようにする。
 // 既存の判定ロジック（computeStatus）・クライアントへの応答内容は変更しない、記録の追加のみ。
@@ -146,6 +153,11 @@ class CheerWebSocketServer {
       let connectSuccessLogged = false; // 同一コネクションでの成功ログは初回のみ
       const clientIp = getClientIp(req);
 
+      ws.lastPong = Date.now();
+      ws.on('pong', () => {
+        ws.lastPong = Date.now();
+      });
+
       ws.on('message', async (raw) => {
         let msg;
         try {
@@ -161,6 +173,14 @@ class CheerWebSocketServer {
                 return this.send(ws, { type: 'error', message: 'id is required' });
               }
               deviceId = msg.id;
+
+              // 同一デバイスの旧接続が残っていれば、新しい接続に置き換える前に切断する
+              // （幽霊接続対策、2026-09-20実装）。close()コードは4000番台（アプリ定義）とし、
+              // 「新しい接続に置き換えられた」ことを示す。
+              const oldWs = this.sessions.get(deviceId);
+              if (oldWs && oldWs !== ws) {
+                oldWs.close(4000, 'replaced by new connection');
+              }
               this.sessions.set(deviceId, ws);
 
               let row;
@@ -279,7 +299,10 @@ class CheerWebSocketServer {
       });
 
       ws.on('close', () => {
-        if (deviceId) {
+        // sessionsに登録されているのが自分自身のwsインスタンスの場合のみ削除する。
+        // 新しい接続への置き換え後に旧接続のcloseイベントが遅れて発火しても、
+        // 既にsessionsが新接続で上書き済みであれば削除しない（2026-09-20修正）。
+        if (deviceId && this.sessions.get(deviceId) === ws) {
           this.sessions.delete(deviceId);
         }
       });
@@ -289,7 +312,33 @@ class CheerWebSocketServer {
       });
     });
 
+    this.startHeartbeat();
+
     console.log(`[WS] CheerStick WebSocket server attached at ${path}`);
+  }
+
+  // 30秒間隔で全接続を走査し、90秒間pong応答が無い接続をterminate()する。
+  // ping()自体は接続ごとにジッターを挟んで発火し、20,000接続規模でも送信が
+  // 一瞬に集中しないようにする（高度な負荷分散までは行わない簡易対応）。
+  startHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    this.heartbeatInterval = setInterval(() => {
+      const now = Date.now();
+      this.wss.clients.forEach((ws) => {
+        if (now - (ws.lastPong || 0) > HEARTBEAT_TIMEOUT_MS) {
+          ws.terminate();
+          return;
+        }
+        const jitter = Math.floor(Math.random() * HEARTBEAT_INTERVAL_MS * 0.5);
+        setTimeout(() => {
+          if (ws.readyState === ws.OPEN) {
+            ws.ping();
+          }
+        }, jitter);
+      });
+    }, HEARTBEAT_INTERVAL_MS);
   }
 
   send(ws, payload) {

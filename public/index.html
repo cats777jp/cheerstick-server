@@ -580,6 +580,7 @@
   let socket;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
+  let intentionalClose = false; // 「応援を終了する」ボタン等での意図的な切断フラグ（再接続しない）
 
   // ランダム要素を含む再接続待機時間を計算する。
   // 同時多発切断（Wi-Fi/基地局の瞬断等）が起きた際、数百〜数千台が
@@ -625,6 +626,10 @@
     });
 
     socket.addEventListener('close', () => {
+      if (intentionalClose) {
+        // 「応援を終了する」ボタン等による意図的な切断。再接続はしない。
+        return;
+      }
       if (!hasShownContent) {
         // 初回接続がまだ成立していない間は、無限リトライをスプラッシュの裏で
         // 繰り返すのではなく、状況を明示してユーザー操作でリトライさせる
@@ -957,6 +962,15 @@
   endCheeringBtn.addEventListener('click', () => {
     window.CheerStickBridge && window.CheerStickBridge.sendEnd &&
       window.CheerStickBridge.sendEnd({ stat: 'end' });
+
+    intentionalClose = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (socket) {
+      socket.close();
+    }
 
     hideAllCards();
     welcomeCard.classList.remove('hidden');
