@@ -173,6 +173,7 @@ class CheerWebSocketServer {
                 return this.send(ws, { type: 'error', message: 'id is required' });
               }
               deviceId = msg.id;
+              ws.deviceId = deviceId; // ハートビートのterminateログでMACを識別するために保持
 
               // 同一デバイスの旧接続が残っていれば、新しい接続に置き換える前に切断する
               // （幽霊接続対策、2026-09-20実装）。close()コードは4000番台（アプリ定義）とし、
@@ -328,6 +329,9 @@ class CheerWebSocketServer {
       const now = Date.now();
       this.wss.clients.forEach((ws) => {
         if (now - (ws.lastPong || 0) > HEARTBEAT_TIMEOUT_MS) {
+          console.log(
+            `[WS] heartbeat timeout time=${new Date().toISOString()} mac=${truncateForLog(ws.deviceId || 'unknown')} terminated`
+          );
           ws.terminate();
           return;
         }
