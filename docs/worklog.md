@@ -4,6 +4,87 @@
 
 ---
 
+## 2026-09-20 WebSocket幽霊接続対策の本番デプロイ・事前バックアップ取得
+
+### 背景
+
+同日実施したWebSocket幽霊接続対策（ping/pongハートビート・旧接続close・クライアント側close、
+前エントリ参照）を、KMT様指示により本番デプロイした。デプロイ前にリポジトリバックアップ
+（gitタグ）と本番DBバックアップを取得した。
+
+### 実施したこと
+
+**バックアップ取得（`docs/runbook.md`「リポジトリバックアップ手順」に沿って）**
+
+1. `main`・`feature/reference-data`のローカルがoriginと完全一致していることを確認
+   （差分0件）
+2. タグ作成・push：
+   - `main-20260920ver`（`7388540`）
+   - `feature-reference-data-20260920ver`（`44b59e1`）
+3. `git ls-remote --tags origin`で両タグの反映を確認
+4. 本番DBバックアップ：`sudo -u postgres pg_dump cheerstick_production` を実行し
+   `~/backups/cheerstick_production_20260920_065628.sql`（183,245バイト）を取得
+
+**本番デプロイ**
+
+1. 事前確認：ローカル`feature/reference-data`はクリーン・origin一致、EC2側HEADは
+   `4b8fad6`（未反映）。デプロイ直前のWS established接続は127.0.0.1由来1件のみ
+   （nginxアップストリームのkeep-aliveと判断、実機の直接接続は無し）
+2. `cd /home/ubuntu/cheerstick-server-new && git pull`→`44b59e1`まで反映
+   （`e2b210a`・`44b59e1`とも含まれることを確認）
+3. `public/index.html`を`/var/www/cheerstick-app/`へ`sudo cp`→`diff`で差分無しを確認。
+   既存ファイルへの上書きのため所有者・パーミッションは`ubuntu:ubuntu`のまま変化なし
+4. `pm2 restart cheerstick-server`（新PID、`pm2 list`でonline確認）
+5. `pm2 logs --lines 30 --nostream`を確認。表示された内容はすべて過去（2026-09-17〜19、
+   および無関係なスキャンボットのアクセス）の履歴ログであり、再起動マーカー
+   （`CheerStick server running on port 3000`）以降に新規エラーは無し
+6. 疎通確認：`https://api.cheerstick.com/api/v1/admin/categories`が200
+   （КMT様オフィスIPからのアクセスのため管理APIのIP制限を通過）、
+   `https://app.cheerstick.com/index.html`が200・`Content-Length`が新ファイルと一致
+
+### 判明した事実 / 想定と違ったこと
+
+- デプロイ直前のログ監視中、実機（IP `175.28.144.62`、Android端末 `moto g53y 5G`）による
+  `GET /api/v1/webview/geturl?id=A4:C1:38:95:77:67`アクセスと、それに続く
+  `[WS] connect ng ... reason=NO_CATEGORY`を検知した。これは当該デバイスの
+  `category_id`が未設定であることによるもので、今回のデプロイ内容（ping/pong・
+  旧接続close・クライアント側close）とは無関係な既存の仕様どおりの挙動である
+  （4.4/6.2章参照）。念のため記録し、KMT様が実施中の実機検証と時間帯が重なった
+  ものと考えられる
+- ハートビート（ping送信）は20,000接続規模でのログ肥大化を避けるため、実装上
+  個別のping送信ログを出力しない設計とした（フェーズ1実装時点の判断）。そのため
+  デプロイ後のログ監視だけでは30秒間隔のping送信を直接確認できない。ロジック自体は
+  デプロイ前にローカルpg-mem環境で自動テスト済み（前エントリ参照）であり、デプロイ後の
+  確認時点では有効なWS接続（実機等）が無かった（`ss`で0件）ため、本番での実接続に対する
+  ハートビート動作の実地確認は次回実機接続時に持ち越しとなる
+
+### 変更したファイル
+
+- 本番EC2：`/home/ubuntu/cheerstick-server-new`を`git pull`（コード変更なし、
+  リポジトリの最新化のみ）、`/var/www/cheerstick-app/index.html`を上書き、
+  `pm2 restart cheerstick-server`
+- ドキュメント：`docs/spec.md`（11.10章に本番デプロイ実施を追記）、
+  `docs/worklog.md`（本エントリ）
+
+### 次回への申し送り
+
+1. 実機接続時に、ハートビートによる長時間接続の維持・pong無応答時の切断が実際に
+   機能することを本番環境で確認する
+2. 新規接続時の旧接続close（code 4000）が、実機の再接続シナリオ（Wi-Fi瞬断等）で
+   実際に発生することを確認する
+3. 前回セッションで保留とした「実機からstaging DB検証環境への到達方法」の方針決定
+   （代替案／KMT様によるSG操作／再検討のいずれか）
+4. 前回までの継続課題（電池残量警告の低電圧時発報確認、Vanstone様へのブリッジ仕様書
+   依頼、t3.microのスケールアップ要否検討、管理API認証追加、静的ファイル2箇所デプロイ
+   恒久対応、`cheerstick-ws`の要否判断、負荷試験本体の未実施）は継続
+
+### 未解決のまま残した課題
+
+- 上記次回への申し送り1〜3は本セッションで新たに判明した未解決課題
+- 前回までの継続課題（4、継続）
+
+---
+
 ## 2026-09-20 WebSocket幽霊接続対策（ping/pongハートビート・旧接続close・クライアント側close）を実装
 
 ### 背景
