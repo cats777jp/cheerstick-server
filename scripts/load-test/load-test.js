@@ -26,9 +26,12 @@
 //   --ramp-up-ms        全接続の開始をこの時間内に分散させる（既定: connections数に応じ自動計算）
 //   --report-interval-ms 状況表示の間隔（既定: 10000）
 //   --duration-ms       指定した場合、この時間経過後に全接続を閉じて終了する（既定: 無期限）
+//   --sent-log-path     指定した場合、countメッセージ送信のたびに{mac, sentAt}を1行1件で
+//                        追記する（レイテンシ計測用、measure-latency.js参照）。既定は記録しない
 
 'use strict';
 
+const fs = require('fs');
 const WebSocket = require('ws');
 const { DEFAULT_MAC_PREFIX, macForIndex } = require('./mac-range');
 
@@ -47,6 +50,7 @@ function parseArgs(argv) {
     rampUpMs: null,
     reportIntervalMs: 10000,
     durationMs: null,
+    sentLogPath: null,
   };
   for (const raw of argv) {
     const m = /^--([^=]+)=(.*)$/.exec(raw);
@@ -63,6 +67,7 @@ function parseArgs(argv) {
       case 'ramp-up-ms': args.rampUpMs = parseInt(value, 10); break;
       case 'report-interval-ms': args.reportIntervalMs = parseInt(value, 10); break;
       case 'duration-ms': args.durationMs = parseInt(value, 10); break;
+      case 'sent-log-path': args.sentLogPath = value; break;
       default:
         throw new Error(`unknown option: --${key}`);
     }
@@ -237,7 +242,10 @@ class VirtualDevice {
     this.lastCountAt = now;
 
     const value = Math.floor(Math.random() * 101); // 0-100のintensity
-    this.sendJson({ type: 'count', id: this.mac, value, duration_ms: durationMs });
+    const sent = this.sendJson({ type: 'count', id: this.mac, value, duration_ms: durationMs });
+    if (sent && this.ctx.sentLogStream) {
+      this.ctx.sentLogStream.write(JSON.stringify({ mac: this.mac, sentAt: now }) + '\n');
+    }
 
     // 平均 countIntervalMs、±25%のジッターを付けて次回送信をスケジュール
     const jitter = this.ctx.args.countIntervalMs * 0.25 * (Math.random() * 2 - 1);
@@ -247,14 +255,16 @@ class VirtualDevice {
   sendJson(payload) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.ctx.stats.sendFailures++;
-      return;
+      return false;
     }
     try {
       this.ws.send(JSON.stringify(payload));
       this.ctx.stats.sendSuccess++;
+      return true;
     } catch (err) {
       this.ctx.stats.sendFailures++;
       this.ctx.stats.logOnce('send_error:' + err.message, `ws.send failed: ${err.message}`);
+      return false;
     }
   }
 
@@ -284,7 +294,12 @@ class VirtualDevice {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const stats = new Stats(args.connections);
-  const ctx = { args, stats, stopping: false };
+  const ctx = { args, stats, stopping: false, sentLogStream: null };
+
+  if (args.sentLogPath) {
+    ctx.sentLogStream = fs.createWriteStream(args.sentLogPath, { flags: 'w' });
+    console.log(`[load-test] logging sent count timestamps to ${args.sentLogPath}`);
+  }
 
   console.log(
     `[load-test] starting: connections=${args.connections} url=${args.url} ` +
@@ -310,7 +325,13 @@ function main() {
     clearInterval(reportTimer);
     devices.forEach((d) => d.stop());
     stats.report();
-    setTimeout(() => process.exit(0), 500);
+    setTimeout(() => {
+      if (ctx.sentLogStream) {
+        ctx.sentLogStream.end(() => process.exit(0));
+      } else {
+        process.exit(0);
+      }
+    }, 500);
   }
 
   process.on('SIGINT', () => shutdown('SIGINT'));
