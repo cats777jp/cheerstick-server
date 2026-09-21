@@ -4,6 +4,118 @@
 
 ---
 
+## 2026-09-21 負荷試験スクリプト（2,000〜20,000接続規模想定）の開発・ローカル検証
+
+### 背景
+
+商用リリース（2026年8月第1週予定だったが延期中、11.11章のカウントアップ停止事象等
+未解決課題あり）に向け、2,000〜20,000本規模の同時接続を見据えた負荷試験用スクリプトを
+新規開発した。KMT様指示により、今回はスクリプトの開発とローカルでの動作確認のみを
+スコープとし、本番・staging環境への接続・デプロイは一切行っていない。
+
+### 実施したこと
+
+**1. 負荷試験本体：`scripts/load-test/load-test.js`**
+
+- 事前にDBへ投入済みのcategory_id設定済みダミーデバイス（MAC `AA:00:00:00:XX:XX`、連番）
+  を使い、接続後は実クライアント（`public/index.html`）が辿る
+  register→team_selection→player_selectionの3画面遷移を省略し、
+  `connect`直後に`select_team`→`set_oshi`→`count`を直接送信する「簡略版」として実装した。
+  WebSocketサーバー側（`src/websocket/index.js`）はメッセージ種別ごとに独立したハンドラで、
+  connect応答のstatus文字列による送信可否の制御を行っていないため、この簡略化は
+  サーバー側の実装を変更せずに成立することをコードリーディングで確認済み
+- `--connections`で同時接続数を指定可能。接続開始を`--ramp-up-ms`（既定は接続数に応じ自動計算）
+  にわたって分散させ、接続の一斉発生を避ける設計とした
+- countメッセージは`public/index.html`と同じ間引き設計（5秒に1回程度、intensity値0-100の
+  ランダム生成）を踏襲。`--count-interval-ms`で間隔を変更可能
+- 10秒ごと（`--report-interval-ms`）に、現在確立済み接続数・送信成功/失敗の累計件数・
+  自プロセスのメモリ使用量（`process.memoryUsage()`）を標準出力へ記録
+- 接続失敗時は`public/index.html`の`nextReconnectDelay()`と同じ指数バックオフ
+  （2秒起点、1.5倍ずつ、上限10秒、±50%ジッター）で再接続する。ソケットエラー・
+  サーバーからのエラー応答はすべて捕捉し、初回のみログ出力（`logOnce`）してカウントのみ
+  蓄積する設計とし、`process.on('uncaughtException'/'unhandledRejection')`も
+  最終防衛線として追加した（20,000接続規模でも個別エラーでスクリプト全体が
+  落ちないようにするため）
+
+**2. ダミーデバイス投入・削除スクリプト**
+
+- `scripts/load-test/seed-dummy-devices.js`：`--count`件分、category_id設定済みの
+  ダミーデバイスをdevicesテーブルへ一括INSERT（500件ずつバッチ、`ON CONFLICT`で冪等）。
+  `--organization-id`で指定した既存organization（既定：V・ファーレン長崎）の
+  category_idとダミーデバイスのcategory_idが一致するか事前検証し、不一致ならCATEGORY_MISMATCH
+  になる前に投入自体を中止する
+- `scripts/load-test/cleanup-dummy-devices.js`：mac_addressのprefixで一括DELETE。
+  `cheer_logs`・`device_event_sessions`は`devices`への外部キーが`ON DELETE RESTRICT`
+  のため、`devices`本体より先に削除する必要があることをスキーマ確認のうえ実装した。
+  既定はdry run（件数表示のみ）で、`--yes`を付けたときのみ実削除する
+- 両スクリプトとも本番DB（`cheerstick_production`）への接続を検出した場合は
+  無条件で処理を中断するガードを追加した（`scripts/load-test/db.js`。
+  `src/db/productionGuard.js`とは別に、このツール専用としてより厳格に
+  ＝`ALLOW_PRODUCTION_DB=true`でも許可しない）
+
+**3. ローカル動作確認（pg-mem、`scripts/load-test/local-verify.js`）**
+
+- 実DB環境が無くても3スクリプトを一気通貫で検証できるよう、pg-mem（インメモリ疑似DB、
+  今回`devDependencies`に追加）上でCheerStickサーバー本体（`src/app.js`＋
+  `src/websocket/index.js`）を実際に起動し、seed→（別プロセスとして）load-test→
+  cheer_logs増加確認→cleanupまでを自動実行するハーネスを作成した
+- pg-memは`pgcrypto`拡張（`gen_random_uuid()`）・トリガー関数（plpgsql）・
+  `COMMENT ON`・GINインデックスを未サポートのため、マイグレーションSQLをステートメント単位に
+  分割し、上記に該当する文のみスキップして適用する方式とした（該当するのは
+  `users.updated_at`自動更新トリガーとコメント類のみで、負荷試験の検証対象である
+  devices/organizations/targets/events/cheer_logsのCRUDには影響しない）
+- 20/25/30/50接続の4パターンで実行し、いずれも
+  「全接続がopenになる」「select_team・set_oshiが成功しselected_organization_id・
+  current_target_idが設定される」「count送信のたびにcheer_logsが増加する
+  （intervalに応じた想定件数と一致）」「cleanup（dry run→--yes）でdevices・cheer_logsが
+  想定通り0件になる」ことを確認した
+- 追加で、ダミーデバイスを1件も投入しない状態（`NO_CATEGORY`エラー）でも
+  load-test.jsがクラッシュせずエラーを記録し続けることを確認した（サーバー側は
+  `CATEGORY_MISMATCH`を返し、load-test側はapp_errorsとして計上、プロセスは
+  正常終了した）
+
+### 変更したファイル
+
+- 新規：`scripts/load-test/load-test.js`、`seed-dummy-devices.js`、
+  `cleanup-dummy-devices.js`、`db.js`、`mac-range.js`、`local-verify.js`
+- 変更：`package.json`・`package-lock.json`（`pg-mem`を`devDependencies`に追加）
+- ドキュメント：`docs/worklog.md`（本エントリ）。KMT様指示により`docs/spec.md`への
+  追記は行っていない（本番運用機能ではなく開発・検証ツールのため）
+
+### 判明した事実 / 想定と違ったこと
+
+- `seed-dummy-devices.js`の初期実装は、新規INSERT/既存UPDATEの判定に
+  `RETURNING (xmax = 0) AS is_new`（PostgreSQL方言）を使っていたが、pg-memが
+  システムカラム`xmax`を未サポートで動作しないことが判明した。事前SELECTで
+  既存mac_addressを確認してから判定する方式に修正し、実PostgreSQL・pg-mem両方で
+  動く実装とした
+- `cleanup-dummy-devices.js`の初期実装は`WHERE device_id = ANY($1)`（UUID配列パラメータ）
+  を使っていたが、pg-mem環境で該当行が0件と誤判定される不具合があった
+  （dry runで`cheer_logs=0`と表示され、実削除でも0件しか消えなかった）。
+  配列パラメータの型キャストに依存する書き方を避け、`mac_address LIKE $1`の
+  サブクエリに統一する方式へ修正し、再検証で正しく件数が一致することを確認した。
+  実PostgreSQL側でこの問題が再現するかは未検証だが、より堅牢な書き方に変更済み
+
+### 次回への申し送り
+
+1. 実DB（staging等）に対して`seed-dummy-devices.js`を実行し、pg-memでは検証できない
+   実PostgreSQL固有の挙動（インデックス・GIN・トリガー等を含む本来のスキーマ）で
+   問題が無いか確認すること
+2. 2,000〜20,000接続規模の実負荷（本ローカル検証は50接続まで）は、Windows開発機ではなく
+   Linuxの負荷生成用インスタンス等から実施する想定。Node.jsのソケット数上限・
+   ファイルディスクリプタ上限（`ulimit -n`）の事前調整が必要になる見込み
+3. 本番投入時は、負荷試験用ダミーデバイスのMACアドレス帯（`AA:00:00:00:XX:XX`）が
+   実機のMACアドレス帯と衝突しないことを改めて確認すること
+
+### 未解決のまま残した課題
+
+- 上記次回への申し送り1〜3
+- 従来からの継続課題（カウントアップ停止事象の原因調査、電池残量警告確認、
+  t3.microのスケールアップ要否、管理API認証追加、静的ファイル2箇所デプロイ恒久対応、
+  `cheerstick-ws`の要否判断、実機からstaging DB検証環境への到達方法の方針決定）は継続
+
+---
+
 ## 2026-09-20 WebSocket幽霊接続対策の実機検証（2回目・新端末）、terminateログ追加、新規課題の記録
 
 ### 背景
