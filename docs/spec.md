@@ -307,6 +307,9 @@ DB: `cheerstick_production` / ユーザー: `cheerstick`
                                      ローカル確認後、同日中に本番DBへ適用済み。ただし
                                      アプリDB接続ロールへの権限付与が未完了のため対抗戦機能は
                                      まだ使用不可。11.8章参照）
+012_add_ranking_snapshots.sql       （ranking_snapshots・ranking_snapshot_entries テーブル新設。
+                                     試合終了時の順位確定機能（ユーザー別・選手別、上位20名）用。
+                                     2026-09-23作成、ファイル作成のみ。staging・本番とも未適用）
 ```
 
 ### events.status
