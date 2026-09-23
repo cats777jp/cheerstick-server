@@ -1157,6 +1157,134 @@ async function getEventIntensityTotal(eventId) {
   return parseInt(rows[0].total_intensity, 10);
 }
 
+// 順位確定機能：この状態のときのみ「順位確定」操作を許可する（scheduled/cancelledは対象外）。
+const RANKING_ELIGIBLE_STATUSES = ['live', 'paused', 'finished'];
+
+function formatRankingRow(row) {
+  return {
+    rank: parseInt(row.rank, 10),
+    entity_id: row.entity_id,
+    display_name: row.display_name,
+    cheer_value: parseInt(row.cheer_value, 10),
+  };
+}
+
+/**
+ * 順位確定機能：ユーザー別集計。既存target-scores系API（8.6章）と同じSUM(intensity)集計式。
+ * user_idがNULLのcheer_logs行はINNER JOINで自動的に除外される（STEP1追加調査の結論どおり）。
+ * 同点は同順位・以降の順位番号をスキップするRANK()方式。上位20件のみ。
+ */
+async function computeUserRanking(client, eventId) {
+  const { rows } = await client.query(
+    `SELECT
+       RANK() OVER (ORDER BY SUM(cl.intensity) DESC) AS rank,
+       u.id AS entity_id,
+       u.display_name AS display_name,
+       SUM(cl.intensity) AS cheer_value
+     FROM cheer_logs cl
+     INNER JOIN users u ON u.id = cl.user_id
+     WHERE cl.event_id = $1
+     GROUP BY u.id, u.display_name
+     ORDER BY cheer_value DESC
+     LIMIT 20`,
+    [eventId]
+  );
+  return rows.map(formatRankingRow);
+}
+
+/** 順位確定機能：選手別集計。computeUserRankingと同じ考え方（targetsとJOIN）。 */
+async function computeTargetRanking(client, eventId) {
+  const { rows } = await client.query(
+    `SELECT
+       RANK() OVER (ORDER BY SUM(cl.intensity) DESC) AS rank,
+       t.id AS entity_id,
+       t.name AS display_name,
+       SUM(cl.intensity) AS cheer_value
+     FROM cheer_logs cl
+     INNER JOIN targets t ON t.id = cl.target_id
+     WHERE cl.event_id = $1
+     GROUP BY t.id, t.name
+     ORDER BY cheer_value DESC
+     LIMIT 20`,
+    [eventId]
+  );
+  return rows.map(formatRankingRow);
+}
+
+/**
+ * 順位確定機能：管理画面の「順位確定」ボタン操作。ユーザー別・選手別それぞれ上位20件を
+ * 算出し、ranking_snapshots（履歴ヘッダ）1行＋ranking_snapshot_entries（明細、最大40行）を
+ * 1トランザクションでINSERTする（一部だけ保存される事故を防ぐため）。
+ * 対象イベントが無ければnullを返す（呼び出し元で404にマッピングする）。
+ * events.statusがRANKING_ELIGIBLE_STATUSES以外の場合はINVALID_EVENT_STATUSを投げる。
+ */
+async function createRankingSnapshot(eventId, triggeredBy) {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: eventRows } = await client.query(
+      `SELECT id, status FROM events WHERE id = $1`,
+      [eventId]
+    );
+    const event = eventRows[0];
+    if (!event) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    if (!RANKING_ELIGIBLE_STATUSES.includes(event.status)) {
+      const err = new Error(`cannot create ranking snapshot for status: ${event.status}`);
+      err.code = 'INVALID_EVENT_STATUS';
+      throw err;
+    }
+
+    const userEntries = await computeUserRanking(client, eventId);
+    const targetEntries = await computeTargetRanking(client, eventId);
+
+    const { rows: snapshotRows } = await client.query(
+      `INSERT INTO ranking_snapshots (event_id, triggered_by)
+       VALUES ($1, $2)
+       RETURNING id, triggered_at`,
+      [eventId, triggeredBy || null]
+    );
+    const snapshot = snapshotRows[0];
+
+    const allRows = [
+      ...userEntries.map((e) => ({ ...e, ranking_type: 'user' })),
+      ...targetEntries.map((e) => ({ ...e, ranking_type: 'target' })),
+    ];
+
+    if (allRows.length > 0) {
+      const values = [];
+      const placeholders = allRows.map((e, idx) => {
+        const base = idx * 6;
+        values.push(snapshot.id, e.ranking_type, e.rank, e.entity_id, e.display_name, e.cheer_value);
+        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+      });
+      await client.query(
+        `INSERT INTO ranking_snapshot_entries
+           (snapshot_id, ranking_type, rank, entity_id, display_name, cheer_value)
+         VALUES ${placeholders.join(', ')}`,
+        values
+      );
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      snapshotId: snapshot.id,
+      triggeredAt: snapshot.triggered_at,
+      userEntries,
+      targetEntries,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -1202,4 +1330,5 @@ module.exports = {
   deleteTargetAdmin,
   getEventTargetScores,
   getAllTimeTargetScores,
+  createRankingSnapshot,
 };

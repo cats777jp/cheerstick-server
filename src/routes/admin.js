@@ -13,6 +13,7 @@ const { Router } = express;
 const adminEventController = require('../controllers/adminEventController');
 const adminDeviceController = require('../controllers/adminDeviceController');
 const adminTargetController = require('../controllers/adminTargetController');
+const adminRankingController = require('../controllers/adminRankingController');
 const uploadController = require('../controllers/uploadController');
 
 const router = Router();
@@ -42,6 +43,9 @@ router.post('/events', adminEventController.create);
 router.patch('/events/:id', adminEventController.update);
 router.patch('/events/:id/status', adminEventController.updateStatus);
 router.delete('/events/:id', adminEventController.hide);
+
+// 順位確定機能（試合終了時のユーザー別・選手別順位確定、2026-09-23新設）
+router.post('/events/:eventId/ranking-snapshot', adminRankingController.createSnapshot);
 
 router.get('/organizations', adminEventController.listOrganizations);
 router.post('/organizations', adminEventController.createOrganization);
