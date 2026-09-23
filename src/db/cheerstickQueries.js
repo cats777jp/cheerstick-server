@@ -64,19 +64,18 @@ async function ensureDevice(macAddress) {
 /**
  * email でユーザーを検索、無ければ作成。あれば display_name を更新して返す。
  * （同じメールで再登録された場合、最新のニックネームに揃える）
+ *
+ * INSERT ... ON CONFLICT によるUPSERT（1回のSQLでアトミックに処理）。
+ * 以前はSELECT→INSERT/UPDATEの2段階処理だったため、同一メールアドレスでの
+ * 同時registerが競合状態（片方がユニーク制約違反でエラーになりうる）を起こす
+ * 問題があった。idx_users_email（migrations/001、email列単体のユニークインデックス）
+ * に依拠してON CONFLICT (email)を使うため、新規マイグレーションは不要。
  */
 async function findOrCreateUserByEmail(email, displayName) {
-  const existing = await db.query('SELECT id FROM users WHERE email = $1', [email]);
-
-  if (existing.rows[0]) {
-    const userId = existing.rows[0].id;
-    await db.query('UPDATE users SET display_name = $1 WHERE id = $2', [displayName, userId]);
-    return userId;
-  }
-
   const { rows } = await db.query(
     `INSERT INTO users (email, display_name, auth_provider)
      VALUES ($1, $2, 'email')
+     ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name
      RETURNING id`,
     [email, displayName]
   );
