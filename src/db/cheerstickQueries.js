@@ -1285,6 +1285,42 @@ async function createRankingSnapshot(eventId, triggeredBy) {
   }
 }
 
+/**
+ * 順位確定機能（会場スクリーン向け閲覧用、Phase 3）：指定イベント・種別について、
+ * 最新1件の確定結果（ranking_snapshots.triggered_at降順）とその明細を返す。
+ * まだ一度も確定操作が行われていない場合はnullを返す（呼び出し元でsnapshotId: null・
+ * entries: [] にマッピングする）。
+ */
+async function getLatestRankingSnapshot(eventId, rankingType) {
+  const { rows: snapshotRows } = await db.query(
+    `SELECT id, triggered_at FROM ranking_snapshots
+     WHERE event_id = $1
+     ORDER BY triggered_at DESC
+     LIMIT 1`,
+    [eventId]
+  );
+  const snapshot = snapshotRows[0];
+  if (!snapshot) return null;
+
+  const { rows: entryRows } = await db.query(
+    `SELECT rank, display_name, cheer_value
+     FROM ranking_snapshot_entries
+     WHERE snapshot_id = $1 AND ranking_type = $2
+     ORDER BY rank ASC`,
+    [snapshot.id, rankingType]
+  );
+
+  return {
+    snapshotId: snapshot.id,
+    triggeredAt: snapshot.triggered_at,
+    entries: entryRows.map((r) => ({
+      rank: r.rank,
+      displayName: r.display_name,
+      cheerValue: parseInt(r.cheer_value, 10),
+    })),
+  };
+}
+
 module.exports = {
   findDeviceWithProfile,
   ensureDevice,
@@ -1331,4 +1367,5 @@ module.exports = {
   getEventTargetScores,
   getAllTimeTargetScores,
   createRankingSnapshot,
+  getLatestRankingSnapshot,
 };
