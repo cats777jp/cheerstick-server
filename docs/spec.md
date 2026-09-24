@@ -812,6 +812,26 @@ cheer_logs・ranking_snapshotsはすべて削除・非表示化して原状回�
 > 実施する想定）。本番デプロイ手順の詳細（`git reset --hard`を用いた理由を含む）は
 > `docs/worklog.md` 2026-09-24エントリ参照。
 
+> **2026-09-24再追記：上記「POSTは未実行」も解消。** 同日11:56 JST、KMT様が
+> `admin.cheerstick.com/ranking-control.html`から実際に「順位確定」を実行した
+> （イベント「実機検証 20260917」、`triggered_by`＝KMT様オフィスIP）。結果は
+> ユーザー別1位YOKA(13338)・2位あきら(3163)・3位あきら2(59)、選手別1位
+> ヴィヴィくん(16560)。本番での実データ確定操作が正常に動作することを確認した
+> （詳細は`docs/worklog.md` 2026-09-24「YOKA」調査エントリ・引継ぎ記録エントリ参照）。
+>
+> **設計判断の記録（Phase 1〜3実装時点の根拠、2026-09-24にコード・本番DBで裏取り）：**
+> - 新規テーブル`ranking_snapshots`・`ranking_snapshot_entries`を新設し、既存の
+>   `awards`・`cheer_summaries`（6.1章、いずれもtargetsからON DELETE CASCADEで
+>   参照される未使用テーブル）は不採用とした。`awards`はアプリケーションコードから
+>   一切参照されていないため機能拡張の土台として不適格、`cheer_summaries`は
+>   `event_id`・`target_id`・`user_id`列がいずれも`NOT NULL`（本番DBで確認済み）で
+>   あり、TOFU方式ゆえ`user_id`/`target_id`がNULLの`cheer_logs`行が存在しうる
+>   現行データ構造と構造的に不整合であるため
+> - 配信方式をHTTPポーリングに決定した理由：既存WebSocketサーバーは応援スティック
+>   専用のセッション管理のみで「閲覧専用クライアント」という概念が存在しないため。
+>   `broadcast()`・`sendToDevice()`（`src/websocket/index.js`）は削除せず、将来の
+>   ユーザー向け配信機能（10章・11章参照）着手時に再利用できるよう温存した
+
 ## 9. フロントエンド（public/index.html）
 
 ```
