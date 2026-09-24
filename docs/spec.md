@@ -800,6 +800,18 @@ cheer_logs・ranking_snapshotsはすべて削除・非表示化して原状回�
 （2026-09-23）にどのような検証が行われたかは、`/handover`未実行のため記録が残っておらず
 不明。** 本番デプロイは未実施。
 
+> **2026-09-24追記：上記「本番デプロイは未実施」を解消し、本番デプロイ完了。**
+> migration 012を本番DBへ適用（`ranking_snapshots`・
+> `ranking_snapshot_entries`実在・`schema_migrations`記録を確認）、`pm2 restart`で
+> Phase 1〜3のバックエンドコードを反映した。読み取り専用の疎通確認として、既存
+> `GET /admin/events`が引き続き200で応答すること（回帰無し）、新設
+> `GET /events/:id/ranking-snapshots/latest`を実在の本番イベントに対して呼び、
+> `https://api.cheerstick.com`経由でも`snapshotId: null`の未確定応答が200で
+> 返ることを確認した。**POST（順位確定）は実際の本番イベントに対しては未実行**
+> （実データへの書き込みを伴うため、9.11章のPhase 4本番デプロイ後、KMT様確認のうえ
+> 実施する想定）。本番デプロイ手順の詳細（`git reset --hard`を用いた理由を含む）は
+> `docs/worklog.md` 2026-09-24エントリ参照。
+
 ## 9. フロントエンド（public/index.html）
 
 ```
@@ -1291,6 +1303,23 @@ public/ranking-target.html         … 会場スクリーン用。選手・推�
 - `ranking-target.html`の確定結果表示（実データでのレンダリング）は`ranking-user.html`側の
   確認で共通コードパスであることの確認に留め、個別のブラウザ確認は行っていない
 - 実際の会場での大画面表示・演出面の調整は未実施（`battle.html`と同様、最小実装のまま）
+
+> **2026-09-24追記：上記2点を解消し、本番デプロイも完了。**
+> - `ranking-target.html`の確定結果表示を、短い名前（1文字）・長い名前（40文字超、
+>   括弧・中黒混在）・HTMLタグを含む名前（`<script>alert(1)</script>`、XSS対策確認用）・
+>   記号混じりの英語名（アポストロフィ・アンパサンド・引用符）・同率1位の5パターンで
+>   実データ確認した。いずれもレイアウト崩れ無く表示され、`<script>`タグは
+>   textContent/escapeHtml経由でエスケープされ実行されない（アラート等が発火しない）ことを
+>   確認した。確認用に作成したtargets・cheer_logs・ranking_snapshotsはすべて削除して
+>   原状回復した
+> - 静的ファイル4件（`ranking-control.html`・`ranking-user.html`・`ranking-target.html`・
+>   更新済み`admin/index.html`）を`/var/www/cheerstick-admin/`・`/var/www/cheerstick-app/`へ
+>   反映。`diff`で反映確認、新規3ファイルは`chown ubuntu:ubuntu`・`chmod 664`を実施し
+>   既存ファイルと所有者・パーミッションを揃えた
+> - 本番ドメイン経由の疎通確認：`admin.cheerstick.com/ranking-control.html`は
+>   nginx IP制限により403（想定通り）、`app.cheerstick.com/ranking-user.html`・
+>   `ranking-target.html`はいずれも200で配信されることを確認
+> - **実際の会場での大画面表示・演出面の調整は引き続き未実施のまま**（`battle.html`と同様）
 
 ## 10. 未実施の検証
 

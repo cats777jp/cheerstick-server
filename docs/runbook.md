@@ -159,6 +159,13 @@ pm2 restart cheerstick-server
 ページに変更・新規追加があった場合は同様に`sudo cp public/<ファイル名>
 /var/www/cheerstick-app/`を追加すること。
 
+**追記（2026-09-24、順位確定機能Phase 4本番反映）：** `ranking-user.html`・
+`ranking-target.html`（`public/`直下）を同様に`/var/www/cheerstick-app/`へ追加した。
+あわせて`public/admin/ranking-control.html`を`/var/www/cheerstick-admin/`へ追加した
+（`docs/spec.md` 9.11章参照）。理由：この3ファイルは新規ファイルのため、上記
+「★必須：新規ファイルをコピーした場合は所有者も確認する」の`chown ubuntu:ubuntu`・
+`chmod 664`をあわせて実施した。
+
 **恒久対応（未実施）**：nginx の root を `cheerstick-server-new/public/` に統一するか、
 デプロイスクリプトでコピーを自動化する。
 

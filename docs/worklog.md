@@ -4,6 +4,115 @@
 
 ---
 
+## 2026-09-24 順位確定機能Phase 4実装（画面）・staging確認・本番デプロイ
+
+### 背景
+
+前回（2026-09-23）セッションが`/handover`未実行のまま終了しており、順位確定機能の
+バックエンド（Phase 1〜3）は完成していたがPhase 4（画面実装）は未着手だった
+（`C:\Users\Iwamura\Downloads\cheerstick-step3-phase4-restart-20260923.md`の再開指示書に
+従い着手）。まず現状確認（0章）を実施し、作りかけのファイルが残っていないこと、
+`docs/worklog.md`にPhase 1〜3分の記録が欠落していることを確認・報告し、KMT様の指示で
+worklog追記（別コミット`8aea3f3`）を先に実施した。
+
+### 実施したこと
+
+1. **Phase 4実装**：`public/admin/ranking-control.html`（イベント選択・確定ボタン・
+   結果表示・会場スクリーンURL欄）、`public/ranking-user.html`・`public/ranking-target.html`
+   （`battle.html`のデザイン言語・3秒ポーリング方式を踏襲）を新設。
+   `public/admin/index.html`のランチャーに導線を追加。参照元
+   （`events.html`のactionButtonsFor/battle-url-row、`battle.html`の構成、
+   `target-report.html`のURLパラメータ命名`event_id`）を事前に調査したうえで実装した
+2. **staging確認（1回目）**：staging DBに接続した一時ローカルサーバー
+   （`src/app.js`相当に`public/`の静的配信を追加しただけの構成、リポジトリ非コミット、
+   ポート4100）を起動し、claude-in-chromeでブラウザ確認。ボタンの状態別表示切り替え
+   （scheduled/live/paused/finished、一時作成したscheduledテストイベントで確認）、
+   順位確定の正常系（3名分のテストユーザー・cheer_logsで同率1位→3位表示を確認）・
+   異常系（400 INVALID_EVENT_STATUS）、`ranking-user.html`の待機表示・確定結果表示を確認
+3. **コミット・push**：worklog追記（`8aea3f3`）、spec.md 8.9・9.11章新設
+   （`8703f04`）、Phase 4コード一式（`4113622`）の3コミットを作成。push前に
+   `git diff origin/feature/reference-data..HEAD`で3コミット合計942行がすべて追記
+   （削除0行）であることを二重チェックしたうえでpush
+4. **staging確認（2回目、ranking-target.html個別確認）**：1回目は`ranking-user.html`の
+   確認に留めていた`ranking-target.html`の確定結果表示を、実データで個別確認。
+   選手名のバリエーション（1文字「山」、40文字超の長い名前、`<script>alert(1)</script>`
+   〔XSS対策確認用〕、記号混じりの英語名、同率1位）を投入し、レイアウト崩れが無いこと、
+   `<script>`タグがtextContent/escapeHtml経由でエスケープされ実行されない
+   （アラート等が発火しない）ことを確認。確認後、テストデータ（targets 5件・
+   cheer_logs 16件・ranking_snapshots 2件）はすべて削除
+5. **本番デプロイ**：KMT様の指示・確認のうえ実施。詳細は下記「本番デプロイの詳細」参照
+6. 一時ローカルサーバーはテスト完了後に都度停止、スクラッチパッドのファイルも
+   リポジトリには一切コミットしていない
+
+### 本番デプロイの詳細
+
+**事前確認**：本番HEAD（`474d552`、`register`のUPSERT修正のみcherry-pick済み）と
+`origin/feature/reference-data`（当時`4113622`）が「1コミットと13コミット、それぞれ
+分岐」の状態であることを確認。`474d552`とローカルの`b4d3309`のdiffを比較し、
+コミットメッセージ・タイムスタンプ・差分ともに完全一致（真のcherry-pick）であることを
+確認したうえで、`git pull`（マージコミット生成）ではなく`git reset --hard
+origin/feature/reference-data`を採用した（`474d552`の内容は`origin`の`b4d3309`に
+既に含まれているため、正味の変更は無く、履歴を`origin`と一致させる方がクリーン）。
+実施前にWebSocket確立接続数が1件であることを確認し、低負荷なタイミングと判断した。
+
+1. `git fetch origin` → `git reset --hard origin/feature/reference-data`
+   （`474d552`→`4113622`、`git log -1`で確認）
+2. `node src/db/migrate.js`でmigration 012を適用（001〜011はSKIP、012のみAPPLY）。
+   `ranking_snapshots`・`ranking_snapshot_entries`の実在と`schema_migrations`への
+   記録を`psql`で確認
+3. `pm2 restart cheerstick-server`（再起動回数6→7）。直後のログにエラー無し
+   （末尾は起動メッセージのみ）を確認
+4. 読み取り専用の疎通確認：既存`GET /admin/events`が引き続き200で応答すること
+   （回帰無し）、新設`GET /events/:id/ranking-snapshots/latest`を実在の本番イベント
+   （`874293e5-...`）に対して`localhost:3000`・`https://api.cheerstick.com`の両方から
+   呼び、`{"snapshotId":null,...}`の未確定応答が200で返ることを確認。
+   **POST（順位確定）は実際の本番イベントに対しては未実行**（書き込みを伴うため）
+5. 静的ファイル4件（`admin/index.html`・`admin/ranking-control.html`・
+   `ranking-user.html`・`ranking-target.html`）を`sudo cp`で配信先2箇所へ反映し、
+   `diff`で4件とも差分無しであることを確認。新規3ファイルは
+   `chown ubuntu:ubuntu`・`chmod 664`を実施し既存ファイルと所有者・パーミッションを揃えた
+6. 本番ドメイン経由の疎通確認：`admin.cheerstick.com/ranking-control.html`は
+   nginx IP制限により403（想定通り、EC2上のcurlは許可IPに含まれないため）、
+   `app.cheerstick.com/ranking-user.html`・`ranking-target.html`はいずれも200を確認
+7. 最終確認：`pm2 list`でonline・uptime安定、エラーログに新規エラー無しを確認
+
+### 判明した事実 / 想定と違ったこと
+
+- 本番の`git status`が「1と13コミット、それぞれ分岐」と表示され、単純な`git pull`では
+  済まない状態だった（cherry-pickの影響）。事前のdiff比較により安全な対処法
+  （`git reset --hard`）を判断できた
+- `ssh`経由の一部コマンド（`grep`を含むコマンド1件）がClaude Codeの自動モード
+  分類器にブロックされる事象が発生した（理由表示は「Irreversible Local Destruction」
+  だったが、対象は読み取り専用のgrepだった）。読み取り専用の代替確認手段
+  （diff比較を事前に実施済みだったため）で代替し、作業は継続できた
+
+### 変更したファイル
+
+- コード：`public/admin/ranking-control.html`・`public/ranking-user.html`・
+  `public/ranking-target.html`（新規）、`public/admin/index.html`（ランチャー導線追加）
+- ドキュメント：`docs/spec.md`（8.9・9.11章新設、および本番デプロイ完了の追記）、
+  `docs/runbook.md`（デプロイ対象ファイル一覧に3件追記）、`docs/worklog.md`（本エントリ）
+- 本番EC2：`git reset --hard`で`4113622`へ、migration 012適用、
+  `pm2 restart`（再起動回数6→7）、静的ファイル4件反映（新規3件はchown/chmod実施）
+- 本番DB：`ranking_snapshots`・`ranking_snapshot_entries`テーブル新設（migration 012、
+  データの書き込みは無し）
+- staging DB：確認用に作成したイベント・ユーザー・target・cheer_logs・
+  ranking_snapshotsはすべて削除・非表示化して原状回復済み
+
+### 次回への申し送り
+
+- 実際の本番イベントに対する「順位確定」POST（書き込みを伴う）は未実行のまま。
+  実施する場合はKMT様確認のうえ、実データへの影響を踏まえて実施すること
+- `ranking-user.html`・`ranking-target.html`の実際の会場での大画面表示・演出面の
+  調整は未実施（`battle.html`と同様、最小実装のまま）
+- 静的ファイル2箇所デプロイの恒久対応（nginx root統一等）は引き続き未実施
+
+### 未解決のまま残った課題
+
+- 前回までの残課題に継続。加えて上記「次回への申し送り」3点
+
+---
+
 ## 2026-09-23 順位確定機能Phase 1〜3実装（ranking_snapshots）・registerのUPSERT修正
 
 ### 背景（本エントリの記録タイミングについて）
