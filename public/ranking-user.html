@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>順位発表（ユーザー別） | 推しフル</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --text: #f4f6f8;
+    --text-muted: #9aa4af;
+    --accent: #4d8dff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    overflow: hidden;
+  }
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 16px;
+  }
+  #title {
+    text-align: center;
+    font-size: clamp(20px, 3vw, 32px);
+    font-weight: bold;
+    margin-bottom: 4px;
+  }
+  #connErrorBanner {
+    display: none;
+    text-align: center;
+    background: #b3261e;
+    color: #fff;
+    padding: 8px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 14px;
+  }
+  #connErrorBanner.visible { display: block; }
+
+  #rankingList {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    padding: 8px 0;
+  }
+  .rank-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: #161b22;
+    border: 1px solid #2a323d;
+    border-radius: 12px;
+    padding: 10px 20px;
+  }
+  .rank-row.top1 { border-color: #facc15; background: linear-gradient(90deg, rgba(250, 204, 21, 0.16), #161b22); }
+  .rank-row.top2 { border-color: #cbd5e1; }
+  .rank-row.top3 { border-color: #f97316; }
+  .rank-number {
+    font-size: clamp(16px, 2.2vw, 24px);
+    font-weight: bold;
+    color: var(--text-muted);
+    width: 2.4em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .rank-row.top1 .rank-number { color: #facc15; }
+  .rank-row.top2 .rank-number { color: #cbd5e1; }
+  .rank-row.top3 .rank-number { color: #f97316; }
+  .rank-name {
+    flex: 1;
+    font-size: clamp(15px, 2vw, 22px);
+    word-break: break-word;
+  }
+  .rank-value {
+    font-size: clamp(16px, 2.4vw, 26px);
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+  }
+  .rank-value-unit {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: 4px;
+  }
+
+  #updatedAt {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 10px;
+  }
+
+  #loadingState, #errorState, #waitingState {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="connErrorBanner"></div>
+
+  <div id="loadingState">読み込み中...</div>
+
+  <div id="errorState" hidden></div>
+
+  <div id="waitingState" hidden>まだ順位が確定していません</div>
+
+  <div id="rankingContent" hidden style="display: contents;">
+    <div id="title">順位発表（ユーザー別）</div>
+    <div id="rankingList"></div>
+    <div id="updatedAt"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? '/api/v1'
+    : 'https://api.cheerstick.com/api/v1';
+
+  const POLL_INTERVAL_MS = 3000;
+
+  const eventId = new URLSearchParams(location.search).get('event_id');
+
+  const loadingState = document.getElementById('loadingState');
+  const errorState = document.getElementById('errorState');
+  const waitingState = document.getElementById('waitingState');
+  const rankingContent = document.getElementById('rankingContent');
+  const rankingList = document.getElementById('rankingList');
+  const connErrorBanner = document.getElementById('connErrorBanner');
+
+  function showFatalError(message) {
+    loadingState.hidden = true;
+    rankingContent.hidden = true;
+    waitingState.hidden = true;
+    errorState.hidden = false;
+    errorState.textContent = message;
+  }
+
+  function showConnError(message) {
+    connErrorBanner.textContent = message;
+    connErrorBanner.classList.add('visible');
+  }
+
+  function clearConnError() {
+    connErrorBanner.classList.remove('visible');
+  }
+
+  if (!eventId) {
+    showFatalError('URLに event_id パラメータがありません。\n管理画面の「順位確定」からURLを確認してください。');
+    return;
+  }
+
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString('ja-JP');
+  }
+
+  function rankClass(rank) {
+    if (rank === 1) return 'top1';
+    if (rank === 2) return 'top2';
+    if (rank === 3) return 'top3';
+    return '';
+  }
+
+  function render(data) {
+    if (data.snapshotId === null) {
+      loadingState.hidden = true;
+      errorState.hidden = true;
+      rankingContent.hidden = true;
+      waitingState.hidden = false;
+      return;
+    }
+
+    rankingList.innerHTML = '';
+    data.entries.forEach((entry) => {
+      const row = document.createElement('div');
+      row.className = `rank-row ${rankClass(entry.rank)}`.trim();
+      row.innerHTML = `
+        <div class="rank-number">${entry.rank}</div>
+        <div class="rank-name"></div>
+        <div class="rank-value">${formatNumber(entry.cheerValue)}<span class="rank-value-unit">応援強度</span></div>
+      `;
+      row.querySelector('.rank-name').textContent = entry.displayName;
+      rankingList.appendChild(row);
+    });
+
+    document.getElementById('updatedAt').textContent =
+      '確定日時: ' + new Date(data.triggeredAt).toLocaleString('ja-JP');
+
+    loadingState.hidden = true;
+    errorState.hidden = true;
+    waitingState.hidden = true;
+    rankingContent.hidden = false;
+  }
+
+  let stopped = false;
+
+  async function poll() {
+    if (stopped) return;
+    try {
+      const res = await fetch(`${API_BASE}/events/${eventId}/ranking-snapshots/latest?rankingType=user`);
+      if (res.status === 404) {
+        const body = await res.json().catch(() => null);
+        showFatalError(
+          (body && body.error === 'EVENT_NOT_FOUND')
+            ? '指定された試合が見つかりません。URLを確認してください。'
+            : '順位データの取得に失敗しました。'
+        );
+        stopped = true;
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      clearConnError();
+      render(data);
+    } catch (e) {
+      // 一時的な通信断は致命エラーにせず、直前の表示を保持したまま次回ポーリングへ続ける
+      if (!rankingContent.hidden || !waitingState.hidden) {
+        showConnError('サーバーに接続できません。再試行しています…');
+      } else {
+        showFatalError('サーバーに接続できませんでした: ' + e.message);
+        stopped = true;
+      }
+    } finally {
+      if (!stopped) setTimeout(poll, POLL_INTERVAL_MS);
+    }
+  }
+
+  poll();
+})();
+</script>
+</body>
+</html>

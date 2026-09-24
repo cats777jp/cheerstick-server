@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>順位確定 | 推しフル管理画面</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  /* 順位確定機能（Phase 4、2026-09-24追加）ページ固有分。
+     .screen-url-row はevents.htmlの.battle-url-row（対抗戦スクリーンURL欄）と同じ構成。 */
+  h3 { font-size: 13px; color: var(--text-muted); margin: 20px 0 8px; }
+  .triggered-at-note { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+  .screen-url-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+  }
+  .screen-url-row input {
+    width: auto;
+    flex: 1 1 220px;
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>順位確定</h1>
+  <p><a href="index.html">&larr; 管理画面トップ</a></p>
+  <div id="errorBar" class="error-bar"></div>
+
+  <div class="card">
+    <h2>対象試合を選択</h2>
+    <label for="eventSelect">試合</label>
+    <select id="eventSelect"></select>
+
+    <div style="margin-top: 16px;">
+      <button id="confirmBtn" class="primary hidden">順位確定</button>
+    </div>
+  </div>
+
+  <div id="screenUrlCard" class="card hidden">
+    <h2>会場スクリーンURL</h2>
+    <label>ユーザー別</label>
+    <div class="screen-url-row">
+      <input id="userScreenUrlInput" type="text" readonly>
+      <button type="button" id="userScreenCopyBtn">コピー</button>
+    </div>
+    <label>選手・推し対象別</label>
+    <div class="screen-url-row">
+      <input id="targetScreenUrlInput" type="text" readonly>
+      <button type="button" id="targetScreenCopyBtn">コピー</button>
+    </div>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <h2>確定結果</h2>
+    <div id="triggeredAtNote" class="triggered-at-note"></div>
+
+    <h3>ユーザー別（上位20件）</h3>
+    <table>
+      <thead>
+        <tr><th>順位</th><th>ニックネーム</th><th>応援量</th></tr>
+      </thead>
+      <tbody id="userRankingBody"></tbody>
+    </table>
+
+    <h3>選手・推し対象別（上位20件）</h3>
+    <table>
+      <thead>
+        <tr><th>順位</th><th>選手・推し対象</th><th>応援量</th></tr>
+      </thead>
+      <tbody id="targetRankingBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  const eventSelect = document.getElementById('eventSelect');
+  const confirmBtn = document.getElementById('confirmBtn');
+  const screenUrlCard = document.getElementById('screenUrlCard');
+  const userScreenUrlInput = document.getElementById('userScreenUrlInput');
+  const targetScreenUrlInput = document.getElementById('targetScreenUrlInput');
+  const resultCard = document.getElementById('resultCard');
+  const triggeredAtNote = document.getElementById('triggeredAtNote');
+  const userRankingBody = document.getElementById('userRankingBody');
+  const targetRankingBody = document.getElementById('targetRankingBody');
+
+  const STATUS_LABELS = {
+    live: 'live',
+    paused: 'paused',
+    scheduled: 'scheduled',
+    finished: 'finished',
+    cancelled: 'cancelled',
+  };
+
+  // events.htmlのactionButtonsFor()と同じ規約：live/paused/finishedのときのみ
+  // 「順位確定」ボタンを描画する（scheduled/cancelledではグレーアウトやエラー表示を
+  // せず、ボタン自体を描画しない）。
+  const RANKING_ELIGIBLE_STATUSES = ['live', 'paused', 'finished'];
+
+  let lastEventsList = [];
+
+  function selectedEvent() {
+    return lastEventsList.find((ev) => ev.id === eventSelect.value) || null;
+  }
+
+  function updateButtonVisibility() {
+    const event = selectedEvent();
+    if (event && RANKING_ELIGIBLE_STATUSES.includes(event.status)) {
+      confirmBtn.classList.remove('hidden');
+    } else {
+      confirmBtn.classList.add('hidden');
+    }
+  }
+
+  // 会場スクリーンURL（ranking-user.html/ranking-target.html）は、試合のstatusに
+  // かかわらず、試合が選択されていれば常に表示する（順位確定前でも、確定操作前に
+  // スクリーン側を先に開いておく運用を想定。スクリーン側は未確定時「まだ順位が
+  // 確定していません」を表示するため支障は無い）。
+  function updateScreenUrls() {
+    const event = selectedEvent();
+    if (!event) {
+      screenUrlCard.classList.add('hidden');
+      return;
+    }
+    userScreenUrlInput.value = `${APP_BASE}/ranking-user.html?event_id=${event.id}`;
+    targetScreenUrlInput.value = `${APP_BASE}/ranking-target.html?event_id=${event.id}`;
+    screenUrlCard.classList.remove('hidden');
+  }
+
+  async function copyToClipboard(text, btn) {
+    try {
+      await navigator.clipboard.writeText(text);
+      const original = btn.textContent;
+      btn.textContent = 'コピーしました';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (err) {
+      // クリップボードAPIが使えない環境（非HTTPS等）向けのフォールバック
+      window.prompt('以下のURLを手動でコピーしてください', text);
+    }
+  }
+
+  document.getElementById('userScreenCopyBtn').addEventListener('click', (e) => {
+    copyToClipboard(userScreenUrlInput.value, e.target);
+  });
+  document.getElementById('targetScreenCopyBtn').addEventListener('click', (e) => {
+    copyToClipboard(targetScreenUrlInput.value, e.target);
+  });
+
+  function populateEventSelect(events) {
+    const prevValue = eventSelect.value;
+    eventSelect.innerHTML = '';
+
+    if (events.length === 0) {
+      eventSelect.innerHTML = '<option value="">(登録されている試合はありません)</option>';
+      updateButtonVisibility();
+      updateScreenUrls();
+      return;
+    }
+
+    events.forEach((ev) => {
+      const opt = document.createElement('option');
+      opt.value = ev.id;
+      opt.textContent = `${ev.title}（${ev.organization_name || 'チーム未設定'}・${STATUS_LABELS[ev.status] || ev.status}）`;
+      eventSelect.appendChild(opt);
+    });
+    if (events.some((ev) => ev.id === prevValue)) {
+      eventSelect.value = prevValue;
+    }
+    updateButtonVisibility();
+    updateScreenUrls();
+  }
+
+  eventSelect.addEventListener('change', () => {
+    updateButtonVisibility();
+    updateScreenUrls();
+  });
+
+  function renderRankingTable(tbodyEl, entries) {
+    tbodyEl.innerHTML = '';
+    if (entries.length === 0) {
+      tbodyEl.innerHTML = '<tr class="empty-row"><td colspan="3">応援ログがありません</td></tr>';
+      return;
+    }
+    entries.forEach((entry) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(entry.rank)}</td>
+        <td>${escapeHtml(entry.display_name)}</td>
+        <td>${escapeHtml(entry.cheer_value.toLocaleString('ja-JP'))}</td>
+      `;
+      tbodyEl.appendChild(tr);
+    });
+  }
+
+  confirmBtn.addEventListener('click', async () => {
+    const event = selectedEvent();
+    if (!event) return;
+
+    confirmBtn.disabled = true;
+    try {
+      const result = await apiFetch(`/events/${event.id}/ranking-snapshot`, { method: 'POST' });
+      clearError();
+      triggeredAtNote.textContent = `確定日時: ${new Date(result.triggeredAt).toLocaleString('ja-JP')}`;
+      renderRankingTable(userRankingBody, result.userEntries);
+      renderRankingTable(targetRankingBody, result.targetEntries);
+      resultCard.classList.remove('hidden');
+    } catch (e) {
+      if (e.status === 400 && e.body && e.body.error === 'INVALID_EVENT_STATUS') {
+        showError('この試合の現在の状態では順位確定できません（live/paused/finishedのときのみ実行できます）');
+      } else if (e.status === 404 && e.body && e.body.error === 'EVENT_NOT_FOUND') {
+        showError('試合が見つかりません（削除された可能性があります）');
+      } else {
+        showError('順位確定に失敗しました: ' + e.message);
+      }
+    } finally {
+      confirmBtn.disabled = false;
+    }
+  });
+
+  async function loadEvents() {
+    try {
+      const events = await apiFetch('/events');
+      lastEventsList = events;
+      populateEventSelect(events);
+      clearError();
+    } catch (e) {
+      showError('試合一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  loadEvents();
+
+  // events.html同様、bfcache復元時にも試合一覧を最新化する（pageshow対応）。
+  window.addEventListener('pageshow', () => {
+    loadEvents();
+  });
+})();
+</script>
+</body>
+</html>
