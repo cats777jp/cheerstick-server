@@ -312,6 +312,14 @@ DB: `cheerstick_production` / ユーザー: `cheerstick`
                                      2026-09-23作成、ファイル作成のみ。staging・本番とも未適用）
 ```
 
+> **2026-09-24訂正：** 上記「staging・本番とも未適用」は誤り。2026-09-24セッション冒頭の
+> 確認で、stagingには既に012が適用済み（`ranking_snapshots`・`ranking_snapshot_entries`
+> テーブルが実在、`schema_migrations`にも記録あり）であることを確認した。前回
+> （2026-09-23）セッション終了時に`/handover`が未実行だったため、この適用作業自体が
+> worklog・spec.mdのいずれにも記録されないまま残っていたと考えられる（詳細は
+> `docs/worklog.md` 2026-09-23エントリ〔2026-09-24追記分〕参照）。**本番は引き続き未適用。**
+> 既存記述は削除せず、本訂正を追記する。
+
 ### events.status
 
 CHECK制約により以下のみ許可：`scheduled` / `live` / `paused` / `finished` / `cancelled`
@@ -734,6 +742,63 @@ api.cheerstick.com（cheerstick-apiがNode appへproxy）経由であり、app.c
 拡張子不一致（内容はPNGだが`.txt`拡張子）・6MBファイル（413）・fileフィールド欠如（400）の
 いずれも想定通りのエラーになることを確認。アップロードされたファイルが実際にディスクへ
 書き込まれること、拒否されたケースではファイルが書き込まれないことも確認した。
+
+### 8.9 管理API・閲覧API：順位確定機能（Phase 1〜3、2026-09-23実装・2026-09-24 staging確認）
+
+試合終了時に、ユーザー別・選手別それぞれの応援量上位20件を「確定」させ、履歴として
+保存する機能。会場スクリーン（9.11章）から閲覧できるようにするためのバックエンド。
+migration 012（7章参照）で`ranking_snapshots`（確定操作1回＝1行の履歴ヘッダ）・
+`ranking_snapshot_entries`（明細、1確定あたり最大40行＝ユーザー別20＋選手別20）を新設。
+
+```
+POST /api/v1/admin/events/:eventId/ranking-snapshot
+  「順位確定」ボタン。押すたびに実行可能（上書きではなく履歴として複数回分を保存する）。
+  対象イベントのstatusがlive/paused/finishedのいずれかの場合のみ実行できる
+  （scheduled/cancelledは400 INVALID_EVENT_STATUS）。存在しないイベントは404 EVENT_NOT_FOUND。
+  認証は他の管理APIと同じくnginx側のIP制限のみ（アプリケーションレベル認証なし）。
+
+  集計方法：cheer_logsをuser_id／target_idでSUM(intensity)集計し、RANK() OVER
+  (ORDER BY SUM(intensity) DESC)で順位を採番（同点は同順位、以降の順位番号はスキップされる。
+  例：1位2件→次は3位）。上位20件のみ。user_id／target_idがNULLのcheer_logs行は
+  INNER JOINにより自動的に除外される。
+
+  成功時 201:
+  {
+    "snapshotId": "...", "eventId": "...", "triggeredAt": "...",
+    "userEntries": [{ "rank", "entity_id", "display_name", "cheer_value" }, ...],
+    "targetEntries": [{ "rank", "entity_id", "display_name", "cheer_value" }, ...]
+  }
+
+GET /api/v1/events/:eventId/ranking-snapshots/latest?rankingType=user|target
+  会場スクリーン向け閲覧用。指定イベントの最新1件の確定結果
+  （ranking_snapshots.triggered_at降順）とその明細（rankingTypeで絞り込み）を返す。
+  一度も確定操作が行われていない場合は snapshotId: null, triggeredAt: null, entries: [] を
+  返す（画面側で「まだ順位が確定していません」等の待機表示に使う）。
+  rankingTypeが user/target 以外は400 INVALID_RANKING_TYPE。存在しないイベントは
+  404 EVENT_NOT_FOUND。
+
+  成功時 200:
+  { "snapshotId": "...", "triggeredAt": "...",
+    "entries": [{ "rank", "displayName", "cheerValue" }, ...] }
+
+⚠️ POST（確定操作）とGET（閲覧）でレスポンスのキー命名規則が異なる
+   （POSTはsnake_case: entity_id/display_name/cheer_value、GETはcamelCase:
+   displayName/cheerValue）。実装時の別々の判断によるもので意図した統一設計ではないが、
+   Phase 4（9.11章）実装時点でフロントエンド側はこの違いをそのまま前提に実装している。
+
+認証：POST（`/api/v1/admin/`配下）はnginx側IP制限の対象、GET（`/api/v1/events/`直下）は
+対象外（event-battlesスコアAPI・target-scores APIと同じ理由。会場スクリーンを任意の端末で
+表示する必要があるため意図的にIP制限の外に置く）。
+```
+
+**動作確認（2026-09-24、staging DBに接続したローカルサーバーで実施）**：POSTの正常系
+（finished/paused双方での確定成功、同率1位→3位へ順位が飛ぶ同順位判定）、400
+INVALID_EVENT_STATUS（scheduledのイベントに対するPOST）、GETの正常系（確定済み結果の取得、
+未確定時のsnapshotId: null）を確認した。確認用に作成したテストイベント・ユーザー・
+cheer_logs・ranking_snapshotsはすべて削除・非表示化して原状回復した（詳細は
+`docs/worklog.md` 2026-09-24エントリ参照）。**staging・本番とも、Phase 1〜3実装当時
+（2026-09-23）にどのような検証が行われたかは、`/handover`未実行のため記録が残っておらず
+不明。** 本番デプロイは未実施。
 
 ## 9. フロントエンド（public/index.html）
 
@@ -1158,6 +1223,74 @@ window.addEventListener('pageshow', () => {
 登録ボタンの無効化（見た目・`disabled`属性の両方）が働くこと、新規登録したチームが
 一覧にカラー付きで反映されること、編集モーダルで既存色が正しくプリフィルされ、
 変更後保存すると一覧のスウォッチが即時更新されることを確認した。コンソールエラー無し。
+
+### 9.11 順位確定機能の画面（Phase 4、2026-09-24実装・staging確認まで）
+
+8.9章のバックエンドAPIに対する画面実装。管理側1画面＋会場スクリーン側2画面の構成
+（B案：ユーザー別・選手別を別画面に分離）。ランチャー（`public/admin/index.html`）の
+`launcher-nav`に「順位確定」項目を追加した（`events.html`等と同じ
+`<a href>` + `nav-title` + `nav-desc`パターン）。
+
+```
+public/admin/ranking-control.html  … 管理用。イベント選択＋「順位確定」ボタン＋確定結果表示
+public/ranking-user.html           … 会場スクリーン用。ユーザー別順位発表
+public/ranking-target.html         … 会場スクリーン用。選手・推し対象別順位発表
+```
+
+**`ranking-control.html`**
+
+- イベント選択は`events.html`と同じ`GET /admin/events`を再利用（新規API無し）
+- 「順位確定」ボタンの表示可否は`events.html`の`actionButtonsFor(event)`と同じ規約：
+  対象イベントのstatusがlive/paused/finishedのときのみボタンを描画し、
+  scheduled/cancelledではグレーアウトやエラー表示をせず、ボタン自体を描画しない
+- ボタン押下で8.9章のPOSTを実行し、レスポンス（ユーザー別・選手別それぞれ上位20件）を
+  その場で表形式表示する。400 INVALID_EVENT_STATUS・404 EVENT_NOT_FOUNDはerror-barへ
+  分かりやすいメッセージで表示する
+- 会場スクリーンURL（`ranking-user.html`・`ranking-target.html`、いずれも
+  `?event_id=<選択中のイベントID>`）を、`events.html`の対抗戦URL欄
+  （`.battle-url-row`、9.3章）と同じ構成でテキスト入力＋「コピー」ボタンとして表示する。
+  この欄はイベントのstatusに関わらず、イベントが選択されていれば常に表示する
+  （未確定でもスクリーン側を先に開いておく運用を想定。スクリーン側は未確定時
+  「まだ順位が確定していません」を表示するため支障が無いため）
+
+**`ranking-user.html`・`ranking-target.html`（会場スクリーン、2画面はrankingTypeパラメータ
+以外ほぼ同一構成）**
+
+- `battle.html`（9.4章）と同じ設計：URLパラメータ（`event_id`、`target-report.html`と
+  同じ命名。`battle.html`の`battle_id`とは対象が異なるため揃えていない）を受け取り、
+  3秒間隔で`GET /events/:eventId/ranking-snapshots/latest?rankingType=user|target`
+  （8.9章）をポーリングして描画する単独ページ（WebSocket接続は行わない）
+- 配色・レイアウト・エラー表示（`event_id`未指定時の案内、`EVENT_NOT_FOUND`時の致命エラー、
+  一時的な通信断時は直前の表示を保持したまま再試行バナーのみ表示）は`battle.html`を踏襲
+- `snapshotId: null`（未確定）の場合は「まだ順位が確定していません」の待機表示にする
+- 同順位は同じ順位番号で複数行表示、番号の飛びはAPIの計算結果をそのまま表示する
+  （画面側での調整は行わない）。1〜3位の行には金・銀・銅の枠線を付ける演出を追加した
+  （`battle.html`のチームカラー基調の配色パターンを踏襲した拡張）
+- `battle.html`側にあった「前回取得結果と同じ場合は再描画をスキップする」という最適化は
+  実装時点のコードには存在しなかったため（調査済み）、Phase 4でも同様の最適化は追加していない
+
+**動作確認（2026-09-24、staging DBに接続した一時ローカルサーバー〔`src/app.js`相当に
+`public/`の静的配信を追加しただけの構成、リポジトリには非コミット〕、claude-in-chromeでの
+ブラウザ確認）**：
+
+- `ranking-control.html`：finished/paused/scheduledそれぞれのイベントでボタンの表示・
+  非表示切り替えを確認（scheduledのテストイベントを一時作成し確認後に非表示化）。
+  finished・pausedのイベントで実際に「順位確定」を実行し、確定結果表示（応援ログ0件時の
+  「応援ログがありません」、および3名分のテストデータによる同率1位→3位表示）を確認
+- `ranking-user.html`：未確定イベントでの「まだ順位が確定していません」表示、確定済み
+  イベントでの実データ表示（金・銀・銅の枠線、同順位表示）を確認
+- 両画面ともブラウザコンソールにJSエラー・例外なし（`read_console_messages`で確認）
+- 確認用に作成したイベント1件・ユーザー3件・cheer_logs・ranking_snapshotsは
+  すべて削除・非表示化して原状回復した（詳細は`docs/worklog.md` 2026-09-24エントリ参照）
+- `ranking-target.html`は`ranking-user.html`との差分（rankingType・タイトル文言のみ）が
+  小さいため、待機表示のみブラウザで確認し、確定結果表示は実データ確認を実施していない
+
+**未確認のまま残った点**：
+
+- 静的ファイルの2箇所デプロイ（runbook.md「デプロイ手順」）・staging/本番への反映は未実施
+- `ranking-target.html`の確定結果表示（実データでのレンダリング）は`ranking-user.html`側の
+  確認で共通コードパスであることの確認に留め、個別のブラウザ確認は行っていない
+- 実際の会場での大画面表示・演出面の調整は未実施（`battle.html`と同様、最小実装のまま）
 
 ## 10. 未実施の検証
 
@@ -1784,3 +1917,5 @@ BLEブリッジ〜ネイティブアプリ間、またはネイティブアプ�
 | 2026-09-17 | 4.4・5.2に追記、11.10「WebSocketの接続が正しくクローズされず残る場合がある（幽霊接続）」を新設 | 実機接続テスト中の監視で、同一デバイスの再接続時にサーバー側WebSocket接続が一時的に2件並存する事象、および「応援を終了する」ボタン押下後も接続が残り続ける場合がある事象を発見。コード調査により、新規接続時に旧接続を明示的にcloseする処理が無いこと（src/websocket/index.js:164）、close時のクリーンアップがTCP接続自体を閉じないこと（281-285行目）、ping/pongハートビート未実装（4.4章の既知課題と一致）、public/index.htmlの終了ボタンがWebSocketをcloseしない設計であることを確認し、11.10章に新規課題として記録した。あわせて5.2章にLED制御ブリッジの実機再確認結果を追記した。対応案（旧接続の明示的close、ping/pong実装）は今回未実装。詳細はdocs/worklog.md 2026-09-17エントリ参照 |
 | 2026-09-17 | 10.1「実機接続1本使用時のAWS負荷基準値」を新設 | 実機接続1本使用時の本番EC2（t3.micro）の負荷状況（CPU・メモリ・ディスク・PostgreSQL接続数）を計測し、2,000〜20,000本規模の商用リリースに対するメモリ制約のリスクを所見として記録した。詳細はdocs/worklog.md 2026-09-17エントリ参照 |
 | 2026-09-17 | 6章に追記：デバイス量産・ジャンル運用方針の決定を記録 | KMT様より、2,000本のMACアドレス一括登録（Jリーグ単独契約前提）が契約白紙のため見送りとなり、契約が決まった分から順次ジャンルを作成しCSV一括取込で割り当てる新方針への転換を共有された。あわせて、デバイスのcategory_idによるチーム絞り込みがサーバー側SQLで堅牢に実装済みであることの確認結果（既存の6.2・8.5章の内容）を、本方針決定の根拠として追記した。既存記述は削除せず追記で更新した。詳細はdocs/worklog.md 2026-09-17エントリ参照 |
+| 2026-09-24 | 7章のmigration一覧に訂正を追記（012はstaging適用済み）、8.9「管理API・閲覧API：順位確定機能」を新設 | Phase 4（画面実装）着手前の現状確認で、2026-09-23セッションが`/handover`未実行のまま終了しており、当該セッションで実装された順位確定機能バックエンド（Phase 1〜3、コミットceca327〜18e797f）がspec.mdに一切仕様化されていなかったことが判明した（7章のmigration一覧への言及のみ）。あわせて、その一覧記載「staging・本番とも未適用」も誤りで、stagingには既に012が適用済みであることを確認した。既存記述は削除せず、8.9章を新設してAPI仕様を正式に記録し、7章には訂正を追記した。POST/GETでレスポンスのキー命名規則（snake_case/camelCase）が異なる実装上の癖も明記した |
+| 2026-09-24 | 9.11「順位確定機能の画面」を新設 | 8.9章のバックエンドに対するPhase 4（画面実装）を実施。`public/admin/ranking-control.html`（イベント選択＋確定ボタン＋結果表示＋会場スクリーンURL欄）、`public/ranking-user.html`・`public/ranking-target.html`（`battle.html`のデザイン言語・3秒ポーリング方式を踏襲した会場スクリーン、rankingTypeのみ異なる）を新設し、管理画面ランチャーに導線を追加した。staging DBに接続した一時ローカルサーバー（リポジトリ非コミット）とclaude-in-chromeによるブラウザ確認で、ボタンの状態別表示切り替え、確定操作の正常系・エラー系、同順位表示、未確定時の待機表示を確認した。確認用データはすべて削除・原状回復した。静的ファイルのstaging/本番デプロイ、`ranking-target.html`の確定結果表示の個別確認は未実施のまま残した |
