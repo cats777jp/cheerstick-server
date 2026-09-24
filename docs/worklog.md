@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-09-23 順位確定機能Phase 1〜3実装（ranking_snapshots）・registerのUPSERT修正
+
+### 背景（本エントリの記録タイミングについて）
+
+本エントリは2026-09-24のセッションで遡って追記したものである。2026-09-23セッション
+終了時に`/handover`が未実行のままとなっていたため、当該セッションの作業内容が
+worklogに記録されていなかった（2026-09-24セッション冒頭、Phase 4再開指示書対応時に
+発覚。詳細は`C:\Users\Iwamura\Downloads\cheerstick-step3-phase4-restart-20260923.md`参照）。
+
+### 実施したこと（2026-09-23、コミット履歴より）
+
+1. 順位確定機能（試合終了時、ユーザー別・選手別の上位20件を確定・保存する機能）の
+   バックエンド一式をPhase 1〜3として実装：
+   - `ceca327` テーブル新設：`ranking_snapshots`・`ranking_snapshot_entries`
+     （`migrations/012_add_ranking_snapshots.sql`）
+   - `7f0f284` `docs/spec.md`のマイグレーション一覧に012を追記
+   - `169d61b` `POST /api/v1/admin/events/:eventId/ranking-snapshot`実装
+     （ユーザー別・選手別それぞれ上位20件を確定・保存）
+   - `18e797f` `GET /api/v1/events/:eventId/ranking-snapshots/latest?rankingType=user|target`
+     実装（Phase 3改訂：当初WebSocket配信を想定していたところ、`battle.html`と同じ
+     HTTPポーリング方式へ変更。会場スクリーン向け閲覧用）
+2. 別件の不具合修正：`b4d3309` `register`のユーザー登録をUPSERT化し、同一メール
+   アドレスでの同時登録時に発生していた競合を解消
+
+### 適用状況（2026-09-24セッション冒頭確認分を含む）
+
+- ローカル・GitHub（`feature/reference-data`）：上記5コミットとも反映済み
+- staging：Phase 1〜3のコードは反映済みだが、migration 012はstaging未適用
+  （`docs/spec.md` 7章参照）
+- 本番：
+  - `register`のUPSERT修正（`b4d3309`）のみ、本番へcherry-pick済み（本番側コミット
+    ハッシュ`474d552`。ローカルの`b4d3309`とはハッシュが異なる＝本番のgit履歴は
+    ローカル/originと単純な`git pull`で揃う関係にない点に注意）
+  - 順位確定機能一式（migration 012＋Phase 1〜3のバックエンドコード）は
+    **本番未反映**
+- Phase 4（`ranking-control.html`・`ranking-user.html`・`ranking-target.html`の
+  画面実装）は**未着手のままセッション中断**。2026-09-24セッション冒頭で
+  作りかけのファイルが残っていないこと・`public/admin/index.html`に該当項目が
+  未追加であることを確認済み
+
+### 変更したファイル
+
+- 本エントリ作成時点での変更なし（過去セッションの作業内容を遡って記録するのみ）
+
+### 次回への申し送り
+
+- Phase 4（画面実装）は2026-09-24セッションで着手する
+- 本番デプロイ時は、migration 012＋Phase 1〜3のバックエンドコミット一式を
+  まとめて反映すること。ただし本番の`register`修正は既にcherry-pickで
+  別ハッシュとして反映済みのため、単純な`git pull`ではなく`git log`での
+  差分コミット確認が必要（指示書7章に同旨の注記あり）
+
+---
+
 ## 2026-09-21 通信経路込み負荷試験（nginx＋TLS経由）：worker_connections問題の発見とt3.medium/m5.large比較
 
 ### 背景
