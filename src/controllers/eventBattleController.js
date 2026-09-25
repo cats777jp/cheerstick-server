@@ -35,9 +35,19 @@ exports.getScore = async (req, res, next) => {
       cheerQueries.getEventIntensityTotal(battle.event_b_id),
     ]);
 
+    // テーマ画像（対抗戦テーマ画像機能、2026-09-25追加）：event_battlesではなく
+    // 個々のevents.metadataに保存する設計のため（指示書の設計方針）、対抗戦全体で
+    // 1枚に決めるにあたり試合A→試合Bの優先順で採用する（8.4章の「event_a=画面左側」
+    // という既存の慣例に合わせた判断。両方に設定された場合は試合A側を優先）。
+    const themeImageUrl =
+      (battle.event_a_metadata && battle.event_a_metadata.themeImageUrl) ||
+      (battle.event_b_metadata && battle.event_b_metadata.themeImageUrl) ||
+      null;
+
     res.json({
       battle_id: battle.id,
       label: battle.label,
+      theme_image_url: themeImageUrl,
       team_a: {
         event_id: battle.event_a_id,
         event_title: battle.event_a_title,

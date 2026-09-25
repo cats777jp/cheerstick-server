@@ -159,6 +159,15 @@
       <label for="editEndsAt">終了日時（任意）</label>
       <input id="editEndsAt" type="datetime-local">
 
+      <label>対抗戦テーマ画像（任意）</label>
+      <div id="editThemeImageDropzone" class="upload-dropzone">
+        ドラッグ＆ドロップ、またはクリックしてファイルを選択（jpg/png、5MBまで）
+      </div>
+      <input id="editThemeImageFile" type="file" accept="image/jpeg,image/png" class="hidden">
+      <div id="editThemeImageStatus" class="upload-status"></div>
+      <img id="editThemeImagePreview" class="upload-preview hidden" alt="テーマ画像プレビュー">
+      <input id="editThemeImageUrl" type="hidden">
+
       <div class="actions">
         <button type="button" id="editCancelBtn">キャンセル</button>
         <button type="submit" class="primary">保存</button>
@@ -181,6 +190,17 @@
   const editForm = document.getElementById('editForm');
   const editOrg = document.getElementById('editOrg');
   const editCancelBtn = document.getElementById('editCancelBtn');
+  const editThemeImageUrl = document.getElementById('editThemeImageUrl');
+
+  // テーマ画像アップロードUI（対抗戦テーマ画像機能、2026-09-25追加）。
+  // masters.html（チームロゴ）と同じ共通ウィジェット（common.js）を流用。
+  const editThemeImageWidget = setupImageUploadWidget({
+    dropZoneEl: document.getElementById('editThemeImageDropzone'),
+    fileInputEl: document.getElementById('editThemeImageFile'),
+    previewImgEl: document.getElementById('editThemeImagePreview'),
+    urlInputEl: editThemeImageUrl,
+    statusEl: document.getElementById('editThemeImageStatus'),
+  });
 
   const STATUS_LABELS = {
     live: 'live',
@@ -466,6 +486,7 @@
     document.getElementById('editStartsAt').value = isoToDatetimeLocal(event.starts_at);
     document.getElementById('editEndsAt').value = isoToDatetimeLocal(event.ends_at);
     editOrg.value = event.organization_id;
+    editThemeImageWidget.setUrl(event.metadata && event.metadata.themeImageUrl);
     editModalOverlay.classList.add('visible');
   }
 
@@ -488,6 +509,7 @@
           organization_id: editOrg.value,
           starts_at: datetimeLocalToIso(document.getElementById('editStartsAt').value),
           ends_at: datetimeLocalToIso(document.getElementById('editEndsAt').value),
+          theme_image_url: editThemeImageUrl.value.trim() || null,
         }),
       });
       clearError();

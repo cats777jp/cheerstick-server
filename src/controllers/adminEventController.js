@@ -64,6 +64,7 @@ exports.update = async (req, res, next) => {
     organization_id: organizationId,
     starts_at: startsAt,
     ends_at: endsAt,
+    theme_image_url: themeImageUrl,
   } = req.body;
 
   const fields = {};
@@ -71,6 +72,9 @@ exports.update = async (req, res, next) => {
   if (organizationId !== undefined) fields.organizationId = organizationId;
   if (startsAt !== undefined) fields.startsAt = startsAt;
   if (endsAt !== undefined) fields.endsAt = endsAt;
+  // 対抗戦テーマ画像（2026-09-25追加）：events.metadata.themeImageUrlへ格納する。
+  // 空文字/nullは「解除」として扱う（cheerstickQueries.updateEvent側でキー削除）。
+  if (themeImageUrl !== undefined) fields.themeImageUrl = themeImageUrl;
 
   try {
     const updated = await cheerQueries.updateEvent(id, fields);

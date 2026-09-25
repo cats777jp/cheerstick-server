@@ -365,7 +365,7 @@ async function assertOrganizationExists(organizationId) {
 async function listEventsAdmin() {
   const { rows } = await db.query(
     `SELECT e.id, e.title, e.organization_id, o.name AS organization_name,
-            e.starts_at, e.ends_at, e.status, e.created_at
+            e.starts_at, e.ends_at, e.status, e.metadata, e.created_at
      FROM events e
      LEFT JOIN organizations o ON o.id = e.organization_id
      WHERE e.hidden_at IS NULL
@@ -395,6 +395,12 @@ async function createEvent({ title, organizationId, startsAt, endsAt }) {
  * fieldsに無いキーは更新しない。organizationIdが含まれる場合は実在確認する。
  * 対象イベントが無い場合、または更新対象フィールドが無い場合はnullを返す
  * （呼び出し元で404にマッピングする）。
+ *
+ * themeImageUrl（対抗戦テーマ画像機能、2026-09-25追加）：events.metadataは他用途で
+ * 現状一切使われていない空の'{}'のため（Phase 0調査で確認済み）、既存キーとの衝突は
+ * 想定しない。ただし将来他のキーが増えた場合に備え、metadata列全体の上書きではなく
+ * JSONBの`||`演算子でthemeImageUrlキーのみをマージする。値がfalsy（null/空文字）の
+ * 場合は「テーマ画像を解除する」操作として`-`演算子でキー自体を削除する。
  */
 async function updateEvent(eventId, fields) {
   const columnMap = {
@@ -420,9 +426,19 @@ async function updateEvent(eventId, fields) {
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(fields, 'themeImageUrl')) {
+    if (fields.themeImageUrl) {
+      setClauses.push(`metadata = metadata || $${i}::jsonb`);
+      values.push(JSON.stringify({ themeImageUrl: fields.themeImageUrl }));
+      i += 1;
+    } else {
+      setClauses.push(`metadata = metadata - 'themeImageUrl'`);
+    }
+  }
+
   if (setClauses.length === 0) {
     const { rows } = await db.query(
-      `SELECT id, organization_id, title, starts_at, ends_at, status, created_at
+      `SELECT id, organization_id, title, starts_at, ends_at, status, metadata, created_at
        FROM events WHERE id = $1`,
       [eventId]
     );
@@ -433,7 +449,7 @@ async function updateEvent(eventId, fields) {
   const { rows } = await db.query(
     `UPDATE events SET ${setClauses.join(', ')}
      WHERE id = $${i}
-     RETURNING id, organization_id, title, starts_at, ends_at, status, created_at`,
+     RETURNING id, organization_id, title, starts_at, ends_at, status, metadata, created_at`,
     values
   );
   return rows[0] || null;
@@ -1123,12 +1139,15 @@ async function deleteEventBattle(battleId) {
  * 無ければnull。status（live/paused/finished等）による絞り込みは行わない
  * （停止中・終了後もその時点のcheer_logs集計をそのまま表示し続ける設計のため）。
  */
+// event_a_metadata/event_b_metadata（対抗戦テーマ画像機能、2026-09-25追加）：
+// Phase 0調査で、本クエリがevents.metadata列を一切SELECTしていないことが判明したため追加。
+// これが無いとgetScore側でthemeImageUrlを読み出せない。
 async function getEventBattleMeta(battleId) {
   const { rows } = await db.query(
     `SELECT eb.id, eb.label,
-            ea.id AS event_a_id, ea.title AS event_a_title,
+            ea.id AS event_a_id, ea.title AS event_a_title, ea.metadata AS event_a_metadata,
             oa.id AS org_a_id, oa.name AS org_a_name, oa.logo_url AS org_a_logo_url, oa.color AS org_a_color,
-            ebv.id AS event_b_id, ebv.title AS event_b_title,
+            ebv.id AS event_b_id, ebv.title AS event_b_title, ebv.metadata AS event_b_metadata,
             ob.id AS org_b_id, ob.name AS org_b_name, ob.logo_url AS org_b_logo_url, ob.color AS org_b_color
      FROM event_battles eb
      JOIN events ea  ON ea.id  = eb.event_a_id

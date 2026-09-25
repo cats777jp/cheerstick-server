@@ -111,22 +111,41 @@
     margin-bottom: 16px;
   }
 
-  .gauge-track {
+  /* 綱引き式ゲージ（対抗戦テーマ画像・綱引きゲージ機能、2026-09-25変更）：
+     従来はチームごとに独立した2本のバーだったが、1本の連結バーへ変更。
+     境界線の位置は自チーム比率（JS側で計算）に応じてtug-fill-aの幅が動く。 */
+  #tugGauge {
     width: 100%;
-    max-width: 420px;
+    max-width: 560px;
     height: 20px;
+    margin: 4px auto 0;
+    display: flex;
     background: rgba(255, 255, 255, 0.08);
     border-radius: 999px;
     overflow: hidden;
   }
-  .gauge-fill {
+  #tugFillA {
     height: 100%;
-    border-radius: 999px;
-    width: 0%;
+    background: var(--team-a-color);
+    width: 50%;
     transition: width 0.6s ease;
   }
-  #gaugeFillA { background: var(--team-a-color); }
-  #gaugeFillB { background: var(--team-b-color); margin-left: auto; }
+  #tugFillB {
+    height: 100%;
+    background: var(--team-b-color);
+    width: 50%;
+    transition: width 0.6s ease;
+  }
+
+  .theme-image {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 26vh;
+    margin: 0 auto 14px;
+    border-radius: 12px;
+  }
 
   #vsDivider {
     display: flex;
@@ -167,6 +186,7 @@
   <div id="errorState" hidden></div>
 
   <div id="battleContent" hidden style="display: contents;">
+    <img id="themeImage" class="theme-image" alt="" hidden>
     <div id="label"></div>
     <div id="battleGrid">
       <div id="panelA" class="team-panel">
@@ -174,8 +194,7 @@
         <div id="nameA" class="team-name"></div>
         <div id="eventTitleA" class="team-event-title"></div>
         <div id="scoreA" class="team-score">0</div>
-        <div class="team-score-unit">応援強度</div>
-        <div class="gauge-track"><div id="gaugeFillA" class="gauge-fill"></div></div>
+        <div class="team-score-unit">pt</div>
       </div>
       <div id="vsDivider">VS</div>
       <div id="panelB" class="team-panel">
@@ -183,10 +202,10 @@
         <div id="nameB" class="team-name"></div>
         <div id="eventTitleB" class="team-event-title"></div>
         <div id="scoreB" class="team-score">0</div>
-        <div class="team-score-unit">応援強度</div>
-        <div class="gauge-track"><div id="gaugeFillB" class="gauge-fill"></div></div>
+        <div class="team-score-unit">pt</div>
       </div>
     </div>
+    <div id="tugGauge"><div id="tugFillA"></div><div id="tugFillB"></div></div>
     <div id="updatedAt"></div>
   </div>
 </div>
@@ -238,12 +257,19 @@
     return AVATAR_COLORS[h % AVATAR_COLORS.length];
   }
 
-  function renderTeamPanel({ logoWrapEl, nameEl, eventTitleEl, team, fallbackColor }) {
+  function renderTeamPanel({ logoWrapEl, nameEl, eventTitleEl, team, fallbackColor, hideIdentity }) {
     const org = team.organization;
     const name = org ? org.name : (team.event_title || '(チーム未設定)');
-    nameEl.textContent = name;
     eventTitleEl.textContent = team.event_title || '';
 
+    // テーマ画像表示時（対抗戦テーマ画像機能、2026-09-25追加）：画像内に既に
+    // チーム名・ロゴが含まれているため、個別表示は非表示にする（後方互換：
+    // テーマ画像未設定時はhideIdentity=falseで従来通り表示）。
+    nameEl.hidden = hideIdentity;
+    logoWrapEl.hidden = hideIdentity;
+    if (hideIdentity) return;
+
+    nameEl.textContent = name;
     logoWrapEl.innerHTML = '';
     if (org && org.logo_url) {
       const img = document.createElement('img');
@@ -276,12 +302,26 @@
     document.documentElement.style.setProperty('--team-a-color', orgAColor);
     document.documentElement.style.setProperty('--team-b-color', orgBColor);
 
+    // テーマ画像（対抗戦テーマ画像機能、2026-09-25追加）：設定時はヘッダーへ
+    // 1枚画像をそのまま表示し、個別のチームロゴ・チーム名は非表示にする
+    // （画像内に既に含まれているため）。未設定時は従来通り（後方互換）。
+    const themeImageEl = document.getElementById('themeImage');
+    const hasThemeImage = !!data.theme_image_url;
+    if (hasThemeImage) {
+      themeImageEl.src = data.theme_image_url;
+      themeImageEl.hidden = false;
+    } else {
+      themeImageEl.hidden = true;
+      themeImageEl.removeAttribute('src');
+    }
+
     renderTeamPanel({
       logoWrapEl: document.getElementById('logoWrapA'),
       nameEl: document.getElementById('nameA'),
       eventTitleEl: document.getElementById('eventTitleA'),
       team: data.team_a,
       fallbackColor: orgAColor,
+      hideIdentity: hasThemeImage,
     });
     renderTeamPanel({
       logoWrapEl: document.getElementById('logoWrapB'),
@@ -289,16 +329,20 @@
       eventTitleEl: document.getElementById('eventTitleB'),
       team: data.team_b,
       fallbackColor: orgBColor,
+      hideIdentity: hasThemeImage,
     });
 
     document.getElementById('scoreA').textContent = formatNumber(data.team_a.total_intensity);
     document.getElementById('scoreB').textContent = formatNumber(data.team_b.total_intensity);
 
-    // ゲージ：上限値は固定せず、両者のうち大きい方を100%として相対表示する
-    // （まず動くものを優先。演出の調整は別途）。
-    const maxVal = Math.max(data.team_a.total_intensity, data.team_b.total_intensity, 1);
-    document.getElementById('gaugeFillA').style.width = `${Math.round((data.team_a.total_intensity / maxVal) * 100)}%`;
-    document.getElementById('gaugeFillB').style.width = `${Math.round((data.team_b.total_intensity / maxVal) * 100)}%`;
+    // 綱引き式ゲージ（2026-09-25変更）：自チーム比率 = 自チーム応援量 / (両チーム応援量の合計)。
+    // 両チームとも0の場合はゼロ除算を避けるため50:50固定とする。
+    const totalA = data.team_a.total_intensity;
+    const totalB = data.team_b.total_intensity;
+    const sum = totalA + totalB;
+    const ratioA = sum > 0 ? totalA / sum : 0.5;
+    document.getElementById('tugFillA').style.width = `${(ratioA * 100).toFixed(2)}%`;
+    document.getElementById('tugFillB').style.width = `${((1 - ratioA) * 100).toFixed(2)}%`;
 
     document.getElementById('updatedAt').textContent =
       '最終更新: ' + new Date(data.updated_at).toLocaleTimeString('ja-JP');
