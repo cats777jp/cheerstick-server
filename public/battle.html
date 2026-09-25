@@ -116,14 +116,15 @@
      境界線の位置は自チーム比率（JS側で計算）に応じてtug-fill-aの幅が動く。
      2026-09-26、レイアウト調整（画像の次・カウンターの前に移動、太さ・全幅化、
      配色を中間色化）：配色はカウンター背景と同じcolor-mix()方式で75%ミックスとし、
-     organizations.colorによる動的配色にもそのまま追従する（KMT様確認・承認済み）。 */
+     organizations.colorによる動的配色にもそのまま追従する（KMT様確認・承認済み）。
+     同日追加要望により height を40px→56pxへさらに拡大。 */
   #tugGauge {
     width: 100%;
-    height: 40px;
+    height: 56px;
     margin: 0 0 20px;
     display: flex;
     background: rgba(255, 255, 255, 0.08);
-    border-radius: 14px;
+    border-radius: 18px;
     overflow: hidden;
   }
   #tugFillA {
