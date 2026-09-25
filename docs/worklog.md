@@ -4,6 +4,87 @@
 
 ---
 
+## 2026-09-25 デモ用データ作成：EMUTTO vs J SPORTS（本番環境、恒久デモ用）
+
+### 実施したこと
+
+`C:\Users\Iwamura\Downloads\cheerstick-demo-emutto-jsports-20260925.md`の指示書に基づき、
+お客様向けデモ用の対抗戦データを本番環境に作成した。既存の実機検証用データ（YOKA・あきら等）
+とは別の、**恒久的に残す専用データ**として作成したものであり、次回以降のセッションで
+「検証用データの整理」等の作業対象に誤って含めないこと。
+
+1. カテゴリー「デモ用」を新規作成
+2. チーム「EMUTTO」（色`#DC2626`）・「J SPORTS」（色`#2563EB`）を新規作成（ロゴ画像は
+   テーマ画像に含まれるため未設定）
+3. 試合「デモ対抗戦 EMUTTO」（organization=EMUTTO）・「デモ対抗戦 J SPORTS」
+   （organization=J SPORTS）を新規作成し、両方とも`live`化
+4. 「デモ対抗戦 EMUTTO」に、`events.metadata.themeImageUrl`として既存の
+   「実機検証 20260917」で使用済みのテーマ画像URL
+   （`https://app.cheerstick.com/images/uploads/a9cf6907-5d2f-4a1a-b1e1-5cbafa4a7ac2.png`、
+   本番DBから読み取り確認済み、再アップロードはしていない）を設定
+5. 対抗戦ペア「デモ EMUTTO vs J SPORTS」を作成
+   （`battle_id: 3d909ed3-3207-4222-a6f9-a6c39980b910`）
+6. ダミーデバイス10台（`AA:00:00:01:00:01`〜`05`＝EMUTTO側、`AA:00:00:01:01:01`〜`05`＝
+   J SPORTS側。既存の負荷試験用MAC帯`AA:00:00:00:XX:XX`とは異なる範囲）を`is_demo: true`で
+   登録し、本番EC2上で実行した使い捨てスクリプト（`scripts/_tmp-demo-emutto-jsports.js`、
+   リポジトリ非コミット）からWebSocket経由でconnect→select_team→countを送信し、
+   応援データ（cheer_logs）を生成
+7. 最終結果：**EMUTTO 5,400pt・J SPORTS 5,200pt**（拮抗した状態を再現。スコアAPI
+   （`GET /event-battles/:id/score`）で確認）
+
+**対抗戦画面URL（恒久・削除しないこと）：**
+`https://app.cheerstick.com/battle.html?battle_id=3d909ed3-3207-4222-a6f9-a6c39980b910`
+
+### 判明した事実 / 想定と違ったこと
+
+- **使い捨てスクリプトの初回実行時、応援データが1件もcheer_logsへ書き込まれない不具合が
+  発生した。** 原因は`cheer_logs.intensity`列のCHECK制約（`migrations/001_initial_schema.sql`、
+  `CHECK (intensity BETWEEN 0 AND 100)`）で、スクリプトが1メッセージあたり300〜1000超の
+  `value`を送信していたため、`insertCheerLog`のINSERTが毎回制約違反で失敗していた。
+  加えて、スクリプトのクライアント側実装にも見落としがあり、`select_team`完了時点で
+  確定済みのPromiseに対しては`count`失敗時のサーバーエラー応答が`reject()`で握りつぶされ、
+  失敗が一切表示されない状態だった。両方をスクリプト側で修正（1メッセージの値を1〜100に
+  収まるよう分割、確定済み接続でもエラー応答を確実にログ出力）し、再実行して解消した。
+  **この不具合は使い捨てスクリプト内のみの問題であり、`src/db/cheerstickQueries.js`の
+  `insertCheerLog`本体・`src/websocket/index.js`のWebSocketハンドラなど、本番の
+  ソースコードには一切変更を加えていない**
+- 調査の副産物として、実機クライアント（`public/index.html`）の応援強度算出ロジック
+  （`BATCH_SIZE=5`回分を`cheerBatchSum`として合算してから1回のcountで送信、
+  1回あたりの上限`MAX_INTENSITY=21`）の理論上の最大値が`21×5=105`となり、
+  上記のCHECK制約（0〜100）を極端な条件下ではわずかに超えうることに気づいた。
+  今回の不具合とは無関係の既存仕様であり、対応の要否・優先度は未検討のまま
+  KMT様の判断待ちとして記録に留める
+- 使い捨てスクリプトは、本番EC2上で管理API・WebSocketともnginxのIPアドレス制限を
+  経由しない`http://127.0.0.1:3000`・`ws://127.0.0.1:3000/cheer`を使う方式とした
+  （2026-09-17の本番デプロイ確認時と同じ方式、`docs/runbook.md`参照）。当初KMT様の
+  ローカルPCから`api.cheerstick.com`へ直接アクセスする方式で用意したが、EC2上で
+  実行したいとのご要望があり、この方式へ作り直した
+
+### 変更したファイル
+
+- 本番DB：カテゴリー1件・チーム2件・試合2件・対抗戦ペア1件・デバイス10件・
+  cheer_logs（応援ログ、約175件）を新規追加（コード変更は無し）
+- 本番EC2：`scripts/_tmp-demo-emutto-jsports.js`を配置して実行（使い捨て、
+  リポジトリ非コミット。実行後の削除要否はKMT様の判断待ち）
+- ローカル：`docs/worklog.md`（本エントリ）
+
+### 次回への申し送り
+
+- **本エントリで作成したデモ用データ（カテゴリー「デモ用」、チームEMUTTO・
+  J SPORTS、試合「デモ対抗戦 EMUTTO」「デモ対抗戦 J SPORTS」、対抗戦ペア
+  `3d909ed3-3207-4222-a6f9-a6c39980b910`、デバイス`AA:00:00:01:XX:XX`帯10台、
+  cheer_logs約175件）は恒久デモ用データにつき削除しないこと。** 「検証用データの
+  整理」等の作業で誤って対象に含めないよう注意
+- `public/index.html`の応援強度算出ロジックの理論上の上限（105）がDBのCHECK制約
+  （100）をわずかに超えうる件、対応要否をKMT様と相談する（優先度低・今回は未対応）
+
+### 未解決のまま残した課題
+
+- 上記の応援強度上限の件（低優先度）
+- `scripts/_tmp-demo-emutto-jsports.js`の削除要否（KMT様の判断待ち）
+
+---
+
 ## 2026-09-25 対抗戦テーマ画像・綱引きゲージ機能（Phase 0調査〜Phase 1実装・staging確認）
 
 ### 実施したこと
