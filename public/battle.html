@@ -59,44 +59,44 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    border-radius: 20px;
-    padding: 20px;
+    border-radius: 14px;
+    padding: 10px 12px;
     min-width: 0;
   }
   #panelA { background: linear-gradient(160deg, color-mix(in srgb, var(--team-a-color) 28%, #0b0f14), #0b0f14); }
   #panelB { background: linear-gradient(200deg, color-mix(in srgb, var(--team-b-color) 28%, #0b0f14), #0b0f14); }
 
   .team-logo {
-    width: clamp(48px, 8vw, 96px);
-    height: clamp(48px, 8vw, 96px);
+    width: clamp(56px, 11vw, 128px);
+    height: clamp(56px, 11vw, 128px);
     border-radius: 50%;
     object-fit: cover;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     background: #1f2733;
   }
   .team-logo-fallback {
-    width: clamp(48px, 8vw, 96px);
-    height: clamp(48px, 8vw, 96px);
+    width: clamp(56px, 11vw, 128px);
+    height: clamp(56px, 11vw, 128px);
     border-radius: 50%;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: bold;
-    font-size: clamp(20px, 3vw, 36px);
+    font-size: clamp(24px, 4vw, 48px);
     color: #fff;
   }
   .team-name {
-    font-size: clamp(18px, 3vw, 32px);
+    font-size: clamp(16px, 2.6vw, 28px);
     font-weight: bold;
     text-align: center;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
     word-break: break-word;
   }
   .team-event-title {
     font-size: clamp(11px, 1.4vw, 14px);
     color: var(--text-muted);
-    margin-bottom: 14px;
+    margin-bottom: 8px;
     text-align: center;
   }
   .team-score {
@@ -108,31 +108,33 @@
   .team-score-unit {
     font-size: clamp(12px, 1.6vw, 16px);
     color: var(--text-muted);
-    margin-bottom: 16px;
+    margin-bottom: 4px;
   }
 
   /* 綱引き式ゲージ（対抗戦テーマ画像・綱引きゲージ機能、2026-09-25変更）：
      従来はチームごとに独立した2本のバーだったが、1本の連結バーへ変更。
-     境界線の位置は自チーム比率（JS側で計算）に応じてtug-fill-aの幅が動く。 */
+     境界線の位置は自チーム比率（JS側で計算）に応じてtug-fill-aの幅が動く。
+     2026-09-26、レイアウト調整（画像の次・カウンターの前に移動、太さ・全幅化、
+     配色を中間色化）：配色はカウンター背景と同じcolor-mix()方式で75%ミックスとし、
+     organizations.colorによる動的配色にもそのまま追従する（KMT様確認・承認済み）。 */
   #tugGauge {
     width: 100%;
-    max-width: 560px;
-    height: 20px;
-    margin: 4px auto 0;
+    height: 40px;
+    margin: 0 0 20px;
     display: flex;
     background: rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
+    border-radius: 14px;
     overflow: hidden;
   }
   #tugFillA {
     height: 100%;
-    background: var(--team-a-color);
+    background: color-mix(in srgb, var(--team-a-color) 75%, #0b0f14);
     width: 50%;
     transition: width 0.6s ease;
   }
   #tugFillB {
     height: 100%;
-    background: var(--team-b-color);
+    background: color-mix(in srgb, var(--team-b-color) 75%, #0b0f14);
     width: 50%;
     transition: width 0.6s ease;
   }
@@ -142,7 +144,7 @@
     width: auto;
     height: auto;
     max-width: 100%;
-    max-height: 26vh;
+    max-height: 46vh;
     margin: 0 auto 14px;
     border-radius: 12px;
   }
@@ -188,6 +190,7 @@
   <div id="battleContent" hidden style="display: contents;">
     <img id="themeImage" class="theme-image" alt="" hidden>
     <div id="label"></div>
+    <div id="tugGauge"><div id="tugFillA"></div><div id="tugFillB"></div></div>
     <div id="battleGrid">
       <div id="panelA" class="team-panel">
         <div id="logoWrapA"></div>
@@ -205,7 +208,6 @@
         <div class="team-score-unit">pt</div>
       </div>
     </div>
-    <div id="tugGauge"><div id="tugFillA"></div><div id="tugFillB"></div></div>
     <div id="updatedAt"></div>
   </div>
 </div>
