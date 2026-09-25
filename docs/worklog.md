@@ -4,6 +4,105 @@
 
 ---
 
+## 2026-09-25 対抗戦テーマ画像・綱引きゲージ機能（Phase 0調査〜Phase 1実装・staging確認）
+
+### 実施したこと
+
+1. **事前バックアップ**：新機能着手前の現状バックアップとして、`git tag
+   battle-theme-work-20260924-before`（コミット`0eb01de`）を作成しoriginへpush。
+   前回セッションの未push分（`0eb01de`）も含めて反映を確認した
+2. **Phase 0（読み取り専用調査）**：`C:\Users\Iwamura\Downloads\
+   cheerstick-battle-theme-tugofwar-20260924.md`の指示書に基づき3点を調査し報告：
+   - `events.metadata`（JSONB）がアプリケーションコードから一切使われていないこと
+     （`targets.metadata`との混同無し）
+   - 既存の画像アップロード機能（8.8章、`POST /admin/uploads/image`）がテーマ画像にも
+     そのまま流用可能なこと。ただし本番へは未デプロイ（インフラ準備のみ完了）のままである点
+   - `battle.html`のゲージが2本の独立バーであること、応援量集計ロジック
+     （`getEventIntensityTotal`）自体の変更は不要なこと
+   - 報告時点で気づいた記載漏れとして、`getEventBattleMeta()`のSQLが
+     `events.metadata`列を一切SELECTしていないことも併せて報告した
+3. **Phase 1実装**（KMT様承認後）：
+   - `src/db/cheerstickQueries.js`：`listEventsAdmin()`に`metadata`列を追加、
+     `updateEvent()`に`themeImageUrl`のJSONBマージ/削除処理を追加
+     （`metadata || $x::jsonb`でマージ、falsy値は`metadata - 'themeImageUrl'`で削除）、
+     `getEventBattleMeta()`に`event_a_metadata`/`event_b_metadata`を追加
+   - `src/controllers/adminEventController.js`：`PATCH /admin/events/:id`が
+     `theme_image_url`を受け付けるよう追加
+   - `src/controllers/eventBattleController.js`：スコアAPIレスポンスに
+     `theme_image_url`を追加（試合A優先、試合Bへフォールバック）
+   - `public/admin/events.html`：試合編集モーダルに、masters.htmlと同じ
+     `setupImageUploadWidget()`（common.js）を流用したテーマ画像アップロード欄を追加
+   - `public/battle.html`：テーマ画像設定時のヘッダー画像表示・個別ロゴ/チーム名の
+     非表示化、ゲージを綱引き式の1本バーへ変更（比率計算、0:0時は50:50固定）、
+     「応援強度」ラベルを「pt」表記に変更
+4. **staging確認**：KMT様がTeraTermで確立したSSHトンネル（`localhost:5433`→
+   `cheerstick_staging`）経由でローカルサーバーを起動し、以下を確認：
+   - 画像アップロード機能単体：正常系（PNG、201・URL返却）、拡張子偽装
+     （バイナリはPNGだが`.txt`として送信→400 `UNSUPPORTED_FILE_TYPE`）、
+     ファイル無し（400 `FILE_REQUIRED`）
+   - テーマ画像機能：動作確認用の試合2件・対抗戦ペア1件を作成し、
+     テーマ画像未設定時の`theme_image_url: null`、試合Aへの設定・反映、
+     試合A解除→試合Bへのフォールバック、両方解除時の`null`復帰、
+     `theme_image_url`キーを含まないPATCHでmetadataが変化しない回帰確認、
+     いずれもAPIレベルで確認
+   - ブラウザでの表示確認（claude-in-chrome）：ローカルの`public/`を静的配信しつつ
+     `/api/v1/*`をExpressアプリへプロキシする一時スクリプト（リポジトリ非コミット、
+     `scratchpad`配下）を使い、`battle.html`を実際に描画して確認。テーマ画像表示時に
+     個別ロゴ・チーム名が非表示になること、`fetch`をモックしてtotal_intensityを
+     750:250にした際に綱引きゲージが正しく75:25の位置に表示されること、
+     「pt」表記になっていることを確認した
+5. 確認に使用した試合2件・対抗戦ペア1件は削除・非表示化して原状回復、
+   アップロードしたテスト画像ファイルも削除した
+
+### 判明した事実 / 想定と違ったこと
+
+- **テーマ画像の高さに上限が無いと、画像のアスペクト比によっては画面の大半を
+  占めてしまいレイアウトが崩れる不具合をブラウザ確認中に発見した。** 1x1の
+  テスト画像を使った際に顕在化。`.theme-image`に`max-height: 26vh`を追加して
+  修正した（`max-width: 100%`と組み合わせ、`width: auto; height: auto`で
+  アスペクト比を保持したまま両方の上限内に収める方式に変更）
+- ローカル環境にはExpressの静的ファイル配信（`express.static`）が存在しないため
+  （本番はnginxが静的配信を担当する構成のため、Node側は元々不要）、アップロードAPIが
+  返すURL（`http://localhost:3000/uploads/...`）はローカルでは直接開けない。
+  ブラウザでの見た目確認には、上記4.の一時プロキシスクリプトが別途必要だった
+  （アップロードAPI自体の動作検証には影響しない、局所的な制約）
+- Windows環境のcurlで日本語（マルチバイト文字）を含むJSONを`-d`に直接渡すと
+  文字化けする（シェルのエンコーディングの問題）。UTF-8で保存したJSONファイルを
+  `--data-binary @file`で渡すことで回避した
+- staging DBへのSSHトンネル確立はこれまで同様Claude Code側からは権限上ブロックされ、
+  KMT様にTeraTermでの確立を依頼する運用を今回も踏襲した
+
+### 変更したファイル
+
+- コード：`src/db/cheerstickQueries.js`, `src/controllers/adminEventController.js`,
+  `src/controllers/eventBattleController.js`, `public/admin/events.html`,
+  `public/battle.html`（コミット`19ab571`）
+- ドキュメント：`docs/spec.md`（8.4・9.4章に追記、変更履歴に追記）,
+  `docs/worklog.md`（本エントリ）（別コミット）
+
+### 次回への申し送り（優先度順）
+
+1. **本番デプロイ（KMT様指示により今回はここで一旦停止、最終確認待ち）**：
+   - 画像アップロード機能（8.8章）自体が本番未デプロイのため、`.env`への
+     `UPLOAD_DIR`/`UPLOAD_URL_BASE`追加・`npm install`（multer）・コード反映・
+     `pm2 restart`が必要（`docs/runbook.md`「画像アップロード機能の本番インフラ準備」参照）
+   - 上記に加え、今回のテーマ画像・綱引きゲージ機能一式（コミット`19ab571`）も
+     反映する。コード変更を伴う本番デプロイのため、KMT様指示によりgitタグに加えて
+     `pg_dump`も取得すること
+   - `public/battle.html`・`public/admin/events.html`は静的ファイル2箇所デプロイ問題
+     （`docs/runbook.md`）の対象。反映後は必ず`diff`で反映確認を行うこと
+2. 対抗戦の「どちらのテーマ画像を採用するか」（試合A優先・試合Bフォールバック）の
+   判断について、実運用開始後に問題があれば設計の見直し（例：`event_battles`側へ
+   持たせる）を検討する
+
+### 未解決のまま残した課題
+
+- 上記1.の本番デプロイ一式が未実施
+- テーマ画像・綱引きゲージ以外の既存の未解決課題（Vanstone様確認事項6項目、
+  ニックネーム連番サフィックス等）は前回セッション（2026-09-24エントリ）から変化なし
+
+---
+
 ## 2026-09-24 セッション終了記録：引継ぎ事項の整理（設計判断・Vanstone確認事項・保留課題）
 
 KMT様より`C:\Users\Iwamura\Downloads\cheerstick-handover-instruction-20260924.md`の
