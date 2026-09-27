@@ -4,6 +4,54 @@
 
 ---
 
+## 2026-09-27 nginx worker_connections 本番反映（v16から持ち越しのインフラ課題を解消）
+
+`cheerstick-nginx-worker-connections-20260927.md`（応援合戦デモ環境の再構築・Phase 0確認で
+判明した本番nginxの同時接続上限問題への対応）に基づき、本番`/etc/nginx/nginx.conf`の
+`worker_connections`・`worker_rlimit_nofile`を変更した。
+
+### 実施したこと
+
+- `worker_connections 768;` → `worker_connections 8192;`（eventsブロック内）
+- `worker_rlimit_nofile 32768;` を新規追加（mainコンテキスト、`worker_processes`直後）
+- 値は2026-09-21の負荷試験でm5.large・4,000接続まで確認済みの設定と同一
+- `sites-available`/`sites-enabled`配下の各サイト設定、インスタンスタイプ（t3.micro）、
+  コード・DBは今回変更していない
+
+### 実施の分担
+
+- **STEP 1（読み取り確認）・STEP 2（`nginx.conf`バックアップ作成）はClaude Codeが実施**
+  （SSH経由）。想定どおりの事前状態（`worker_connections 768;`のみ、`worker_rlimit_nofile`未設定）
+  であることを確認した
+- **STEP 3（`sed`による変更）が、Claude Code自動モードの分類器により「Production Deploy」
+  として実行をブロックされた。** このため、STEP 3〜6（変更・構文チェック・reload・反映確認）は
+  岩村様が手動で実施した
+- **権限設定は意図的に変更していない。** 本番書き込みに対する安全装置として、
+  このブロック自体は維持する方針とした
+
+### 手動実施分の結果（岩村様報告、2026-09-27 12:56〜12:58 JST頃）
+
+- `diff`：`worker_rlimit_nofile 32768;`の1行追加と、`worker_connections`の`768`→`8192`の
+  置き換えの2点のみ（想定どおり）
+- `nginx -t`：`syntax is ok` / `test is successful`
+- `systemctl reload nginx`：成功（`ExecReload status=0/SUCCESS`）
+- 変更後のnginx worker open files上限：32768（変更前は soft 1024 / hard 524288）
+- `systemctl status nginx`：`active (running)`
+- `curl`疎通確認：`app.cheerstick.com/index.html`→200、
+  `api.cheerstick.com/api/v1/webview/geturl`→200
+- `/var/log/nginx/error.log`：reload後の新規エラーなし（既存の、admin.cheerstick.comへの
+  スキャンボットアクセスがIP制限で403になったログのみ）
+- バックアップ：`/etc/nginx/nginx.conf.bak_20260927_014832`
+
+### 結果・申し送り
+
+- **v16から持ち越しだった「nginx worker_connectionsの本番反映」は本作業で解消した。**
+- 応援合戦デモ環境（WebARENA VPSから`wss://ws.cheerstick.com/cheer`経由、1,000接続）の
+  前提が整った。次はデモ環境再構築のPhase 1（拮抗演出ロジックの概要提示）へ進む予定
+- 詳細は`docs/runbook.md`本番環境節「nginx本体設定（`/etc/nginx/nginx.conf`）」参照
+
+---
+
 ## 2026-09-26 セッション終了記録：対抗戦画面レイアウト再調整の本番投入完了・スマホ幅懸念の解消確認
 
 ### 実施したこと

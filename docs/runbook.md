@@ -75,6 +75,27 @@ cheerstick-server     pm2 online、ポート3000、REST API + WebSocket 統合�
 > `.envなし・DBアクセスなし・依存関係なし`を確認の上、`pm2 delete` → `pm2 save`、
 > `/home/ubuntu/cheerstick-api`ディレクトリごと削除した（コード変更なし、サーバー側作業のみ）。
 
+### nginx本体設定（`/etc/nginx/nginx.conf`、2026-09-27変更）
+
+```
+worker_connections 768;   → worker_connections 8192;      （eventsブロック内）
+（未設定）                 → worker_rlimit_nofile 32768;   （mainコンテキスト、worker_processesの直後に追加）
+```
+
+- **変更日**：2026-09-27
+- **理由**：2026-09-21の負荷試験で、既定値`worker_connections 768;`では約764接続で
+  頭打ちになることが判明した（WebSocketのプロキシは1クライアントにつきクライアント側・
+  アップストリーム側の2ソケットを消費するため）。同試験でm5.large・`8192`/`32768`の
+  組み合わせにより4,000接続まで動作確認済みの値を、そのまま本番へ適用した。
+  応援合戦デモ環境（WebARENA VPSから`wss://ws.cheerstick.com/cheer`経由、各500台×2＝1,000接続）
+  への対応が直接のきっかけ。v16から持ち越しだった「nginx worker_connectionsの本番反映」課題の解消。
+- **本番インスタンスタイプ（t3.micro）・`sites-available`/`sites-enabled`配下の各サイト設定
+  （cheerstick-api／-app／-ws／-admin）は変更していない。** `nginx.conf`本体の2点のみが対象。
+- **バックアップ**：`/etc/nginx/nginx.conf.bak_20260927_014832`（EC2上）
+- 反映方法は`systemctl reload`（`restart`は未使用。既存接続を切断しない）
+- 反映確認：nginx worker open files上限が32768になったこと、`nginx -t`成功、
+  `app.cheerstick.com`・`api.cheerstick.com`双方への疎通が200であることを確認済み
+
 ### ドメイン・SSL
 
 | ドメイン | 状態 | 証明書有効期限 |
