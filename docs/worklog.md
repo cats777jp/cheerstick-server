@@ -4,6 +4,71 @@
 
 ---
 
+## 2026-09-27 応援合戦デモ Phase 1・Phase 2 実装＋ローカル確認（本番・WebARENA実行はまだ）
+
+`cheerstick-battle-demo-loadtest-setup-20260926.md`（元指示書）の続きとして、
+`cheerstick-battle-demo-phase1-2-impl-20260927.md`の指示に基づき、応援合戦デモの
+Phase 1（デモ本体スクリプト）・Phase 2（本番側準備スクリプト）を実装し、ローカルで
+一気通貫の動作確認まで完了した。**本番EC2・WebARENA VPSでの実行はKMT様の指示があるまで
+行っていない（指示書の範囲どおり）。**
+
+### Phase 0の確定事項（元指示書からの変更点）
+
+| 項目 | 元指示書 | 確定内容 |
+|---|---|---|
+| 本番インスタンス | t3.microと想定 | t3.microで確定（変更しない） |
+| nginx同時接続上限 | 記載なし | `worker_connections 768`→8192、`worker_rlimit_nofile 32768`を2026-09-27に本番反映済み（`b4666c1`） |
+| 接続先URL | `wss://app.cheerstick.com/cheer` | `wss://ws.cheerstick.com/cheer`（app.cheerstick.comは静的配信のみでWSのproxyを持たない） |
+| デバイス登録 | Phase 2で「デバイス登録部分を除く」 | Phase 2でダミーデバイスの事前登録が必要（未登録MACだと`NO_CATEGORY`で応援できない） |
+| 送信シーケンス | connect→select_team→count | 左記で確定。`set_oshi`は既定では送らない（`--set-oshi`で有効化可） |
+| 遅延計測 | — | 今回は実装しない。送信ログ出力（`--sent-log-path`）だけは互換のため残す |
+
+### 実施したこと
+
+- 実装前に指示書1章の前提（`src/websocket/index.js`のメッセージフロー、`CATEGORY_MISMATCH`条件、
+  同一MAC再接続時のcode 4000クローズ、`insertCheerLog`のtarget_id NULL許容、
+  `eventBattleController`のレスポンス形式、`adminEventController`/`adminDeviceController`の
+  管理API仕様）をコードリーディングで確認。食い違いは無かった
+- `scripts/demo/battle-demo-prepare.js`（Phase 2、本番EC2上で実行する想定）：
+  カテゴリー・チームの検索（新規作成はしない）、ダミーデバイスの登録（単体登録API採用、
+  理由は`scripts/demo/README.md`参照）、他のlive試合の`--pause-other-live`によるpause、
+  試合2件・対抗戦ペアの作成、live化、後片付け（`--finish-run`・`--restore`）を実装
+- `scripts/demo/battle-demo.js`（Phase 1、WebARENA VPS等で実行する想定）：
+  `scripts/load-test/load-test.js`の構造を土台に、`connect→select_team→count`シーケンス、
+  「目標比率追従方式」の拮抗演出ロジック（20〜40秒ごとに目標比率0.45〜0.55を再設定し、
+  3秒ごとのスコアAPI取得値との誤差からcountの送信範囲を動的調整。残り30秒は`--finish`で
+  終盤演出）、緊急停止（接続数95%割れ2区間連続、または送信失敗＋サーバーエラー率5%超）、
+  メトリクスのJSONL記録を実装
+- `scripts/demo/local-verify.js`：pg-mem上に実サーバーを起動し、準備スクリプト→デモ
+  スクリプトを一気通貫で確認するハーネスを新設（`scripts/load-test/local-verify.js`と同方式）
+
+### ローカル確認結果（すべてPASS、27項目）
+
+1. 準備スクリプトのdry run・`--yes`実行・2回目実行でデバイスが重複作成されないこと：確認済み
+   （2回目実行は`created=0`、デバイス総数不変。試合・対抗戦ペアは設計どおり毎回新規作成）
+2. `--pause-other-live`で既存live試合がpausedになり、新しい2試合がliveになること：確認済み
+3. 各5台（計10台）でデモスクリプトを実行し、スコアAPIの値が増加すること、目標比率が
+   途中で切り替わることを確認（`--finish=close`はスコアA/Bともに3.6万台まで増加、
+   `actual_ratio_a`が終了直前0.50付近に収束）
+4. `--finish=A`／`B`／`close`それぞれで終盤のスコアが想定側に寄ることを確認
+   （A: a=38480>b=34821、B: b=37791>a=34294、close: 実比率0.5008）
+5. サーバーのWebSocket接続を強制切断し、緊急停止が発動することを確認（「confirmed below 95%
+   ...for 2 consecutive intervals」でexit code 1）。**実装当初、`server.close()`/
+   `closeAllConnections()`だけではWebSocketへアップグレード済みのソケットが切断されないことが
+   判明したため（httpサーバーの接続管理から外れるため）、`wss.clients`を直接`terminate()`する
+   方式に変更した**
+6. `--finish-run`で対象2試合が`finished`になることを確認
+
+ローカル確認で作成したデータはpg-mem（インメモリ）のみで、本番・staging環境には
+一切接続していない。
+
+### 次のステップ
+
+Phase 3（WebARENA VPS環境の構築）・Phase 4（段階的な実行：各50台→250台→500台）は、
+KMT様の指示を受けてから着手する。
+
+---
+
 ## 2026-09-27 nginx worker_connections 本番反映（v16から持ち越しのインフラ課題を解消）
 
 `cheerstick-nginx-worker-connections-20260927.md`（応援合戦デモ環境の再構築・Phase 0確認で
