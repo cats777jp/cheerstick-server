@@ -24,6 +24,13 @@
 - 送信シーケンスは `connect → select_team → count`（`register`・`set_oshi`は送らない。`--set-oshi`指定時のみ`set_oshi`を追加）
 - 遅延計測（本番DBとの突合）は今回未実装。`--sent-log-path`で送信時刻ログのみ出力可能（互換のため残してある）
 
+## 管理API・公開APIのレート制限（500リクエスト/15分、2026-09-28追記）
+
+`src/app.js`の`express-rate-limit`により、`/api/v1`配下（管理API・公開APIとも）は**同一クライアントIPから15分間に500リクエストまで**に制限されている（`trust proxy 1`設定、`RateLimit-Policy: 500;w=900`ヘッダーで確認可能）。
+
+- **`battle-demo-prepare.js`への影響：** 本番EC2上からnginxを経由せず`127.0.0.1:3000`へ直接アクセスするため、`trust proxy`によるクライアントIP分離が効かず、実行中の全リクエストが`127.0.0.1`という同一キーに積み上がる。デバイス登録台数が多い実行（例：1,000台の新規作成）では、実際に2026-09-28にHTTP 429で停止する事象が発生した。現在は429を受けると`Retry-After`の秒数（+5秒）だけ待って自動的にリトライする（下記「デバイス登録の実装方式について」参照）。dry runを含め、実行前に今回のAPIリクエスト見込み数を表示する（`[prepare] request estimate for this run: ...`）。
+- **`battle.html`（対抗戦画面）・公開APIへの影響：** ブラウザは実際のクライアントIPごとに制限が数えられるため、通常のインターネット経由アクセスでは問題にならない。ただし`battle.html`は3秒ごとにスコアAPIをポーリングするため、**1タブで15分あたり300リクエストを消費する。同一IP（同一拠点・同一NAT配下）から複数タブを開くと、2タブ目以降で429に達する可能性がある。** 会場等、多数の端末が同一回線（同一の公開IP）を共有する環境で対抗戦画面を表示する場合は、**同じIPからは1タブのみ開く**運用とすること（複数拠点・複数画面で表示したい場合は、別回線・別IPから開く）。429を受けた場合、画面は「サーバーに接続できません。再試行しています…」と表示したまま3秒間隔のポーリングを継続する（`public/battle.html`の`poll()`、致命エラーにはしない設計）。
+
 ## battle-demo-prepare.js（本番EC2上で実行）
 
 本番EC2上から `http://127.0.0.1:3000/api/v1/admin/...` の管理APIを呼ぶ方式（nginxのIP制限を経由しない、DBへは直接接続しない）。**既定はdry run。`--yes`を付けたときだけ実際に書き込む。**
@@ -62,8 +69,14 @@ node scripts/demo/battle-demo-prepare.js --yes --pause-other-live
 
 - CSV取込（`POST /admin/devices/import`）は`category_id`/`is_demo`をその場で設定できない設計（取込後に`PATCH /admin/devices/bulk`で確定する2段階運用、`adminDeviceController.js`のコメント参照）
 - 一括更新（`PATCH /admin/devices/bulk`）の`filter.mac`はILIKE部分一致で、下位2バイトが256の倍数を跨ぐ範囲（例：499台目は5バイト目が繰り上がる）を安全に絞り込みにくい
-- 単体登録APIは`category_id`/`is_demo`を作成時に直接指定でき、既存なら`GET /admin/devices?mac=<mac>`で比較して`PATCH`する冪等処理が素直に書ける。リクエストサイズ上限（`express.json`の16kb）も単体登録なら関係しない
+- 単体登録APIは`category_id`/`is_demo`を作成時に直接指定できる。リクエストサイズ上限（`express.json`の16kb）も単体登録なら関係しない
 - 1,000台分の登録は20並列でHTTPリクエストを送る（`CREATE_CONCURRENCY`定数）
+
+**既存デバイスの確認方式（2026-09-28変更）：** 当初は1台ずつ`GET`（またはPOST 409時に`GET`）で確認していたが、台数分だけAPIリクエストを消費し上記のレート制限に達しやすいため、`mac`部分一致（ILIKE、`GET /admin/devices?mac=<prefix>&page_size=200`）で対象prefix配下をページングしてまとめて取得する方式（`fetchExistingDevicesByPrefix`）に変更した。個別`GET`は、まとめて取得した後に他プロセスが同じMACを作成した場合（`POST`が409を返す稀なレース）のフォールバックとしてのみ残している。
+
+**429対応：** `apiCall`がHTTP 429を受けると、レスポンスの`Retry-After`秒数に5秒（`RETRY_AFTER_BUFFER_SEC`）を足した時間だけ待ち、同じリクエストを自動的にやり直す。待機中は30秒（`RETRY_LOG_INTERVAL_SEC`）ごとに残り秒数をログへ出す。
+
+**見込みリクエスト数の表示：** dry run・`--yes`のいずれでも、デバイスの作成/更新/スキップ件数が確定した時点（まとめて取得の直後）で、今回の実行が消費するAPIリクエスト数の見込みを`[prepare] request estimate for this run: ...`として表示する。500を超える場合は、429で待機しながら実行を継続する前提である旨も表示する。
 
 ### 後片付け（デモ終了後）
 

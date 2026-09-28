@@ -32,6 +32,14 @@ const DEFAULT_TEAM_B_START_INDEX = 0x8000; // 32768
 // このバトルのテーマ画像を引き継ぐ（公開スコアAPI経由、読み取りのみ）。
 const PERMANENT_DEMO_BATTLE_ID = '3d909ed3-3207-4222-a6f9-a6c39980b910';
 const CREATE_CONCURRENCY = 20;
+// 管理API（src/app.js）のレート制限は500リクエスト/15分（トークンではなく固定ウィンドウ）。
+// 127.0.0.1:3000へ直接アクセスする本スクリプトはtrust proxy越しのクライアントIP分離が
+// 効かず、全リクエストが同一キー（127.0.0.1）に積み上がるため、デバイス登録が多い実行では
+// 途中でHTTP 429を受ける前提で動作する（2026-09-28、実運用で確認済み。詳細は
+// scripts/demo/README.md参照）。
+const RETRY_AFTER_BUFFER_SEC = 5; // Retry-Afterの秒数に上乗せする余裕（指示書どおり「+数秒」）
+const RETRY_LOG_INTERVAL_SEC = 30; // 429待機中、残り秒数をログに出す間隔
+const DEVICE_LIST_PAGE_SIZE = 200; // src/controllers/adminDeviceController.js の MAX_PAGE_SIZE
 
 function parseArgs(argv) {
   const args = {
@@ -77,19 +85,48 @@ function parseArgs(argv) {
 }
 
 // --- HTTP helper -------------------------------------------------------------
-async function apiCall(apiBase, method, path, body) {
-  const res = await fetch(`${apiBase}${path}`, {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  let json = null;
-  try {
-    json = await res.json();
-  } catch (err) {
-    // レスポンスボディが無い/JSONでない場合はnullのまま
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// HTTP 429（レート制限）を受けたら、Retry-Afterの秒数（+RETRY_AFTER_BUFFER_SEC秒）だけ
+// 待ってから同じリクエストをやり直す。待機中はRETRY_LOG_INTERVAL_SECごとに残り秒数を
+// ログへ出す。Retry-Afterが無い/数値でない場合は60秒を仮定する。
+async function waitForRateLimit(retryAfterHeader, context) {
+  const retryAfterSec = Math.max(parseInt(retryAfterHeader, 10), 0) || 60;
+  let remaining = retryAfterSec + RETRY_AFTER_BUFFER_SEC;
+  console.log(`[prepare] HTTP 429 (rate limited) on ${context}; waiting ${remaining}s before retrying`);
+  while (remaining > 0) {
+    const step = Math.min(remaining, RETRY_LOG_INTERVAL_SEC);
+    await sleep(step * 1000);
+    remaining -= step;
+    if (remaining > 0) {
+      console.log(`[prepare] still waiting on rate limit (${context}): ${remaining}s remaining`);
+    }
   }
-  return { status: res.status, ok: res.ok, body: json };
+  console.log(`[prepare] resuming ${context} after rate-limit wait`);
+}
+
+async function apiCall(apiBase, method, path, body) {
+  const context = `${method} ${path}`;
+  for (;;) {
+    const res = await fetch(`${apiBase}${path}`, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 429) {
+      await waitForRateLimit(res.headers.get('retry-after'), context);
+      continue;
+    }
+    let json = null;
+    try {
+      json = await res.json();
+    } catch (err) {
+      // レスポンスボディが無い/JSONでない場合はnullのまま
+    }
+    return { status: res.status, ok: res.ok, body: json };
+  }
 }
 
 async function mapWithConcurrency(items, concurrency, fn) {
@@ -167,13 +204,58 @@ async function pauseLiveEvents(apiBase, events, yes) {
 // 理由：CSV取込（POST /admin/devices/import）はcategory_id/is_demoをその場で設定できず
 // （2段階運用：取込後にPATCH /admin/devices/bulkで確定する設計、adminDeviceController.js
 // のコメント参照）、bulk側のmacQueryはILIKE部分一致で下位2バイトの跨ぎを扱いにくい。
-// 単体登録APIはcategory_id/is_demoを作成時に直接指定でき、1台ずつの冪等処理
-// （既存ならGETで比較しPATCH、無ければPOST）が素直に書けるため、今回はこちらを選んだ。
-// リクエストサイズ上限（16kb、express.json）の制約も単体登録なら関係しない。
-async function ensureDevice(apiBase, mac, categoryId, yes) {
-  if (!yes) {
-    return { mac, action: 'dry-run', applied: false };
+// 単体登録APIはcategory_id/is_demoを作成時に直接指定でき、1台ずつの冪等処理が素直に
+// 書けるため、今回はこちらを選んだ。リクエストサイズ上限（16kb、express.json）の制約も
+// 単体登録なら関係しない。
+//
+// 既存デバイスの確認は、2026-09-28以前は1台ずつGET（またはPOST 409時にGET）していたが、
+// 台数分だけAPIリクエストを消費しレート制限（500req/15分、src/app.js）に達しやすいため、
+// mac部分一致（ILIKE、src/db/cheerstickQueries.js listDevicesAdmin）を使い、対象prefix配下を
+// ページング（DEVICE_LIST_PAGE_SIZE件ずつ）でまとめて取得する方式に変更した。
+
+async function fetchExistingDevicesByPrefix(apiBase, macPrefix) {
+  const existing = new Map();
+  let page = 1;
+  let total = Infinity;
+  let fetched = 0;
+  for (;;) {
+    const { ok, body } = await apiCall(
+      apiBase, 'GET',
+      `/admin/devices?mac=${encodeURIComponent(macPrefix)}&page=${page}&page_size=${DEVICE_LIST_PAGE_SIZE}`
+    );
+    if (!ok) throw new Error(`GET /admin/devices (mac=${macPrefix}, page=${page}) failed: ${JSON.stringify(body)}`);
+    const rows = body.devices || [];
+    for (const row of rows) existing.set(row.mac_address, row);
+    total = typeof body.total === 'number' ? body.total : rows.length;
+    fetched += rows.length;
+    if (rows.length === 0 || fetched >= total) break;
+    page += 1;
   }
+  return existing;
+}
+
+async function ensureDevice(apiBase, mac, categoryId, yes, existingMap) {
+  const row = existingMap.get(mac);
+  const alreadyOk = !!row && row.category_id === categoryId && row.is_demo === true;
+
+  if (!yes) {
+    if (alreadyOk) return { mac, action: 'dry-run(already-ok)', applied: false };
+    return { mac, action: row ? 'dry-run(would-update)' : 'dry-run(would-create)', applied: false };
+  }
+
+  if (alreadyOk) {
+    return { mac, action: 'skipped(already-ok)', applied: false };
+  }
+
+  if (row) {
+    const patched = await apiCall(apiBase, 'PATCH', `/admin/devices/${row.id}`, {
+      category_id: categoryId,
+      is_demo: true,
+    });
+    if (!patched.ok) throw new Error(`failed to update device ${mac}: ${JSON.stringify(patched.body)}`);
+    return { mac, action: 'updated', applied: true };
+  }
+
   const created = await apiCall(apiBase, 'POST', '/admin/devices', {
     mac_address: mac,
     category_id: categoryId,
@@ -183,15 +265,16 @@ async function ensureDevice(apiBase, mac, categoryId, yes) {
     return { mac, action: 'created', applied: true };
   }
   if (created.status === 409) {
-    // 既存デバイス：現在の値を確認し、違えばPATCHする。
-    const existing = await apiCall(apiBase, 'GET', `/admin/devices?mac=${encodeURIComponent(mac)}&page_size=5`);
-    if (!existing.ok) throw new Error(`failed to look up existing device ${mac}: ${JSON.stringify(existing.body)}`);
-    const row = (existing.body.devices || []).find((d) => d.mac_address === mac);
-    if (!row) throw new Error(`device ${mac} reported as existing (409) but not found by exact lookup`);
-    if (row.category_id === categoryId && row.is_demo === true) {
+    // 稀なレース対策：まとめて取得した一覧の後に他プロセスが同じMACを作成した場合のみ、
+    // 該当1件だけを個別に確認する（通常経路ではここには来ない）。
+    const existingLookup = await apiCall(apiBase, 'GET', `/admin/devices?mac=${encodeURIComponent(mac)}&page_size=5`);
+    if (!existingLookup.ok) throw new Error(`failed to look up existing device ${mac}: ${JSON.stringify(existingLookup.body)}`);
+    const foundRow = (existingLookup.body.devices || []).find((d) => d.mac_address === mac);
+    if (!foundRow) throw new Error(`device ${mac} reported as existing (409) but not found by exact lookup`);
+    if (foundRow.category_id === categoryId && foundRow.is_demo === true) {
       return { mac, action: 'skipped(already-ok)', applied: false };
     }
-    const patched = await apiCall(apiBase, 'PATCH', `/admin/devices/${row.id}`, {
+    const patched = await apiCall(apiBase, 'PATCH', `/admin/devices/${foundRow.id}`, {
       category_id: categoryId,
       is_demo: true,
     });
@@ -201,22 +284,22 @@ async function ensureDevice(apiBase, mac, categoryId, yes) {
   throw new Error(`failed to create device ${mac}: HTTP ${created.status} ${JSON.stringify(created.body)}`);
 }
 
-async function ensureDevices(apiBase, prefix, startIndex, count, categoryId, yes, label) {
+async function ensureDevices(apiBase, prefix, startIndex, count, categoryId, yes, label, existingMap) {
   const macs = Array.from({ length: count }, (_, i) => macForIndex(prefix, startIndex + i));
   console.log(
     `[prepare] ${label}: ${count} devices, mac ${macs[0]} .. ${macs[macs.length - 1]} ` +
     `(${yes ? 'applying' : 'dry run'})`
   );
-  const results = await mapWithConcurrency(macs, CREATE_CONCURRENCY, (mac) => ensureDevice(apiBase, mac, categoryId, yes));
+  const results = await mapWithConcurrency(macs, CREATE_CONCURRENCY, (mac) => ensureDevice(apiBase, mac, categoryId, yes, existingMap));
   const summary = { created: 0, updated: 0, skipped: 0, dryRun: 0 };
   for (const r of results) {
     if (r.action === 'created') summary.created++;
     else if (r.action === 'updated') summary.updated++;
-    else if (r.action === 'dry-run') summary.dryRun++;
+    else if (r.action.startsWith('dry-run')) summary.dryRun++;
     else summary.skipped++;
   }
   console.log(`[prepare] ${label} result:`, JSON.stringify(summary));
-  return { macs, summary };
+  return { macs, results, summary };
 }
 
 async function fetchThemeImageUrl(apiBase, battleId) {
@@ -302,11 +385,47 @@ async function runPrepare(args) {
     }
   }
 
+  console.log(`[prepare] fetching existing devices for prefix "${args.macPrefix}" (bulk, page_size=${DEVICE_LIST_PAGE_SIZE})...`);
+  const existingMap = await fetchExistingDevicesByPrefix(args.apiBase, args.macPrefix);
+  console.log(`[prepare] found ${existingMap.size} existing device(s) matching prefix "${args.macPrefix}"`);
+
+  const plannedMacsA = Array.from({ length: args.devicesPerTeam }, (_, i) => macForIndex(args.macPrefix, i));
+  const plannedMacsB = Array.from({ length: args.devicesPerTeam }, (_, i) => macForIndex(args.macPrefix, args.teamBStartIndex + i));
+  let willCreate = 0;
+  let willUpdate = 0;
+  let willSkip = 0;
+  for (const mac of [...plannedMacsA, ...plannedMacsB]) {
+    const row = existingMap.get(mac);
+    if (!row) willCreate++;
+    else if (row.category_id === category.id && row.is_demo === true) willSkip++;
+    else willUpdate++;
+  }
+  // レート制限（500req/15分、src/app.js）の見込み消費数。ここまでの実際の呼び出し回数
+  // （pauseの適用分を含む）とこれからの見込みを足し合わせる。
+  const pauseCallsSoFar = args.yes ? pauseResult.filter((c) => c.applied).length : 0;
+  const fixedCallsSoFar = 1 /* categories */ + 2 /* organizations */ + 1 /* events list */ + pauseCallsSoFar;
+  const deviceListPages = Math.max(1, Math.ceil((existingMap.size || 1) / DEVICE_LIST_PAGE_SIZE));
+  const remainingFixedCalls = 1 /* theme fetch */ + 2 /* create event A/B */ + 1 /* theme set */ + 1 /* create battle */ + 2 /* set live x2 */;
+  const estimatedTotal = fixedCallsSoFar + deviceListPages + willCreate + willUpdate + remainingFixedCalls;
+  console.log(
+    '[prepare] request estimate for this run: ' +
+    `device writes(create=${willCreate}, update=${willUpdate}, skip=${willSkip}), ` +
+    `device-list pages=${deviceListPages}, other fixed calls≈${fixedCallsSoFar + remainingFixedCalls}, ` +
+    `total≈${estimatedTotal} requests (excludes 429リトライ分)`
+  );
+  if (estimatedTotal > 500) {
+    console.log(
+      '[prepare] note: total exceeds the 500req/15min admin API rate limit (src/app.js). ' +
+      'This run is expected to hit HTTP 429 at least once; it will wait on Retry-After and resume automatically ' +
+      '(see scripts/demo/README.md).'
+    );
+  }
+
   const teamAResult = await ensureDevices(
-    args.apiBase, args.macPrefix, 0, args.devicesPerTeam, category.id, args.yes, 'team A devices'
+    args.apiBase, args.macPrefix, 0, args.devicesPerTeam, category.id, args.yes, 'team A devices', existingMap
   );
   const teamBResult = await ensureDevices(
-    args.apiBase, args.macPrefix, args.teamBStartIndex, args.devicesPerTeam, category.id, args.yes, 'team B devices'
+    args.apiBase, args.macPrefix, args.teamBStartIndex, args.devicesPerTeam, category.id, args.yes, 'team B devices', existingMap
   );
 
   const themeImageUrl = args.themeImageUrl || await fetchThemeImageUrl(args.apiBase, args.themeSourceBattleId);
