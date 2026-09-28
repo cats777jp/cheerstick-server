@@ -92,19 +92,36 @@ function sleep(ms) {
 // HTTP 429（レート制限）を受けたら、Retry-Afterの秒数（+RETRY_AFTER_BUFFER_SEC秒）だけ
 // 待ってから同じリクエストをやり直す。待機中はRETRY_LOG_INTERVAL_SECごとに残り秒数を
 // ログへ出す。Retry-Afterが無い/数値でない場合は60秒を仮定する。
+//
+// CREATE_CONCURRENCY（20並列）で同時に多数のリクエストを投げているため、レート制限に
+// 達した瞬間は複数の呼び出しがほぼ同時に429を受ける。各呼び出しが個別に待機・ログ出力すると
+// 同じ内容が並列数だけ（最大20行）重複して出力されてしまうため、待機中の呼び出しが
+// 既にあればそれに相乗りし（activeWaitを共有）、ログは最初の1件のみが出す
+// （2026-09-28、ログの重複出力を1回にまとめる修正。待機の動作自体は変えていない）。
+let activeWait = null;
 async function waitForRateLimit(retryAfterHeader, context) {
+  if (activeWait) {
+    return activeWait;
+  }
   const retryAfterSec = Math.max(parseInt(retryAfterHeader, 10), 0) || 60;
   let remaining = retryAfterSec + RETRY_AFTER_BUFFER_SEC;
   console.log(`[prepare] HTTP 429 (rate limited) on ${context}; waiting ${remaining}s before retrying`);
-  while (remaining > 0) {
-    const step = Math.min(remaining, RETRY_LOG_INTERVAL_SEC);
-    await sleep(step * 1000);
-    remaining -= step;
-    if (remaining > 0) {
-      console.log(`[prepare] still waiting on rate limit (${context}): ${remaining}s remaining`);
+  activeWait = (async () => {
+    while (remaining > 0) {
+      const step = Math.min(remaining, RETRY_LOG_INTERVAL_SEC);
+      await sleep(step * 1000);
+      remaining -= step;
+      if (remaining > 0) {
+        console.log(`[prepare] still waiting on rate limit (${context}): ${remaining}s remaining`);
+      }
     }
+    console.log(`[prepare] resuming ${context} after rate-limit wait`);
+  })();
+  try {
+    await activeWait;
+  } finally {
+    activeWait = null;
   }
-  console.log(`[prepare] resuming ${context} after rate-limit wait`);
 }
 
 async function apiCall(apiBase, method, path, body) {

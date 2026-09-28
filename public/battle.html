@@ -167,6 +167,15 @@
     margin-top: 10px;
   }
 
+  /* ゲージ「直近の勢い」表示（&gauge=recent、2026-09-28追加）：既定（従来方式）では
+     常にhiddenのまま。gauge=recent指定時のみJS側でhiddenを外し、テキストを設定する。 */
+  #gaugeModeLabel {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: -12px 0 8px;
+  }
+
   #loadingState, #errorState {
     display: flex;
     flex: 1;
@@ -192,6 +201,7 @@
     <img id="themeImage" class="theme-image" alt="" hidden>
     <div id="label"></div>
     <div id="tugGauge"><div id="tugFillA"></div><div id="tugFillB"></div></div>
+    <div id="gaugeModeLabel" hidden></div>
     <div id="battleGrid">
       <div id="panelA" class="team-panel">
         <div id="logoWrapA"></div>
@@ -219,14 +229,42 @@
     ? '/api/v1'
     : 'https://api.cheerstick.com/api/v1';
 
-  const POLL_INTERVAL_MS = 3000;
+  const DEFAULT_POLL_INTERVAL_MS = 3000;
 
-  const battleId = new URLSearchParams(location.search).get('battle_id');
+  const urlParams = new URLSearchParams(location.search);
+  const battleId = urlParams.get('battle_id');
+
+  // URLパラメータ（ゲージ「直近の勢い」表示、2026-09-28追加）。
+  // パラメータを付けない場合、gaugeMode='cumulative'・pollIntervalMs=3000となり、
+  // 従来どおりの表示・挙動になる（1章「変更してはいけないこと」）。
+  function clampNum(n, min, max) {
+    return Math.min(Math.max(n, min), max);
+  }
+  // 数値でない場合は既定値に戻す。数値だが範囲外の場合は範囲内にclampする
+  // （指示書2-2：「不正な値は既定値に戻す」＝非数値、「5〜120の範囲に収める」等＝範囲外の数値）。
+  function parseParamNumber(name, defaultValue, min, max) {
+    const raw = urlParams.get(name);
+    if (raw === null) return defaultValue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return defaultValue;
+    return clampNum(n, min, max);
+  }
+
+  const gaugeMode = urlParams.get('gauge') === 'recent' ? 'recent' : 'cumulative';
+  const gaugeWindowSec = parseParamNumber('window', 15, 5, 120);
+  const gaugeAmp = parseParamNumber('amp', 3, 1, 10);
+  const pollIntervalMs = parseParamNumber('poll', DEFAULT_POLL_INTERVAL_MS, 1000, 10000);
 
   const loadingState = document.getElementById('loadingState');
   const errorState = document.getElementById('errorState');
   const battleContent = document.getElementById('battleContent');
   const connErrorBanner = document.getElementById('connErrorBanner');
+  const gaugeModeLabel = document.getElementById('gaugeModeLabel');
+
+  if (gaugeMode === 'recent') {
+    gaugeModeLabel.textContent = `勢い（直近${gaugeWindowSec}秒）`;
+    gaugeModeLabel.hidden = false;
+  }
 
   function showFatalError(message) {
     loadingState.hidden = true;
@@ -340,12 +378,15 @@
 
     // 綱引き式ゲージ（2026-09-25変更）：自チーム比率 = 自チーム応援量 / (両チーム応援量の合計)。
     // 両チームとも0の場合はゼロ除算を避けるため50:50固定とする。
-    const totalA = data.team_a.total_intensity;
-    const totalB = data.team_b.total_intensity;
-    const sum = totalA + totalB;
-    const ratioA = sum > 0 ? totalA / sum : 0.5;
-    document.getElementById('tugFillA').style.width = `${(ratioA * 100).toFixed(2)}%`;
-    document.getElementById('tugFillB').style.width = `${((1 - ratioA) * 100).toFixed(2)}%`;
+    // gauge=recent指定時は、ここでは計算しない（poll()側でupdateGaugeRecent()の結果を適用する。
+    // 「直近の勢い」表示、2026-09-28追加）。
+    if (gaugeMode !== 'recent') {
+      const totalA = data.team_a.total_intensity;
+      const totalB = data.team_b.total_intensity;
+      const sum = totalA + totalB;
+      const ratioA = sum > 0 ? totalA / sum : 0.5;
+      applyGaugeWidth(ratioA);
+    }
 
     document.getElementById('updatedAt').textContent =
       '最終更新: ' + new Date(data.updated_at).toLocaleTimeString('ja-JP');
@@ -355,10 +396,65 @@
     battleContent.hidden = false;
   }
 
+  function applyGaugeWidth(ratioA) {
+    document.getElementById('tugFillA').style.width = `${(ratioA * 100).toFixed(2)}%`;
+    document.getElementById('tugFillB').style.width = `${((1 - ratioA) * 100).toFixed(2)}%`;
+  }
+
+  // ゲージ「直近の勢い」表示（gauge=recent、2026-09-28追加）。
+  //
+  // 設計上の判断：指示書2-3の手順どおりに実装すると、「dA+dBが小さすぎる場合は直前の
+  // ゲージ位置をそのまま保持する」処理と「リーダーは累計の多い方」処理が同じタイミングで
+  // まとめて更新される形になり、理論上（ごく僅かな差でdA+dBが1未満に収まる場面）保持中の
+  // ゲージが示す側と、その瞬間の累計値（pt）の多い側が食い違いうる。指示書の不変条件
+  // 「ゲージが優勢な側と、ptの多い側が食い違うことは無い」を厳密に満たすため、
+  // 「保持」の対象を最終的なゲージ位置そのものではなく、リーダー側への押し込み幅
+  // （0〜0.5、amp適用後）とし、**リーダー自体は毎回、生の累計値（a・b）から判定**する
+  // （同点のときのみ直前のリーダーを保持。指示書どおり）設計に変更した。
+  const gaugeRecentState = {
+    history: [], // [{t, a, b}]（cheered_atではなくポーリング受信時刻を使う）
+    leader: null, // 'A' | 'B' | null（同点継続中で未確定の場合）
+    lastMagnitude: 0, // 直前の押し込み幅（0〜0.5）。dA+dBが小さすぎる場合に保持する
+  };
+
+  function updateGaugeRecent(totalA, totalB, now) {
+    const state = gaugeRecentState;
+    state.history.push({ t: now, a: totalA, b: totalB });
+
+    // window秒より古い履歴を捨てる。ただし窓の開始時点をまたぐ直前の1件は
+    // 補間のため残す（指示書2-3-1）。
+    const cutoffMs = now - gaugeWindowSec * 1000;
+    while (state.history.length > 2 && state.history[1].t <= cutoffMs) {
+      state.history.shift();
+    }
+
+    // リーダーは常に生の累計値から判定する（同点の場合のみ直前のリーダーを保持）。
+    if (totalA > totalB) state.leader = 'A';
+    else if (totalB > totalA) state.leader = 'B';
+
+    const oldest = state.history[0];
+    const dA = totalA - oldest.a;
+    const dB = totalB - oldest.b;
+    const total = dA + dB;
+
+    if (state.history.length >= 2 && total >= 1) {
+      const shareA = dA / total;
+      const shareL = state.leader === 'A' ? shareA : state.leader === 'B' ? (1 - shareA) : 0.5;
+      const gaugeL = clampNum(0.5 + (shareL - 0.5) * gaugeAmp, 0.5, 1.0);
+      state.lastMagnitude = gaugeL - 0.5;
+    }
+    // total < 1、または履歴1件のみ（初回）の場合は、lastMagnitudeを更新せず保持する。
+
+    if (state.leader === null) return 0.5; // 初回・同点継続中で未確定
+    const gaugeL = 0.5 + state.lastMagnitude;
+    return state.leader === 'A' ? gaugeL : (1 - gaugeL);
+  }
+
   let stopped = false;
 
   async function poll() {
     if (stopped) return;
+    let nextDelayMs = pollIntervalMs;
     try {
       const res = await fetch(`${API_BASE}/event-battles/${battleId}/score`);
       if (res.status === 404) {
@@ -371,12 +467,25 @@
         stopped = true;
         return;
       }
+      if (res.status === 429) {
+        // レート制限（大規模イベント対応トラックA、2026-09-28）：最後の表示を保持したまま、
+        // Retry-Afterがあればその秒数（上限60秒）待ってから再開する。無ければ通常間隔のまま。
+        const retryAfterHeader = res.headers.get('retry-after');
+        const retryAfterSec = retryAfterHeader ? Math.min(parseInt(retryAfterHeader, 10) || 0, 60) : 0;
+        if (retryAfterSec > 0) nextDelayMs = retryAfterSec * 1000;
+        showConnError('更新待機中（アクセス制限）');
+        return;
+      }
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
       clearConnError();
       render(data);
+      if (gaugeMode === 'recent') {
+        const ratioA = updateGaugeRecent(data.team_a.total_intensity, data.team_b.total_intensity, Date.now());
+        applyGaugeWidth(ratioA);
+      }
     } catch (e) {
       // 一時的な通信断は致命エラーにせず、直前の表示を保持したまま次回ポーリングへ続ける
       if (!battleContent.hidden) {
@@ -386,7 +495,7 @@
         stopped = true;
       }
     } finally {
-      if (!stopped) setTimeout(poll, POLL_INTERVAL_MS);
+      if (!stopped) setTimeout(poll, nextDelayMs);
     }
   }
 

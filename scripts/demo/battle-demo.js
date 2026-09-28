@@ -50,6 +50,18 @@ const MAX_INTENSITY = 100;
 const CONNECTION_LOW_CONSECUTIVE_INTERVALS = 2; // 目標の95%を下回る状態が何区間連続したら停止するか
 const CONNECTION_LOW_RATIO = 0.95;
 
+// "low-high" 形式の文字列を [low, high] へ変換する（--burst-interval-sec等で使用）。
+function parseRange(str, name) {
+  const m = /^(-?[\d.]+)-(-?[\d.]+)$/.exec(str || '');
+  if (!m) throw new Error(`--${name} must be in the form "low-high" (got ${JSON.stringify(str)})`);
+  const lo = parseFloat(m[1]);
+  const hi = parseFloat(m[2]);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) {
+    throw new Error(`--${name} must have low <= high (got ${JSON.stringify(str)})`);
+  }
+  return [lo, hi];
+}
+
 function parseArgs(argv) {
   const args = {
     battleId: null,
@@ -69,6 +81,10 @@ function parseArgs(argv) {
     metricsLogPath: null,
     sentLogPath: null,
     stopThreshold: 0.05,
+    burst: false,
+    burstIntervalSec: [20, 40],
+    burstDurationSec: [10, 20],
+    targetRange: [RATIO_MIN, RATIO_MAX],
   };
   for (const raw of argv) {
     const m = /^--([^=]+)(?:=(.*))?$/.exec(raw);
@@ -97,6 +113,10 @@ function parseArgs(argv) {
       case 'metrics-log-path': args.metricsLogPath = value; break;
       case 'sent-log-path': args.sentLogPath = value; break;
       case 'stop-threshold': args.stopThreshold = parseFloat(value); break;
+      case 'burst': args.burst = true; break;
+      case 'burst-interval-sec': args.burstIntervalSec = parseRange(value, 'burst-interval-sec'); break;
+      case 'burst-duration-sec': args.burstDurationSec = parseRange(value, 'burst-duration-sec'); break;
+      case 'target-range': args.targetRange = parseRange(value, 'target-range'); break;
       default:
         throw new Error(`unknown option: --${key}`);
     }
@@ -150,7 +170,11 @@ class BattleRatio {
     this.scoreA = 0;
     this.scoreB = 0;
     this.inFinishWindow = false;
+    this.burstActive = false;
+    this.burstTeam = null;
+    this.lastBurstTeam = null;
     this._scheduleNextTargetChange();
+    if (this.ctx.args.burst) this._scheduleNextBurst();
   }
 
   _scheduleNextTargetChange() {
@@ -167,11 +191,40 @@ class BattleRatio {
     const currentlyAbove = this.targetRatioA >= 0.5;
     const goOpposite = Math.random() < OPPOSITE_SIDE_BIAS;
     const wantAbove = goOpposite ? !currentlyAbove : currentlyAbove;
-    const half = (RATIO_MAX - RATIO_MIN) / 2;
-    const mid = (RATIO_MIN + RATIO_MAX) / 2;
+    const [rangeMin, rangeMax] = this.ctx.args.targetRange;
+    const half = (rangeMax - rangeMin) / 2;
+    const mid = (rangeMin + rangeMax) / 2;
     this.targetRatioA = wantAbove
       ? mid + Math.random() * half
       : mid - Math.random() * half;
+  }
+
+  // 猛攻演出（--burst、2026-09-28追加）：累計に頼らず勢いに変化をつけるための任意オプション。
+  // 猛攻中は目標比率への追従（getRange()の通常ロジック）を止め、固定レンジを返す。
+  _scheduleNextBurst() {
+    const [lo, hi] = this.ctx.args.burstIntervalSec;
+    const delay = (lo + Math.random() * (hi - lo)) * 1000;
+    this.burstScheduleTimer = setTimeout(() => {
+      if (this.ctx.stopping || this.inFinishWindow) return; // 終盤は猛攻を再開しない
+      this._startBurst();
+    }, delay);
+  }
+
+  _startBurst() {
+    // A・Bを交互に選ぶ（初回のみランダム）。
+    this.burstTeam = this.lastBurstTeam === null
+      ? (Math.random() < 0.5 ? 'A' : 'B')
+      : (this.lastBurstTeam === 'A' ? 'B' : 'A');
+    this.lastBurstTeam = this.burstTeam;
+    this.burstActive = true;
+
+    const [lo, hi] = this.ctx.args.burstDurationSec;
+    const durationMs = (lo + Math.random() * (hi - lo)) * 1000;
+    this.burstEndTimer = setTimeout(() => {
+      this.burstActive = false;
+      this.burstTeam = null;
+      this._scheduleNextBurst();
+    }, durationMs);
   }
 
   enterFinishWindowIfDue(msRemaining) {
@@ -179,6 +232,11 @@ class BattleRatio {
     if (this.inFinishWindow) return;
     this.inFinishWindow = true;
     if (this.targetChangeTimer) clearTimeout(this.targetChangeTimer);
+    // 終盤（残り30秒）は猛攻を止め、既定の終盤演出（--finish）を優先する。
+    if (this.burstScheduleTimer) clearTimeout(this.burstScheduleTimer);
+    if (this.burstEndTimer) clearTimeout(this.burstEndTimer);
+    this.burstActive = false;
+    this.burstTeam = null;
     this._applyFinishTarget();
   }
 
@@ -222,6 +280,10 @@ class BattleRatio {
 
   // team: 'A' | 'B'。その時点の目標・実績の差から送信するintensityの範囲を返す。
   getRange(team) {
+    if (this.burstActive) {
+      // 猛攻中：目標比率への追従は止め、猛攻中のチームは80〜100、相手は1〜20を固定で返す。
+      return team === this.burstTeam ? [80, 100] : [1, 20];
+    }
     const e = this.targetRatioA - this.actualRatioA; // A基準の誤差
     const k = Math.min(Math.abs(e) / K_DENOMINATOR, 1);
 
@@ -243,6 +305,8 @@ class BattleRatio {
   stop() {
     if (this.targetChangeTimer) clearTimeout(this.targetChangeTimer);
     if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.burstScheduleTimer) clearTimeout(this.burstScheduleTimer);
+    if (this.burstEndTimer) clearTimeout(this.burstEndTimer);
   }
 }
 
@@ -540,6 +604,9 @@ function main() {
     console.log(
       `[battle-demo] starting: devices_per_team=${args.devicesPerTeam} url=${args.url} ` +
       `duration_ms=${args.durationMs} ramp_up_ms=${args.rampUpMs} finish=${args.finish} ` +
+      `target_range=${args.targetRange[0]}-${args.targetRange[1]} ` +
+      `burst=${args.burst} burst_interval_sec=${args.burstIntervalSec[0]}-${args.burstIntervalSec[1]} ` +
+      `burst_duration_sec=${args.burstDurationSec[0]}-${args.burstDurationSec[1]} ` +
       `mac_a=${macForIndex(args.macPrefix, 0)}.. mac_b=${macForIndex(args.macPrefix, args.teamBStartIndex)}..`
     );
 
@@ -609,6 +676,7 @@ function main() {
           response_time_ms: ctx.battle.lastScoreResponseTimeMs,
         },
         memory: { rss_mb: Number((mem.rss / 1024 / 1024).toFixed(1)), heap_used_mb: Number((mem.heapUsed / 1024 / 1024).toFixed(1)) },
+        burst: { active: ctx.battle.burstActive, team: ctx.battle.burstTeam },
       };
       metricsStream.write(JSON.stringify(record) + '\n');
       console.log(
@@ -680,6 +748,7 @@ function main() {
         max_connections: maxConnections,
         min_connections_after_ramp_up: minConnectionsAfterRampUp === Infinity ? null : minConnectionsAfterRampUp,
         final_score: { a: ctx.battle.scoreA, b: ctx.battle.scoreB },
+        target_range: args.targetRange,
       };
       console.log('[battle-demo] summary:', JSON.stringify(summary));
       metricsStream.write(JSON.stringify({ time: new Date().toISOString(), summary }) + '\n');
