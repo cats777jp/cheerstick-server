@@ -1,5 +1,9 @@
 # レート制限再設計（トラックA）本番反映 手順書
 
+> **2026-09-28追記：本番反映は`docs/tasks/2026-09-28-rollout-track-a-and-gauge.md`
+> （ゲージ「直近の勢い」表示との統合版）を使用すること。** 本書はSTEP B（ブランチ統合）
+> 完了時点の記録として残す（STEP C以降は当時案として履歴保存、内容は統合版に引き継ぎ済み）。
+
 作成日：2026-09-28
 対象：岩村様（TeraTermでの手動実行。本番EC2へのSSH・書き込みはすべて岩村様が行う）
 関連：`cheerstick-track-a-rate-limit-20260928.md`（指示書）、
@@ -54,35 +58,16 @@
 
 ---
 
-## STEP B：ブランチの統合
+## STEP B：ブランチの統合（**統合済み**）
 
-**ローカルPC（`C:\Projects\cheerstick-server`）で実行する。**
-
-1. 作業ツリーがクリーンであることを確認する
-   ```bash
-   git status
-   ```
-2. `feature/rate-limit-large-event`を`feature/reference-data`へ統合する
-   ```bash
-   git fetch origin
-   git checkout feature/reference-data
-   git pull origin feature/reference-data
-   git log feature/reference-data..origin/feature/rate-limit-large-event --oneline
-   # ↑ トラックA以外のコミットが混ざっていないこと（このブランチはtrack A専用のはず）を確認
-   git merge --no-ff origin/feature/rate-limit-large-event
-   ```
-   **他の未反映の変更が混ざらないことの確認：** `git log feature/reference-data..origin/feature/rate-limit-large-event`
-   の出力が、トラックAの実装・ドキュメントコミットのみであることを目視確認する。
-   意図しないコミットが含まれる場合はマージを中断し（`git merge --abort`）、報告する。
-3. マージ後、コンフリクトが無いこと・ローカルの動作確認が引き続き通ることを確認する
-   ```bash
-   node scripts/rate-limit/local-verify.js
-   node scripts/demo/local-verify.js
-   ```
-4. pushする
-   ```bash
-   git push origin feature/reference-data
-   ```
+> **2026-09-28追記：本STEPは完了済み。** `feature/rate-limit-large-event`
+> （コード`8ed487f`・docs`9fbec8e`）を`feature/reference-data`へマージした
+> （マージコミット`42b22ad`）。`docs/worklog.md`の衝突（両ブランチとも同日エントリを
+> 追記していたため）は、両方の記述を残す形で解決した。マージ後、
+> `scripts/demo/local-verify.js`（既存27項目）・`scripts/rate-limit/local-verify.js`
+> （追加26チェック）とも全PASSを確認した。**以降の本番反映は、本書ではなく統合版の
+> `docs/tasks/2026-09-28-rollout-track-a-and-gauge.md`を使うこと**（ゲージ
+> 「直近の勢い」表示・猛攻演出との反映順序を合わせて手順化してある）。
 
 ---
 
