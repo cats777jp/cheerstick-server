@@ -4,6 +4,75 @@
 
 ---
 
+## 2026-09-28 応援合戦デモ Phase 4 STEP C：HTTP 429によるデバイス登録停止と対応
+
+Phase 4（`docs/tasks/2026-09-28-battle-demo-phase4.md`、下記エントリ参照）のSTEP C
+（準備スクリプト1回目、`--yes`実行）で、`battle-demo-prepare.js`のデバイス登録が
+**HTTP 429（レート制限）により途中停止**した。
+
+### 発生状況
+
+- 失敗メッセージ：`failed to create device AA:00:00:02:01:EB: HTTP 429 null`
+- チームAのデバイスは`01:EA`まで（約490台）登録済み。チームBのデバイス・試合・
+  対抗戦ペアは未作成のまま停止
+- レスポンスヘッダー：`RateLimit-Policy: 500;w=900`（15分に500リクエスト）
+  - `127.0.0.1`（本番EC2上から直接叩いた管理API）からは`Remaining 0`・`Retry-After 754`
+  - 公開API（nginx経由）は`200`・`Remaining 499`
+  - **制限は接続元IPごとに数えられており、通常の本番利用（ブラウザ経由）には
+    影響がないことを確認済み**
+
+### 原因調査（`src/app.js`、読み取りのみ。`src/`は変更していない）
+
+```js
+app.set('trust proxy', 1);
+...
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 500, ... });
+app.use(limiter);       // パス指定なし。/api/v1配下・/healthを含む全リクエストが対象
+app.use('/api/v1', routes);
+```
+
+- **上限・時間枠：** 500リクエスト / 15分（固定ウィンドウ）
+- **対象ルート：** パス指定のない`app.use(limiter)`のため、`/api/v1`配下すべて
+  （管理API・公開APIとも）と`/health`が対象
+- **`trust proxy 1`：** nginx経由（1ホップ）なら実クライアントIPを正しく見るが、
+  `battle-demo-prepare.js`は本番EC2上からnginxを経由せず`127.0.0.1:3000`へ直接
+  アクセスするため、`X-Forwarded-For`が付かず**全リクエストが`127.0.0.1`という
+  同一キーに積み上がる**。490台の登録＋事前のcategory/organization/events取得等で
+  500に到達したと判断できる
+- **WebSocket：** `src/index.js`で`wsServer.attach(server, '/cheer')`しており、
+  `ws`ライブラリがHTTPサーバーの`upgrade`イベントに直接アタッチする方式。
+  Expressのミドルウェアチェーン（レートリミッタ含む）を一切通らないため、
+  **WebSocket（`connect`／`select_team`／`count`等）は対象外であることを確認した**
+
+### 対応（コード変更、ローカル確認・local-verify.js全27項目PASS後にpush）
+
+- `battle-demo-prepare.js`：429を受けると`Retry-After`秒数＋5秒待って同じリクエストを
+  自動的にリトライする（待機中30秒ごとに残り秒数をログ出力）
+- 既存デバイスの確認を、1台ずつ`GET`する方式から、`mac`部分一致（ILIKE）で対象prefix配下を
+  ページング（200件ずつ）してまとめて取得する方式に変更（`fetchExistingDevicesByPrefix`）。
+  個別`GET`は409（稀なレース）時のフォールバックとしてのみ残した
+- 実行前（dry runを含む）に、今回の実行で消費するAPIリクエスト見込み数を表示するように変更
+- `battle-demo.js`のスコア取得（`pollActualRatio`）は、429を含む非200応答時に
+  例外を捕捉し送信済み累計へフォールバックする実装に**既になっていた**ことをコードで確認
+  （変更なし）。起動時の一度きりの事前検証（`validateOrganizations`）は非200で
+  即座に失敗する設計のままとした（実行開始前の整合性チェックのため、リトライは不要と判断）
+- `scripts/demo/README.md`・`docs/tasks/2026-09-28-battle-demo-phase4.md`に
+  レート制限（500req/15分）と、`battle.html`が3秒間隔ポーリングのため
+  同一IPからは1タブに限ることを追記
+
+### 今後の検討事項（未対応）
+
+**会場で多数の端末が同一回線（同一の公開IP）から対抗戦画面を開く場合、
+このレート制限（500req/15分）に達する可能性がある。** `battle.html`は1タブあたり
+15分に300リクエストを消費するため、同一IP配下で2タブ以上開くと429に達しうる。
+本番リリース（2026年8月第1週、V・ファーレン長崎）に向けて、会場Wi-Fi等の
+NAT配下から複数人が同時に対抗戦画面を開く運用が想定される場合は、
+レート制限の対象からWebSocket以外の公開エンドポイント（`/event-battles/:id/score`等）を
+除外する、またはIPごとではなくグローバルな上限に変更する等の見直しをKMT様と
+相談する必要がある。今回は応援合戦デモ（Phase 4）の枠内では対応せず、記録のみ行う。
+
+---
+
 ## 2026-09-28 応援合戦デモ Phase 3（WebARENA VPS環境の構築）
 
 `docs/worklog.md` 2026-09-27エントリ「次のステップ」で予告していたPhase 3
