@@ -4,6 +4,101 @@
 
 ---
 
+## 2026-09-28 大規模イベント対応トラックA：レート制限の再設計（実装・ローカル確認）
+
+`cheerstick-track-a-rate-limit-20260928.md`（指示書）に基づき、`docs/proposals/
+large-event-scaling.md`（コミット`c367952`）の調査結果を受けたレート制限の再設計を、
+新ブランチ`feature/rate-limit-large-event`（`origin/feature/reference-data`の
+`c367952`から分岐）で実装した。**本番EC2・WebARENAでの反映・実行は行っていない。**
+
+### 実装前の確認（停止ポイント①）
+
+指示書2-1(b)に「`battle.html`の`gauge=recent`が壊れないことを確認する」とあったが、
+コード調査の結果、その機能（履歴差分による勢い演出）は`public/battle.html`を含む
+どのファイルにも存在しないことが判明した。KMT様へ確認したところ、`gauge=recent`は
+別指示書（`cheerstick-battle-gauge-recent-20260928.md`）で仕様策定中の計画中機能であり、
+未実装は正しい状態とのことだった。「将来`gauge=recent`が入っても壊れないこと」を
+設計上の確認として行う方針を確認し、実装を継続した（`docs/spec.md` 12.5章参照）。
+
+### ルートの分類表
+
+`docs/proposals/large-event-scaling.md` A-2の分類表をそのまま踏襲。詳細は
+`docs/spec.md` 12.1章の表を参照。(a)観客の入口＝`geturl`・`reference`、
+(b)スコア・閲覧系＝`event-battles`スコア・`target-scores`（2種）・
+`ranking-snapshots/latest`、(c)管理API＝`/admin/*`、(d)それ以外＝
+死んだコード（`events`）・未使用の旧REST（`user`・`game`・`cheer`・`devices`）と
+`/health`。分類に迷うルート・調査時の想定と異なる事実（`gauge=recent`除く）は
+無かった。
+
+### 実装内容
+
+- `src/middleware/rateLimit.js`（新規）：5系統のリミッター（`audienceIpLimiter`・
+  `audienceDeviceLimiter`・`scoreIpLimiter`・`adminIpLimiter`・`defaultIpLimiter`）、
+  環境変数の読み込み・検証（数値でない/負の値→既定値＋警告ログ）、デバイスキー抽出
+  （`id`クエリのMAC正規化、`reference`のトークン方式対応）、429ログの10秒間引き
+- `src/middleware/scoreCache.js`（新規）：スコア系APIのプロセス内キャッシュ
+  （`res.json`のラップによる応答キャプチャ、in-flight共有、エラー応答は非キャッシュ）
+- `src/app.js`：単一のグローバルリミッターを廃止し、`defaultIpLimiter`
+  （(a)〜(c)のパスを`skip`で除外）のみを残す形に変更
+- `src/routes/webview.js`・`admin.js`・`eventBattles.js`・`targetScores.js`・
+  `rankingSnapshots.js`：各ファイルの`router.use()`で専用リミッター（・キャッシュ）を適用
+- `.env.example`：新規環境変数7点を追記
+- 429のレスポンスの形（ボディ・`RateLimit-*`ヘッダー）は、`express-rate-limit`の
+  既定ハンドラと同一の出力になるよう実装（`message`・`statusCode`を独自指定せず、
+  ログ記録だけを追加する`handler`を渡す方式）。ネイティブアプリへの影響を避けた
+
+### 2-5. クライアント側の確認結果（変更はしない）
+
+- `public/index.html`の`loadCheerStats()`（`reference`のfetch）は、429を含む
+  非200応答を`catch`し、「応援データの取得に失敗しても、完了画面自体は表示済みのため、
+  このセクションだけ静かに非表示に戻す」設計に**既になっている**（804-808行目）。
+  再試行はしない。過去の応援回数パネルが表示されなくなるだけで、WebSocket・
+  応援そのものへの影響は無い
+- `geturl`はネイティブアプリのWebViewコンテナが直接開くURLであり、`public/`配下の
+  JSからfetchで呼ばれるものではない。**このリポジトリのコードには、geturlの429応答に
+  対するリトライ・エラー表示の仕組みは無い**（429時の応答は素のテキスト
+  「Too many requests, please try again later.」になり、`meta refresh`が
+  含まれないためリダイレクトされない）。ネイティブアプリ側（Vanstone様管轄）の
+  挙動は本リポジトリの管理範囲外のため確認できていない。**変更は提案のみとし、
+  実装はしていない**（提案：ネイティブアプリ側に`geturl`のリトライ・エラー表示を
+  持たせることを、Vanstone様との仕様調整事項として検討する）
+
+### ローカル確認結果
+
+- `scripts/demo/local-verify.js`（既存27項目）：引き続き全PASS（回帰無し）
+- `scripts/rate-limit/local-verify.js`（新規）：追加9項目（枝分かれ含め計26チェック）、
+  全PASS。IPごと/デバイスごとの上限の独立性、不正なIDでのデバイス上限スキップ、
+  スコアAPIキャッシュ（同時100リクエストでDBクエリが1回分＝3クエリに収まる、
+  TTL内はキャッシュヒット、TTL経過後は再集計、エラー応答は非キャッシュ、
+  `SCORE_CACHE_TTL_MS=0`で毎回集計）、管理APIが別枠であること、環境変数の
+  既定値・不正値フォールバック、429レスポンスの形、429ログの10秒間引きを確認
+- `scripts/demo/geturl-storm.js`（新規、再現用スクリプト）：ローカルの一時サーバー
+  （pg-mem、`RL_AUDIENCE_IP_MAX=150`に絞って実行）に対し`--count=200 --duration-sec=8
+  --concurrency=10`で実行し、200件中150件が200・50件が429になること
+  （設定した上限どおり）、`RateLimit-*`ヘッダーが取得できることを確認した
+
+### `/health`の扱い
+
+変更していない（(d)の既定リミッター、`RL_DEFAULT_IP_MAX`対象のまま）。現状の
+`app.use(limiter)`の位置（`/api/v1`ルーティングより前、パス指定なし）を踏襲。
+
+### `reference`のトークン方式（`ENABLE_REFERENCE_TOKEN`）への対応
+
+現在は無効（`false`）だが、`extractAudienceDeviceKey()`は`ENABLE_REFERENCE_TOKEN=true`
+時、`token`クエリを`verifyReferenceToken()`で検証し、ペイロードの`mac`
+（無ければ`device_id`）をデバイスキーとして使う分岐を実装済み。トークン不正・期限切れ時は
+デバイスキー無し（IP側のみ適用）として扱う。有効化しても壊れないことをコードレベルで
+設計したが、`ENABLE_REFERENCE_TOKEN=true`環境での実地確認はしていない（現在の運用が
+`false`のため）。
+
+### コミット
+
+コード・ドキュメントを別々にコミットした（詳細はコミットログ参照）。ブランチ
+`feature/rate-limit-large-event`を`origin`へpush済み。`feature/reference-data`への
+統合は、`docs/tasks/2026-09-28-rate-limit-deploy.md`のSTEP Bで岩村様が実施する。
+
+---
+
 ## 2026-09-28 応援合戦デモ Phase 4 STEP C：HTTP 429によるデバイス登録停止と対応
 
 Phase 4（`docs/tasks/2026-09-28-battle-demo-phase4.md`、下記エントリ参照）のSTEP C
