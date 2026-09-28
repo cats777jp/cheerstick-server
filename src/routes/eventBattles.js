@@ -4,8 +4,14 @@
 
 const { Router } = require('express');
 const eventBattleController = require('../controllers/eventBattleController');
+const { scoreIpLimiter, config } = require('../middleware/rateLimit');
+const { createScoreCacheMiddleware } = require('../middleware/scoreCache');
 
 const router = Router();
+
+// スコア・閲覧系（(b)、大規模イベント対応トラックA）：別枠のIP上限＋短時間キャッシュ。
+// 詳細はsrc/middleware/rateLimit.js・scoreCache.js参照。
+router.use(scoreIpLimiter, createScoreCacheMiddleware(config.scoreCacheTtlMs));
 
 router.get('/:id/score', eventBattleController.getScore);
 
