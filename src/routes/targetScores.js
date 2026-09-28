@@ -6,8 +6,13 @@
 
 const { Router } = require('express');
 const targetScoreController = require('../controllers/targetScoreController');
+const { scoreIpLimiter, config } = require('../middleware/rateLimit');
+const { createScoreCacheMiddleware } = require('../middleware/scoreCache');
 
 const router = Router();
+
+// スコア・閲覧系（(b)、大規模イベント対応トラックA）：別枠のIP上限＋短時間キャッシュ。
+router.use(scoreIpLimiter, createScoreCacheMiddleware(config.scoreCacheTtlMs));
 
 router.get('/events/:id/target-scores', targetScoreController.byEvent);
 router.get('/target-scores', targetScoreController.allTime);

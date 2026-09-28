@@ -15,8 +15,14 @@ const adminDeviceController = require('../controllers/adminDeviceController');
 const adminTargetController = require('../controllers/adminTargetController');
 const adminRankingController = require('../controllers/adminRankingController');
 const uploadController = require('../controllers/uploadController');
+const { adminIpLimiter } = require('../middleware/rateLimit');
 
 const router = Router();
+
+// 管理API（(c)、大規模イベント対応トラックA）：一般枠から外し、暴走検知用の別枠上限を
+// 適用する。nginxのオフィスIP制限（上記コメント参照）はそのまま残る。詳細は
+// src/middleware/rateLimit.js・docs/proposals/large-event-scaling.md参照。
+router.use(adminIpLimiter);
 
 // 画像アップロード（改善3件フェーズ2、2026-09-16新設）：メモリストレージ＋5MB上限。
 // ディスクへの書き込みはuploadController側でマジックバイト検証後に行うため、

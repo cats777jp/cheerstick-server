@@ -133,6 +133,24 @@ ALLOW_PRODUCTION_DB=true                     # 2026-07-31追加。本番誤接�
 
 編集前のバックアップ：`.env.bak_20260731`（EC2上、`/home/ubuntu/cheerstick-server-new/`）
 
+### レート制限関連の環境変数（大規模イベント対応トラックA、2026-09-28新設）
+
+`docs/spec.md` 12章参照。**いずれも未設定で動作する（下記が既定値）。** イベント直前に
+値を変えたい場合のみ`.env`へ追記し、`pm2 restart --update-env`で反映する。
+
+```
+RL_WINDOW_MS=900000          # 全リミッター共通の時間枠（ミリ秒、15分）
+RL_AUDIENCE_IP_MAX=50000     # 観客の入口（geturl/reference）：IPごとの上限
+RL_DEVICE_MAX=60             # 観客の入口：デバイス（MAC）ごとの上限
+RL_SCORE_IP_MAX=6000         # スコア・閲覧系（会場スクリーン用API）：IPごとの上限
+RL_ADMIN_IP_MAX=20000        # 管理API：IPごとの上限（暴走検知用。nginxのIP制限は別途有効）
+RL_DEFAULT_IP_MAX=500        # それ以外の/api/v1と/health：IPごとの上限（従来どおり）
+SCORE_CACHE_TTL_MS=1000      # スコア・閲覧系のサーバー側キャッシュ有効期間（ミリ秒）。0で無効
+```
+
+数値でない・負の値を設定した場合、該当項目のみ既定値に戻り、起動ログに警告が出る
+（他の項目には影響しない）。反映確認は`pm2 logs`の`[rate-limit] config: ...`行で行う。
+
 ---
 
 ## ローカル環境（Windows 11 Pro）
