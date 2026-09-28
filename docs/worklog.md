@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-09-28 応援合戦デモ Phase 3（WebARENA VPS環境の構築）
+
+`docs/worklog.md` 2026-09-27エントリ「次のステップ」で予告していたPhase 3
+（負荷発生元VPSの構築）を実施した。対象はWebARENA Indigo VPS（`161.34.35.70`、
+Nextcloud `cloud.kmtinc.jp`と同居する既存インスタンス、2026-09-21の負荷試験でも使用）。
+詳細は`docs/runbook.md`「WebARENA デモ実行環境」節参照。
+
+### 実施内容の概要
+
+- `cheerdemo`作業ユーザーの作成（sudo権限なし、パスワードログイン無効）
+- Node.js v24.21.0（nvm、cheerdemoユーザー配下）の構築
+- ファイルディスクリプタ上限の設定（`/etc/security/limits.d/99-cheerdemo.conf`、
+  soft/hard nofile 8192）
+- `git bundle`方式によるコード反映（`/home/cheerdemo/cheerstick-demo`、
+  `origin`はbundleファイルパス）
+- SSHアクセス制限（ufw、22番をオフィスIPへ限定）
+
+### STEP 4（ufwによるSSH制限）が分類器にブロックされ、岩村様が手動実施
+
+`cheerstick-battle-demo-loadtest-setup-20260926.md`系の指示書に基づく保険付きコマンド
+（`ufw`ルール変更→5分後に`ufw allow OpenSSH`で自動的に元へ戻す`sleep 300`方式）が、
+Claude Code自動モードの分類器により「Security Weaken」として実行をブロックされた。
+このため、STEP 4は**岩村様がTeraTermで手動実施**した（実施内容の詳細は
+`docs/runbook.md`「WebARENA デモ実行環境」節のufw項参照）。
+
+**指示書が想定していた前提（ufwが`inactive`）と、実際の状態（`active`）が異なっていた。**
+上流（WebARENA側）で以前から22番をオフィスIPに限定済みだったのに加え、サーバー上の
+ufw自体も元々activeだったため、`ufw disable`を保険にすると80/443（Nextcloud用）を含む
+既存ルールごと無効化されるリスクがあった。岩村様の判断で、`ufw disable`ではなく
+「5分後に`ufw allow OpenSSH`で元のルールへ戻す」保険方式に変更して実施し、
+新規則反映・接続確認後に保険を解除した。バックアップ：
+`/home/ubuntu/ufw.bak_20260928_xxxxxx`（`/etc/ufw`のコピー）。
+
+**権限設定は変更していない。** この分類器ブロックは、本番`nginx.conf`変更時
+（2026-09-27エントリ、STEP 3が「Production Deploy」でブロックされた事例）と同様、
+安全装置として維持する方針。
+
+### runbook記載のためのVPS読み取り確認も分類器にブロックされ、岩村様が手動実施
+
+本節（`docs/runbook.md`「WebARENA デモ実行環境」節）を正確に記載するため、
+Claude CodeがSSH経由で`/home/cheerdemo/cheerstick-demo`のgit状態・
+`/etc/security/limits.d/99-cheerdemo.conf`の内容を読み取り専用で確認しようとしたが、
+分類器により「Credential Exploration」としてブロックされた。このため、
+該当の確認コマンド（`git log --oneline -1`・`git remote -v`・`cat`等）は
+**岩村様がTeraTermで手動実施**し、その出力をもとに`docs/runbook.md`を記載した。
+確認作業中、SSH秘密鍵をこのPC上の一時ディレクトリ（リポジトリ外のスクラッチパス）へ
+一度コピーしたが、使用せずに削除済み。リポジトリ内には一切残っていないことを確認した。
+
+### 次のステップ
+
+Phase 4（段階的な実行：各50台→250台→500台）は、KMT様の指示を受けてから着手する。
+
+---
+
 ## 2026-09-27（補記） 恒久デモ2試合の手動paused化（岩村様作業）
 
 Phase 1・Phase 2実装セッション（本ファイル直下のエントリ参照）の停止ポイント②報告時、

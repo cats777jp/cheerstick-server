@@ -701,6 +701,107 @@ ls -la $FILE   # サイズが非ゼロであることを確認（uploads/が空�
 
 ---
 
+## WebARENA デモ実行環境（応援合戦デモ Phase 3、2026-09-28新設）
+
+応援合戦デモ（`docs/worklog.md` 2026-09-27エントリ、`scripts/demo/`参照）のPhase 3
+（負荷発生元VPSの構築）で用意した環境。**本番EC2（`cheerstick-production`）とは別の、
+独立したインスタンス。** 本番のコード・DB・nginx設定には一切影響しない。
+
+```
+ホスト   : 161.34.35.70（WebARENA Indigo）
+用途同居 : Nextcloud（cloud.kmtinc.jp）が稼働中の既存インスタンスを間借りしている
+           （2026-09-21の負荷試験でも使用したものと同一）。デモ専用VPSへの
+           移設予定があり、それまでの暫定利用
+作業ユーザー: cheerdemo（sudo権限なし、パスワードログイン無効、
+           ホームディレクトリ /home/cheerdemo は750＝cheerdemo自身以外アクセス不可）
+配置     : /home/cheerdemo/cheerstick-demo（gitリポジトリ。origin は後述のbundleファイル）
+Node.js  : v24.21.0（cheerdemoユーザーのnvm配下、システム全体には影響しない）
+```
+
+**`.env`は置かない。** デモ本体（`battle-demo.js`）はDB・管理APIに直接接続しない設計
+（本番EC2上の`battle-demo-prepare.js`側でのみDB・管理APIを扱う）ため、このVPS上に
+認証情報を持たせる必要がない。VPSが万一侵害されても本番への認証情報漏洩経路にならない
+構成として意図的に採用している。
+
+### ファイルディスクリプタ上限（ulimit）
+
+```
+設定ファイル : /etc/security/limits.d/99-cheerdemo.conf
+内容         : cheerdemo soft nofile 8192
+               cheerdemo hard nofile 8192
+```
+
+1プロセスで最大1,000WebSocket接続を扱う`battle-demo.js`のため、既定値では不足する
+懸念に対する設定（`scripts/demo/README.md`「注意事項」参照）。`cheerdemo`ユーザーの
+プロセスのみに限定されており、同居する既存サービス（Nextcloud等）には影響しない。
+
+### ufw（SSHアクセス制限、2026-09-28対応）
+
+**上流（WebARENA側のネットワーク制御）と、サーバー上のufwの二重で22番をオフィスIPに
+限定する構成。** 上流側は従来から設定済みで、今回サーバー側のufwにも重ねた。
+
+```
+変更前 : 22/tcp ALLOW IN Anywhere（"OpenSSH"という名前付きルール）
+変更後 : 22/tcp ALLOW IN 49.156.217.121（コメント: "SSH office only"）
+         80/tcp・443/tcp は ALLOW IN Anywhere のまま変更なし（Nextcloud用のため）
+```
+
+```bash
+# 追加したルール
+sudo ufw allow from 49.156.217.121 to any port 22 proto tcp comment 'SSH office only'
+# 削除したルール（名前付き"OpenSSH"ルールのため、"ufw delete allow 22/tcp"では一致しない）
+sudo ufw delete allow OpenSSH
+```
+
+バックアップ：`/home/ubuntu/ufw.bak_20260928_xxxxxx`（`/etc/ufw`のコピー、EC2上ではなく
+本VPS上）。
+
+**元に戻す場合：**
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw delete allow from 49.156.217.121 to any port 22 proto tcp
+```
+
+**この変更はKMT様オフィス（49.156.217.121）による2026-09-28手動実施分。**
+`docs/worklog.md`同日エントリ「Phase 3」参照。ufwへの変更は本節記載の内容が最新であり、
+今後の変更もここに追記していく。
+
+### コード反映手順（git bundle方式）
+
+本VPSはGitHubへのアクセス経路を持たない構成のため、ローカルPCで作成した`git bundle`を
+`scp`で運搬して反映する（2026-09-21の負荷試験時と同方式）。
+
+```bash
+# 1. ローカル（C:\Projects\cheerstick-server）でbundle作成
+git bundle create cheerstick-demo.bundle feature/reference-data
+
+# 2. scpでVPSのubuntuユーザーのホームへ転送
+scp -i <鍵ファイル> cheerstick-demo.bundle ubuntu@161.34.35.70:~/
+
+# 3. 配置場所（/home/cheerdemo/cheerstick-demo.bundle）を置き換え、所有者をcheerdemoに変更
+sudo mv ~/cheerstick-demo.bundle /home/cheerdemo/cheerstick-demo.bundle
+sudo chown cheerdemo:cheerdemo /home/cheerdemo/cheerstick-demo.bundle
+
+# 4. cheerdemoユーザーでfetch・ff-onlyでmerge
+sudo -iu cheerdemo git -C /home/cheerdemo/cheerstick-demo fetch origin
+sudo -iu cheerdemo git -C /home/cheerdemo/cheerstick-demo merge --ff-only origin/feature/reference-data
+
+# 5. 依存パッケージに変更があった場合のみ
+sudo -iu cheerdemo bash -c 'cd /home/cheerdemo/cheerstick-demo && npm ci --omit=dev'
+```
+
+`git remote -v`は`origin`が`/home/cheerdemo/cheerstick-demo.bundle`（ファイルパス）を
+指す構成になる（GitHub等のリモートURLではない）。
+
+### 9/21負荷試験時の残置物（未整理）
+
+`ubuntu`ユーザー配下に2026-09-21の負荷試験で構築した`~/cheerstick-loadtest-client/`・
+`.nvm`・`.npm`が残っている。今回の`cheerdemo`ユーザー環境とは独立しており支障はないが、
+将来デモ専用VPSへ移設するタイミングでまとめて整理する予定（未実施）。
+
+---
+
 ## 未確認・保留中のファイル
 
 - `cheerstick-ws`：**2026-07-31、内容確認済み。** nginx設定の下書きであることを確認した。
