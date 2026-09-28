@@ -167,6 +167,15 @@
     margin-top: 10px;
   }
 
+  /* 更新停止の診断（gauge=recentのときだけ使用、2026-09-28追加）：最後の成功取得から
+     STALE_INDICATOR_THRESHOLD_MS以上経つと表示する、控えめな表示。 */
+  #staleIndicator {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
   /* ゲージ「直近の勢い」表示（&gauge=recent、2026-09-28追加）：既定（従来方式）では
      常にhiddenのまま。gauge=recent指定時のみJS側でhiddenを外し、テキストを設定する。 */
   #gaugeModeLabel {
@@ -220,6 +229,7 @@
       </div>
     </div>
     <div id="updatedAt"></div>
+    <div id="staleIndicator" hidden>接続確認中…</div>
   </div>
 </div>
 
@@ -254,17 +264,99 @@
   const gaugeWindowSec = parseParamNumber('window', 15, 5, 120);
   const gaugeAmp = parseParamNumber('amp', 3, 1, 10);
   const pollIntervalMs = parseParamNumber('poll', DEFAULT_POLL_INTERVAL_MS, 1000, 10000);
+  // 押し込まれない範囲（&range、2026-09-28調整で追加）。gauge=recentのときだけ有効。
+  // 単位は%（0〜45）。各チームは、ゲージの少なくともrange%を必ず確保する。
+  const gaugeRangePercent = parseParamNumber('range', 20, 0, 45);
+  const gaugeRangeFraction = gaugeRangePercent / 100;
+
+  // --- 「常に動く仕組み」の定数（gauge=recentのときだけ使用、2026-09-28調整で追加） ---------
+  // 2-(a) カウンターの連続表示：直近何ミリ秒の差分から増加速度を求めるか（指示書は固定15秒。
+  // gauge=recentのwindowパラメータ（可変・既定15秒）とは独立させている）。
+  const COUNTER_RATE_WINDOW_MS = 15000;
+  // 2-(a) 推定の上限：最後の実測からこのミリ秒を超えて増やし続けない。
+  const COUNTER_ESTIMATE_MAX_MS = 4000;
+  // 2-(b) ゲージのなめらかな追従の時定数（秒）。小さいほど素早く目標に追従する。
+  const GAUGE_SMOOTHING_TAU_SEC = 0.5;
+  // 2-(c) 呼吸の揺れ：振幅（ポイント、±）と周期（秒）。
+  const GAUGE_BREATH_AMPLITUDE_POINTS = 1.5;
+  const GAUGE_BREATH_PERIOD_SEC = 3;
+  // 3-(a) スコアAPI fetchのタイムアウト（ミリ秒）。
+  const FETCH_TIMEOUT_MS = 8000;
+  // 3-(b) 最後の成功取得からこのミリ秒以上経ったら「接続確認中」を表示する。
+  const STALE_INDICATOR_THRESHOLD_MS = 4000;
+  // 3-(c) 表示値が変わらない区間を検知する間隔・しきい値（診断用、window.__battleDebug）。
+  const UNCHANGED_CHECK_INTERVAL_MS = 500;
+  const UNCHANGED_SPAN_THRESHOLD_MS = 3000;
 
   const loadingState = document.getElementById('loadingState');
   const errorState = document.getElementById('errorState');
   const battleContent = document.getElementById('battleContent');
   const connErrorBanner = document.getElementById('connErrorBanner');
   const gaugeModeLabel = document.getElementById('gaugeModeLabel');
+  const staleIndicatorEl = document.getElementById('staleIndicator');
+  const tugFillAEl = document.getElementById('tugFillA');
+  const tugFillBEl = document.getElementById('tugFillB');
 
   if (gaugeMode === 'recent') {
     gaugeModeLabel.textContent = `勢い（直近${gaugeWindowSec}秒）`;
     gaugeModeLabel.hidden = false;
+    // 2-(b) ゲージのなめらかな追従はJS（requestAnimationFrame）が毎フレーム行うため、
+    // 既存のCSS transitionと二重に効いて遅延が積み重なるのを避けるため無効化する。
+    tugFillAEl.style.transition = 'none';
+    tugFillBEl.style.transition = 'none';
   }
+
+  // 診断用（3-(c)、2026-09-28調整で追加）：画面には出さない。テスト後にブラウザの
+  // コンソールで window.__battleDebug を確認する。gauge=recentに限らず常に収集する。
+  const battleDebug = {
+    lastOkAt: null,
+    maxGapMs: 0,
+    gapsOver3s: [],
+    requestCount: 0,
+    failureCount: 0,
+    timeoutCount: 0,
+    renderErrorCount: 0,
+    lastRenderError: null,
+    lastChangedAt: null,
+    unchangedSpans: [],
+  };
+  window.__battleDebug = battleDebug;
+
+  function recordPollSuccess(now) {
+    if (battleDebug.lastOkAt !== null) {
+      const gap = now - battleDebug.lastOkAt;
+      if (gap > battleDebug.maxGapMs) battleDebug.maxGapMs = gap;
+      if (gap > 3000) battleDebug.gapsOver3s.push({ startedAt: battleDebug.lastOkAt, gapMs: gap });
+    }
+    battleDebug.lastOkAt = now;
+  }
+
+  // 表示値が3秒以上変わらない区間を検知する（診断用、モードによらず常時動かす）。
+  const unchangedCheckState = { lastText: null, unchangedStartedAt: Date.now(), flaggedIndex: -1 };
+  function checkUnchangedSpan() {
+    const now = Date.now();
+    const scoreAEl = document.getElementById('scoreA');
+    const scoreBEl = document.getElementById('scoreB');
+    if (!scoreAEl || !scoreBEl) return;
+    const text = scoreAEl.textContent + '|' + scoreBEl.textContent;
+    if (text !== unchangedCheckState.lastText) {
+      unchangedCheckState.lastText = text;
+      unchangedCheckState.unchangedStartedAt = now;
+      unchangedCheckState.flaggedIndex = -1;
+      battleDebug.lastChangedAt = now;
+      return;
+    }
+    const duration = now - unchangedCheckState.unchangedStartedAt;
+    if (duration >= UNCHANGED_SPAN_THRESHOLD_MS) {
+      if (unchangedCheckState.flaggedIndex === -1) {
+        battleDebug.unchangedSpans.push({ startedAt: unchangedCheckState.unchangedStartedAt, durationMs: duration });
+        unchangedCheckState.flaggedIndex = battleDebug.unchangedSpans.length - 1;
+      } else {
+        battleDebug.unchangedSpans[unchangedCheckState.flaggedIndex].durationMs = duration;
+      }
+    }
+  }
+  setInterval(checkUnchangedSpan, UNCHANGED_CHECK_INTERVAL_MS);
 
   function showFatalError(message) {
     loadingState.hidden = true;
@@ -336,6 +428,15 @@
   }
 
   function render(data) {
+    // 3-(d)(e) 描画の停止対策：不正な値（NaN・欠落等）をDOMへ反映する前に検知し、
+    // 例外として呼び出し元（poll()）へ通知する。DOM更新は開始していないため、
+    // 表示は直前の値のまま保たれる。
+    const totalA = data && data.team_a && data.team_a.total_intensity;
+    const totalB = data && data.team_b && data.team_b.total_intensity;
+    if (!Number.isFinite(totalA) || !Number.isFinite(totalB)) {
+      throw new Error('invalid score data: total_intensity is not a finite number');
+    }
+
     document.getElementById('label').textContent = data.label || '';
 
     const orgAColor = (data.team_a.organization && data.team_a.organization.color) || colorFor(data.team_a.event_id);
@@ -373,16 +474,22 @@
       hideIdentity: hasThemeImage,
     });
 
-    document.getElementById('scoreA').textContent = formatNumber(data.team_a.total_intensity);
-    document.getElementById('scoreB').textContent = formatNumber(data.team_b.total_intensity);
+    // gauge=recent指定時、カウンターの数字はrequestAnimationFrameの推定表示
+    // （tickRecent()）が専有する。ここで実測値を直接書き込むと、推定表示が
+    // 一瞬実測より低い値に巻き戻って見える可能性があるため、書き込まない
+    // （「常に動く仕組み」2-(a)、2026-09-28調整で追加）。実測値自体は
+    // poll()側でupdateCounterRate()へ渡され、推定の基準点として使われる。
+    if (gaugeMode !== 'recent') {
+      document.getElementById('scoreA').textContent = formatNumber(totalA);
+      document.getElementById('scoreB').textContent = formatNumber(totalB);
+    }
 
     // 綱引き式ゲージ（2026-09-25変更）：自チーム比率 = 自チーム応援量 / (両チーム応援量の合計)。
     // 両チームとも0の場合はゼロ除算を避けるため50:50固定とする。
-    // gauge=recent指定時は、ここでは計算しない（poll()側でupdateGaugeRecent()の結果を適用する。
-    // 「直近の勢い」表示、2026-09-28追加）。
+    // gauge=recent指定時は、ここでは計算しない（poll()側でupdateGaugeRecent()の結果を
+    // targetAPositionとして設定し、tickRecent()が毎フレーム滑らかに追従する。
+    // 「直近の勢い」表示、2026-09-28追加・2026-09-28調整）。
     if (gaugeMode !== 'recent') {
-      const totalA = data.team_a.total_intensity;
-      const totalB = data.team_b.total_intensity;
       const sum = totalA + totalB;
       const ratioA = sum > 0 ? totalA / sum : 0.5;
       applyGaugeWidth(ratioA);
@@ -440,7 +547,9 @@
     if (state.history.length >= 2 && total >= 1) {
       const shareA = dA / total;
       const shareL = state.leader === 'A' ? shareA : state.leader === 'B' ? (1 - shareA) : 0.5;
-      const gaugeL = clampNum(0.5 + (shareL - 0.5) * gaugeAmp, 0.5, 1.0);
+      // 押し込まれない範囲（&range、2026-09-28調整で追加）：リーダー側の上限を
+      // 1.0ではなく1-range%に抑えることで、負けている側にも最低range%を残す。
+      const gaugeL = clampNum(0.5 + (shareL - 0.5) * gaugeAmp, 0.5, 1 - gaugeRangeFraction);
       state.lastMagnitude = gaugeL - 0.5;
     }
     // total < 1、または履歴1件のみ（初回）の場合は、lastMagnitudeを更新せず保持する。
@@ -450,13 +559,133 @@
     return state.leader === 'A' ? gaugeL : (1 - gaugeL);
   }
 
+  // --- 「常に動く仕組み」（gauge=recentのときだけ、2026-09-28調整で追加） -------------------
+  //
+  // カウンターの連続表示（2-(a)）：直近COUNTER_RATE_WINDOW_MS（固定15秒、gaugeWindowSecとは
+  // 独立）の差分からpt/秒を求め、requestAnimationFrameで実測値の間を推定表示する。
+  // 表示値はDBの値そのものではなく推定値であることに注意（実測が届くたびに基準点を更新する）。
+  const counterState = {
+    a: { history: [], base: 0, baseAt: 0, rate: 0, display: 0 },
+    b: { history: [], base: 0, baseAt: 0, rate: 0, display: 0 },
+  };
+
+  function updateCounterRate(totalA, totalB, now) {
+    ['a', 'b'].forEach((key) => {
+      const st = counterState[key];
+      const total = key === 'a' ? totalA : totalB;
+      st.history.push({ t: now, v: total });
+      const cutoffMs = now - COUNTER_RATE_WINDOW_MS;
+      while (st.history.length > 2 && st.history[1].t <= cutoffMs) st.history.shift();
+
+      const oldest = st.history[0];
+      const elapsedSec = (now - oldest.t) / 1000;
+      st.rate = (st.history.length >= 2 && elapsedSec > 0) ? (total - oldest.v) / elapsedSec : 0;
+      st.base = total;
+      st.baseAt = now;
+    });
+  }
+
+  // ゲージのなめらかな追従・呼吸の揺れ（2-(b)(c)）の状態。
+  //
+  // 設計上の判断（2026-09-28調整）：smoothedMagnitude（0〜0.5-range%、「リーダー側への
+  // 押し込み幅」）は、updateGaugeRecent()がポーリングのたびに計算するgaugeRecentState.
+  // lastMagnitudeへなめらかに追従させる。どちらのチームの側に表示するか（符号）は、
+  // 毎フレーム、その時点で画面に表示している推定pt（counterState.*.display、2-(a)）を
+  // 比較して決める。理由：カウンターの推定表示とゲージの計算は別々の推定（前者は
+  // pt/秒の線形外挿、後者はポーリング時点のwindow秒間シェア）のため、ポーリングの間に
+  // 表示中のpt（推定値）のリーダーが入れ替わる瞬間がありうる。符号をpoll時点のleaderに
+  // 固定したままだと、その瞬間だけ「表示中のptで優勢な側とゲージの優勢側が食い違う」
+  // （不変条件違反）が起こりうることをローカル確認（決定的シミュレーション）で検出したため、
+  // 符号は常に「今まさに表示しているpt」に同期させる設計に変更した。
+  // 押し込み幅（smoothedMagnitude）自体はポーリング時点の計算のままなめらかに追従するため、
+  // 大きな押し込みの最中にリードが僅差で入れ替わった場合は、その瞬間にゲージの見た目が
+  // 大きく切り替わる（跳ぶ）ことがある。これは「常に不変条件を満たすこと」を優先した結果で、
+  // updateGaugeRecent()内の設計判断コメントと同じ考え方（正確性を優先）。
+  const gaugeAnimState = {
+    smoothedMagnitude: 0,
+    displayLeader: null, // 'A' | 'B' | null。表示中の推定ptに基づく（同点時は直前を保持）
+    lastFrameAt: null,
+  };
+
+  function tickRecent() {
+    // requestAnimationFrameが渡す引数（performance.now()基準）は使わない。
+    // counterState.baseAt・battleDebug.lastOkAtがDate.now()基準のため、
+    // 時刻の基準がずれた状態で引き算すると経過時間が不正な値になる。
+    const nowMs = Date.now();
+    try {
+      // 2-(a) カウンターの推定表示。最後の実測からCOUNTER_ESTIMATE_MAX_MSを超えて
+      // 増やし続けない。新しい実測が来ても、数字は減らさない（保持）。
+      ['a', 'b'].forEach((key) => {
+        const st = counterState[key];
+        const cappedElapsedSec = Math.min(nowMs - st.baseAt, COUNTER_ESTIMATE_MAX_MS) / 1000;
+        const estimate = st.base + st.rate * cappedElapsedSec;
+        st.display = Math.max(st.display, estimate);
+      });
+      document.getElementById('scoreA').textContent = formatNumber(Math.round(counterState.a.display));
+      document.getElementById('scoreB').textContent = formatNumber(Math.round(counterState.b.display));
+
+      // 表示中の推定pt（上で更新したcounterState.*.display）を比較し、今まさに画面に
+      // 出しているptのリーダーを毎フレーム決める（同点なら直前を保持）。ゲージの符号は
+      // 常にこれに同期させる（このファイル冒頭のgaugeAnimStateのコメント参照）。
+      if (counterState.a.display > counterState.b.display) gaugeAnimState.displayLeader = 'A';
+      else if (counterState.b.display > counterState.a.display) gaugeAnimState.displayLeader = 'B';
+
+      // 2-(b) 押し込み幅（リーダー側への、0〜0.5-range%）を、ポーリングのたびに
+      // updateGaugeRecent()が計算するgaugeRecentState.lastMagnitudeへ時定数
+      // GAUGE_SMOOTHING_TAU_SECでなめらかに追従させる（フレームレートに依存しない
+      // 指数減衰方式）。
+      if (gaugeAnimState.lastFrameAt !== null) {
+        const dtSec = (nowMs - gaugeAnimState.lastFrameAt) / 1000;
+        if (dtSec > 0) {
+          const alpha = 1 - Math.exp(-dtSec / GAUGE_SMOOTHING_TAU_SEC);
+          gaugeAnimState.smoothedMagnitude += (gaugeRecentState.lastMagnitude - gaugeAnimState.smoothedMagnitude) * alpha;
+        }
+      }
+      gaugeAnimState.lastFrameAt = nowMs;
+
+      // 2-(c) 呼吸の揺れ。加えた後、リーダー側が50%未満にならず、range%の範囲を
+      // 超えないよう最後にclampする（表示中のptが同点継続中はrange%の範囲でclamp）。
+      const breathT = nowMs / 1000;
+      const wobblePoints = GAUGE_BREATH_AMPLITUDE_POINTS *
+        Math.sin((2 * Math.PI * breathT) / GAUGE_BREATH_PERIOD_SEC);
+      const leaderGaugeValue = 0.5 + gaugeAnimState.smoothedMagnitude + wobblePoints / 100;
+      let finalA;
+      if (gaugeAnimState.displayLeader === 'A') {
+        finalA = clampNum(leaderGaugeValue, 0.5, 1 - gaugeRangeFraction);
+      } else if (gaugeAnimState.displayLeader === 'B') {
+        finalA = clampNum(1 - leaderGaugeValue, gaugeRangeFraction, 0.5);
+      } else {
+        finalA = clampNum(0.5 + wobblePoints / 100, gaugeRangeFraction, 1 - gaugeRangeFraction);
+      }
+      applyGaugeWidth(finalA);
+
+      // 3-(b) 最後の成功取得からSTALE_INDICATOR_THRESHOLD_MS以上経ったら表示、回復したら消す。
+      const staleMs = battleDebug.lastOkAt === null ? 0 : nowMs - battleDebug.lastOkAt;
+      staleIndicatorEl.hidden = !(battleDebug.lastOkAt !== null && staleMs >= STALE_INDICATOR_THRESHOLD_MS);
+    } catch (err) {
+      // 3-(d) 1フレームの描画例外でループ全体が止まらないようにする。次フレームで回復を試みる。
+      battleDebug.renderErrorCount++;
+      battleDebug.lastRenderError = (err && err.message) ? err.message : String(err);
+    }
+    requestAnimationFrame(tickRecent);
+  }
+
   let stopped = false;
 
   async function poll() {
     if (stopped) return;
     let nextDelayMs = pollIntervalMs;
+    battleDebug.requestCount++;
+    // 3-(a) fetchにタイムアウトを付ける。無ければ、応答が返らないままだと
+    // setTimeout連鎖が止まる可能性があった（await fetch()がいつまでも解決しないため）。
+    const abortController = new AbortController();
+    const timeoutHandle = setTimeout(() => abortController.abort(), FETCH_TIMEOUT_MS);
     try {
-      const res = await fetch(`${API_BASE}/event-battles/${battleId}/score`);
+      const res = await fetch(`${API_BASE}/event-battles/${battleId}/score`, {
+        signal: abortController.signal,
+        cache: 'no-store', // 3-(e) ブラウザのHTTPキャッシュ・ETagによる条件付きGETを避ける
+      });
+      clearTimeout(timeoutHandle);
       if (res.status === 404) {
         const body = await res.json().catch(() => null);
         showFatalError(
@@ -481,12 +710,31 @@
       }
       const data = await res.json();
       clearConnError();
-      render(data);
-      if (gaugeMode === 'recent') {
-        const ratioA = updateGaugeRecent(data.team_a.total_intensity, data.team_b.total_intensity, Date.now());
-        applyGaugeWidth(ratioA);
+      const now = Date.now();
+      try {
+        render(data);
+        if (gaugeMode === 'recent') {
+          updateCounterRate(data.team_a.total_intensity, data.team_b.total_intensity, now);
+          // 戻り値（A位置）はtickRecent()側で使わなくなった（このファイル冒頭の
+          // gaugeAnimStateのコメント参照）。呼び出しはhistory・leader・lastMagnitudeの
+          // 更新のため。
+          updateGaugeRecent(data.team_a.total_intensity, data.team_b.total_intensity, now);
+        }
+        recordPollSuccess(now);
+      } catch (renderErr) {
+        // 3-(d) 描画の例外は握りつぶし、直前の表示を保持したまま次のポーリングへ続ける
+        // （lastOkAtは更新しない＝表示が実際には更新されていないため、staleIndicatorの
+        // 判定に影響させる）。次回の描画で回復するか、window.__battleDebugで確認できる。
+        battleDebug.renderErrorCount++;
+        battleDebug.lastRenderError = (renderErr && renderErr.message) ? renderErr.message : String(renderErr);
       }
     } catch (e) {
+      clearTimeout(timeoutHandle);
+      if (e && e.name === 'AbortError') {
+        battleDebug.timeoutCount++;
+      } else {
+        battleDebug.failureCount++;
+      }
       // 一時的な通信断は致命エラーにせず、直前の表示を保持したまま次回ポーリングへ続ける
       if (!battleContent.hidden) {
         showConnError('サーバーに接続できません。再試行しています…');
@@ -500,6 +748,7 @@
   }
 
   poll();
+  if (gaugeMode === 'recent') requestAnimationFrame(tickRecent);
 })();
 </script>
 </body>

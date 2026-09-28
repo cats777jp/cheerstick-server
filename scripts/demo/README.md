@@ -114,7 +114,8 @@ node scripts/demo/battle-demo.js --battle-id=<uuid> --org-a=<uuid> --org-b=<uuid
 `--report-interval-ms`（既定10000）、`--metrics-log-path`（既定自動）、`--sent-log-path`、
 `--stop-threshold`（既定0.05）、`--target-range=<low>-<high>`（既定`0.45-0.55`、
 下記「拮抗演出ロジック」参照）、`--burst`（既定無効、下記「猛攻演出」参照）、
-`--burst-interval-sec=<low>-<high>`（既定`20-40`）、`--burst-duration-sec=<low>-<high>`（既定`10-20`）。
+`--burst-interval-sec=<low>-<high>`（既定`20-40`）、`--burst-duration-sec=<low>-<high>`（既定`10-20`）、
+`--no-finish-swing`（既定は付けない＝`--burst`指定時は終盤の勢い変化が有効。下記参照）。
 
 ### 拮抗演出ロジック（目標比率追従方式）
 
@@ -139,6 +140,25 @@ node scripts/demo/battle-demo.js --battle-id=<uuid> --org-a=<uuid> --org-b=<uuid
   以降は再開しない。** 終盤演出を優先するため
 - メトリクスJSONL（`--report-interval-ms`ごとのレコード）に`burst: {active, team}`を追記する
 - `--target-range`の値は起動時のログ（`target_range=...`）と終了時のサマリーに出力される
+
+### 終盤の勢い変化（`--no-finish-swing`、2026-09-28追加）
+
+`--finish=close`の終盤30秒は、両チームの強さがそろい目標比率も0.49〜0.51に固定されるため、
+ゲージがほぼ動かなくなる問題（KMT様フィードバック）への対応。**`--burst`指定時のみ有効**
+（`--burst`無しでは従来どおり変化なし）。`--finish=A`/`B`/`none`の挙動は変えない
+（`--finish=close`のときのみ動作する）。
+
+- 5〜8秒ごとに3秒だけ、どちらかのチームを強く（value 60〜100）、もう一方を弱く
+  （value 20〜60）する小さな揺さぶりを入れる。揺さぶり中は目標比率への追従を止める
+  （`--burst`の猛攻と同じ仕組みで、`BattleRatio#getRange()`が固定レンジを返す）
+- チームは交互に選ぶ（初回のみランダム）。揺さぶりが無い時間帯は通常どおり
+  目標比率（0.49〜0.51）への追従が働くため、累計比率は大きくは崩れない想定
+- `--no-finish-swing`を付けると、`--burst`指定時でもこの終盤の揺さぶりだけを無効にできる
+  （猛攻演出自体〔終盤前〕には影響しない）
+- メトリクスJSONLに`finish_swing: {active, team}`を追記する
+- `finish_swing_events`（2026-09-28調整で追加）：揺さぶりが開始した時刻の一覧
+  `[{startedAt, team}, ...]`を各レコードに追記する（`report-interval-ms`のスナップショット
+  だけでは、5〜8秒間隔・3秒間という短い揺さぶりを取りこぼしうるため、開始時刻を別途記録する）
 
 ### 緊急停止
 

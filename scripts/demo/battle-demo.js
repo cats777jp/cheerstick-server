@@ -46,6 +46,15 @@ const SCORE_POLL_INTERVAL_MS = 3000;
 const MIN_INTENSITY = 1;
 const MAX_INTENSITY = 100;
 
+// --- 終盤の勢い変化（--burst時のfinish=close限定、2026-09-28追加） -------------
+// 終盤（FINISH_WINDOW_MS）は目標比率がFINISH_CLOSE_MIN〜MAXに固定され、両チームの
+// 強さがそろってゲージがほぼ動かなくなる問題への対応。小さな揺さぶりを周期的に入れる。
+const FINISH_SWING_INTERVAL_MIN_SEC = 5;
+const FINISH_SWING_INTERVAL_MAX_SEC = 8;
+const FINISH_SWING_DURATION_SEC = 3;
+const FINISH_SWING_STRONG_RANGE = [60, 100];
+const FINISH_SWING_WEAK_RANGE = [20, 60];
+
 // --- 緊急停止の定数 ---------------------------------------------------------
 const CONNECTION_LOW_CONSECUTIVE_INTERVALS = 2; // 目標の95%を下回る状態が何区間連続したら停止するか
 const CONNECTION_LOW_RATIO = 0.95;
@@ -85,6 +94,7 @@ function parseArgs(argv) {
     burstIntervalSec: [20, 40],
     burstDurationSec: [10, 20],
     targetRange: [RATIO_MIN, RATIO_MAX],
+    noFinishSwing: false,
   };
   for (const raw of argv) {
     const m = /^--([^=]+)(?:=(.*))?$/.exec(raw);
@@ -117,6 +127,7 @@ function parseArgs(argv) {
       case 'burst-interval-sec': args.burstIntervalSec = parseRange(value, 'burst-interval-sec'); break;
       case 'burst-duration-sec': args.burstDurationSec = parseRange(value, 'burst-duration-sec'); break;
       case 'target-range': args.targetRange = parseRange(value, 'target-range'); break;
+      case 'no-finish-swing': args.noFinishSwing = true; break;
       default:
         throw new Error(`unknown option: --${key}`);
     }
@@ -173,6 +184,14 @@ class BattleRatio {
     this.burstActive = false;
     this.burstTeam = null;
     this.lastBurstTeam = null;
+    this.finishSwingActive = false;
+    this.finishSwingTeam = null;
+    this.lastFinishSwingTeam = null;
+    this.finishSwingEvents = []; // {startedAt, team}（2026-09-28調整で追加。時刻の記録用）
+    // 終盤の勢い変化（--burst時のfinish=close限定、2026-09-28追加）。
+    // --finish=A/B/noneの挙動は変えないため、finish=closeのときだけ有効にする。
+    this.finishSwingEnabled = this.ctx.args.burst && !this.ctx.args.noFinishSwing &&
+      this.ctx.args.finish === 'close';
     this._scheduleNextTargetChange();
     if (this.ctx.args.burst) this._scheduleNextBurst();
   }
@@ -238,6 +257,7 @@ class BattleRatio {
     this.burstActive = false;
     this.burstTeam = null;
     this._applyFinishTarget();
+    if (this.finishSwingEnabled) this._scheduleFinishSwing();
   }
 
   _applyFinishTarget() {
@@ -249,6 +269,38 @@ class BattleRatio {
       this.targetRatioA = 1 - FINISH_WIN_RATIO;
     }
     // 'none' の場合は通常ロジックのまま何もしない。
+  }
+
+  // 終盤の勢い変化（--finish=close かつ --burst 指定時のみ、2026-09-28追加）：
+  // 終盤は目標比率がFINISH_CLOSE_MIN〜MAXに固定され両チームの強さがそろうため、
+  // ゲージがほぼ動かなくなる（KMT様フィードバック）。5〜8秒ごとに3秒だけどちらかを
+  // 強くする小さな揺さぶりを入れる。target-range追従（getRange()の通常ロジック）は
+  // 揺さぶり中だけ止める。累計比率は、揺さぶりが無い時間帯の目標追従（FINISH_CLOSE_MIN〜MAX）
+  // によって0.49〜0.51近辺に収まる想定（交互に揺さぶることでも偏りを抑える）。
+  _scheduleFinishSwing() {
+    const delayMs = (FINISH_SWING_INTERVAL_MIN_SEC +
+      Math.random() * (FINISH_SWING_INTERVAL_MAX_SEC - FINISH_SWING_INTERVAL_MIN_SEC)) * 1000;
+    this.finishSwingScheduleTimer = setTimeout(() => {
+      if (this.ctx.stopping || !this.inFinishWindow) return;
+      this._startFinishSwing();
+    }, delayMs);
+  }
+
+  _startFinishSwing() {
+    this.finishSwingTeam = this.lastFinishSwingTeam === null
+      ? (Math.random() < 0.5 ? 'A' : 'B')
+      : (this.lastFinishSwingTeam === 'A' ? 'B' : 'A');
+    this.lastFinishSwingTeam = this.finishSwingTeam;
+    this.finishSwingActive = true;
+    // 時刻の記録（2026-09-28調整で追加）：reportIntervalMsごとのスナップショット
+    // （下記main()のrecord.finish_swing）だけでは、5〜8秒間隔・3秒間という短い揺さぶりが
+    // 既定のreportIntervalMs（10秒）のサンプリングで取りこぼされうるため、開始時刻を別途残す。
+    this.finishSwingEvents.push({ startedAt: new Date().toISOString(), team: this.finishSwingTeam });
+    this.finishSwingEndTimer = setTimeout(() => {
+      this.finishSwingActive = false;
+      this.finishSwingTeam = null;
+      this._scheduleFinishSwing();
+    }, FINISH_SWING_DURATION_SEC * 1000);
   }
 
   async pollActualRatio() {
@@ -284,6 +336,10 @@ class BattleRatio {
       // 猛攻中：目標比率への追従は止め、猛攻中のチームは80〜100、相手は1〜20を固定で返す。
       return team === this.burstTeam ? [80, 100] : [1, 20];
     }
+    if (this.finishSwingActive) {
+      // 終盤の勢い変化中：強い側60〜100、弱い側20〜60を固定で返す。
+      return team === this.finishSwingTeam ? FINISH_SWING_STRONG_RANGE : FINISH_SWING_WEAK_RANGE;
+    }
     const e = this.targetRatioA - this.actualRatioA; // A基準の誤差
     const k = Math.min(Math.abs(e) / K_DENOMINATOR, 1);
 
@@ -307,6 +363,8 @@ class BattleRatio {
     if (this.pollTimer) clearInterval(this.pollTimer);
     if (this.burstScheduleTimer) clearTimeout(this.burstScheduleTimer);
     if (this.burstEndTimer) clearTimeout(this.burstEndTimer);
+    if (this.finishSwingScheduleTimer) clearTimeout(this.finishSwingScheduleTimer);
+    if (this.finishSwingEndTimer) clearTimeout(this.finishSwingEndTimer);
   }
 }
 
@@ -607,6 +665,7 @@ function main() {
       `target_range=${args.targetRange[0]}-${args.targetRange[1]} ` +
       `burst=${args.burst} burst_interval_sec=${args.burstIntervalSec[0]}-${args.burstIntervalSec[1]} ` +
       `burst_duration_sec=${args.burstDurationSec[0]}-${args.burstDurationSec[1]} ` +
+      `finish_swing_enabled=${ctx.battle.finishSwingEnabled} ` +
       `mac_a=${macForIndex(args.macPrefix, 0)}.. mac_b=${macForIndex(args.macPrefix, args.teamBStartIndex)}..`
     );
 
@@ -677,6 +736,10 @@ function main() {
         },
         memory: { rss_mb: Number((mem.rss / 1024 / 1024).toFixed(1)), heap_used_mb: Number((mem.heapUsed / 1024 / 1024).toFixed(1)) },
         burst: { active: ctx.battle.burstActive, team: ctx.battle.burstTeam },
+        finish_swing: { active: ctx.battle.finishSwingActive, team: ctx.battle.finishSwingTeam },
+        // 直近区間で開始した終盤の勢い変化の時刻一覧（重複記録を避けるため、書き出した分は
+        // ここで消費する。2026-09-28調整で追加）。
+        finish_swing_events: ctx.battle.finishSwingEvents.splice(0),
       };
       metricsStream.write(JSON.stringify(record) + '\n');
       console.log(
