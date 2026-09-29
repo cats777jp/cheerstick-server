@@ -288,6 +288,18 @@ async function insertCheerLog({ deviceId, userId, eventId, targetId, intensity, 
   );
 }
 
+/**
+ * BLE切断の記録（ble_disconnect_logsへ1件INSERT、migrations/013、2026-09-29追加）。
+ * eventIdはcount処理と同じ判定（選択中チームにstatus='live'の試合があればそのid）で、
+ * 無ければnullのまま渡してよい。
+ */
+async function insertBleDisconnectLog({ deviceId, eventId }) {
+  await db.query(
+    `INSERT INTO ble_disconnect_logs (device_id, event_id) VALUES ($1, $2)`,
+    [deviceId, eventId || null]
+  );
+}
+
 // 006_event_status.sql のCHECK制約と一致させる許可値
 const EVENT_STATUSES = ['scheduled', 'live', 'paused', 'finished', 'cancelled'];
 
@@ -1354,6 +1366,7 @@ module.exports = {
   getAllTimeCheerTotal,
   findLiveEventForOrganization,
   insertCheerLog,
+  insertBleDisconnectLog,
   updateEventStatus,
   listEventsAdmin,
   createEvent,

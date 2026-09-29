@@ -282,6 +282,31 @@ class CheerWebSocketServer {
               break;
             }
 
+            // BLE切断の記録（2026-09-29追加、migrations/013）。public/index.htmlが
+            // APPからの異常データ（accel全軸ゼロ等）を検知したときに送る通知。
+            // クライアント側で立ち上がりエッジのみ送信する設計のため（連続検知中は
+            // 送信されない）、サーバー側で重複排除・デバウンス等は行わない。
+            // countハンドラと同じく、live中の公式試合が無ければevent_idはnullのまま記録する
+            // （BLE切断自体は練習中・試合前後でも発生しうるため、記録自体は絞らない）。
+            case 'ble_disconnect': {
+              const { id } = msg;
+              if (!id) break; // idが無ければ何もしない（レスポンス不要のため、エラー応答もしない）
+
+              const row = await cheerQueries.findDeviceWithProfile(id);
+              if (row) {
+                let eventId = null;
+                if (row.selected_organization_id) {
+                  const liveEvent = await cheerQueries.findLiveEventForOrganization(
+                    row.selected_organization_id
+                  );
+                  eventId = liveEvent ? liveEvent.id : null;
+                }
+                await cheerQueries.insertBleDisconnectLog({ deviceId: row.device_id, eventId });
+              }
+              // レスポンス不要。
+              break;
+            }
+
             default:
               this.send(ws, { type: 'error', message: `unknown type: ${msg.type}` });
           }

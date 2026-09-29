@@ -1049,6 +1049,13 @@
   // window.onCheerStickDataの呼び出し間隔は1秒間隔を想定しているが（docs/spec.md 5.1）、
   // 実機の呼び出し間隔がその通りとは限らないため、呼び出し回数ではなく経過時間で判定する）
   let batteryLowSince = null;
+  // BLE切断の通知（type: "ble_disconnect"）を、直近で送信済みかどうか（2026-09-29追加）。
+  // 異常データを連続して受信し続けている間（BLEが切断されたまま）は、送信を最初の1回のみに
+  // 絞る（＝立ち上がりエッジでのみ通知する）。isBleDisconnectPayload()は
+  // window.onCheerStickDataが呼ばれるたびに毎回判定されるため、そのまま送信すると、
+  // 1回の物理的な切断につき何十件もの通知が送られてしまい、Vanstone様が求める
+  // 「頻度」の集計が意味を持たなくなるため。
+  let bleDisconnectNotified = false;
 
   // Vanstoneへ提示する仮称: window.onCheerStickData
   // ネイティブアプリ側から加速度センサー等の生データを受け取るエントリポイント。
@@ -1059,16 +1066,22 @@
     // a. 応援中画面が表示されていない間は何もしない
     if (cheeringCard.classList.contains('hidden')) return;
 
-    // b. BLE切断検知。サーバー通知（type: "ble_disconnect"）は将来対応とし、
-    //    今回はまずクライアント側の表示のみ行う。
+    // b. BLE切断検知。サーバーへ通知する（type: "ble_disconnect"、2026-09-29追加）。
+    //    send()はWebSocketが接続中（OPEN）でなければ何もしない設計のため、接続が
+    //    切れている間はここで無理に再接続等は行わず、そのまま送信をスキップする。
     if (isBleDisconnectPayload(payload)) {
       bleAlertDisplay.classList.remove('hidden');
       window.CheerStickBridge && window.CheerStickBridge.sendLED &&
         window.CheerStickBridge.sendLED({ LED: { r: 0, g: 0, b: 0 }, stat: 'BleRetry' });
+      if (!bleDisconnectNotified) {
+        bleDisconnectNotified = true;
+        send({ type: 'ble_disconnect', id: deviceId });
+      }
       return;
     }
 
-    // c. 切断でなければアラート表示を戻す
+    // c. 切断でなければアラート表示を戻す（次にまた切断したら、再度通知できるようにする）
+    bleDisconnectNotified = false;
     bleAlertDisplay.classList.add('hidden');
 
     // d. 応援強度を算出
