@@ -306,11 +306,55 @@ async function main() {
   await sleep(1500);
   check('サーバー終了処理相当の呼び出しで、子プロセスが実際に終了する', !isProcessAlive(thirdChildPid), `pid=${thirdChildPid}`);
 
-  // 後片付け：3回目のバトルをfinishedにしておく（DB状態を綺麗にするため）
-  const finalStatus = await callDemo('/demo/status', 'GET');
-  if (finalStatus.body.battleId) {
-    await callDemo('/demo/setup', 'POST'); // finish-run相当で片付け、新しいバトルは残るが検証への影響は無い
-  }
+  // === 11. チーム名に依存しない取得（作成日時が最も古い2件）の確認 =============
+  // 2026-09-29変更：将来チーム名が変わってもコード変更なしで動くことを確認する。
+  // (a) 既存の2チーム（EMUTTO・J SPORTS）の名前を、旧デフォルト名と無関係な名前へ変更する
+  // (b) デモ用カテゴリーに3チーム目を「後から」追加する。名前はアルファベット順で先頭に
+  //     来る（"AAAA"）が、作成日時は最も新しい＝もし実装が「名前順」や「一覧の先頭2件」で
+  //     選んでいた場合、この3チーム目が誤って選ばれてしまうはずの罠として設置する
+  // (c) setupを実行し、実際に選ばれた2チームが、リネーム後の元の2チーム
+  //     （名前非依存で正しく特定できていること）であり、"AAAA"ではないことをDBで確認する
+  console.log('\n[verify] === step 11: team resolution is name-independent (oldest 2 by created_at) ===');
+  const RENAMED_ORG_A_NAME = 'チームアルファ';
+  const RENAMED_ORG_B_NAME = 'チームベータ';
+  const THIRD_ORG_ID = '90000000-0000-0000-0000-0000000000c2';
+
+  await verifyPool.query(`UPDATE organizations SET name = $1 WHERE id = $2`, [RENAMED_ORG_A_NAME, ORG_A_ID]);
+  await verifyPool.query(`UPDATE organizations SET name = $1 WHERE id = $2`, [RENAMED_ORG_B_NAME, ORG_B_ID]);
+  await verifyPool.query(
+    `INSERT INTO organizations (id, name, type, category_id) VALUES ($1, 'AAAA', 'football_club', $2)`,
+    [THIRD_ORG_ID, CATEGORY_ID]
+  );
+
+  const statusBeforeStep11 = await callDemo('/demo/status', 'GET');
+  check('step11開始時点でrunningではない（前提条件）', statusBeforeStep11.body.status !== 'running',
+    JSON.stringify(statusBeforeStep11.body));
+
+  const step11Setup = await callDemo('/demo/setup', 'POST');
+  check('リネーム後・3チーム目追加後もsetupは201', step11Setup.status === 201, JSON.stringify(step11Setup.body));
+
+  const step11BattleId = step11Setup.body.battleId;
+  const step11OrgNames = await verifyPool.query(
+    `SELECT oa.name AS org_a_name, ob.name AS org_b_name
+     FROM event_battles eb
+     JOIN events ea ON ea.id = eb.event_a_id
+     JOIN organizations oa ON oa.id = ea.organization_id
+     JOIN events ebv ON ebv.id = eb.event_b_id
+     JOIN organizations ob ON ob.id = ebv.organization_id
+     WHERE eb.id = $1`,
+    [step11BattleId]
+  );
+  const resolvedNames = step11OrgNames.rows.length > 0
+    ? [step11OrgNames.rows[0].org_a_name, step11OrgNames.rows[0].org_b_name]
+    : [];
+  const gotRenamedPair = resolvedNames.includes(RENAMED_ORG_A_NAME) && resolvedNames.includes(RENAMED_ORG_B_NAME);
+  const gotThirdOrg = resolvedNames.includes('AAAA');
+  check('リネーム後の元2チーム（作成日時が古い方）が選ばれている', gotRenamedPair, JSON.stringify(resolvedNames));
+  check('後から追加した3チーム目（"AAAA"）は選ばれていない', !gotThirdOrg, JSON.stringify(resolvedNames));
+
+  // 後片付け：3チーム目を削除し、DB状態を元に戻す
+  await callDemo('/demo/setup', 'POST'); // 直前のバトルをfinish-run相当で片付ける
+  await verifyPool.query(`DELETE FROM organizations WHERE id = $1`, [THIRD_ORG_ID]);
 
   console.log(`\n[verify] ================ RESULT: PASS=${PASS} FAIL=${FAIL} ================`);
   await verifyPool.end();

@@ -17,14 +17,47 @@ const { spawn } = require('child_process');
 
 const demoModeState = require('../services/demoModeState');
 const prepare = require('../../scripts/demo/battle-demo-prepare');
+const cheerQueries = require('../db/cheerstickQueries');
 
 const PORT = process.env.PORT || 3000;
 const API_BASE = `http://127.0.0.1:${PORT}/api/v1`;
+const DEMO_CATEGORY_NAME = 'デモ用';
 
 function buildScreenUrl(battleId) {
   // 絶対URL化（APP_BASE、環境ごとに異なるドメイン）はフロント側（common.js）に委ねる。
   // 既存の対抗戦ペア一覧のbattleScreenUrl()と同じ考え方。
   return `/battle.html?battle_id=${battleId}&gauge=recent&poll=1000`;
+}
+
+// 「デモ用」カテゴリーに属するチームのうち、作成日時が最も古い2件を返す
+// （2026-09-29追加）。battle-demo-prepare.js自体はチーム名を直接指定して検索する
+// 設計（findOrganization()）のため無改修のまま、こちら側で名前に依存しない方法で
+// 対象チームを決めてから、そのチーム名をprepare.main()へ明示的に渡す形にする。
+// これにより、将来チーム名を変更してもコード変更なしで動く。
+// DB直接参照はcheerQueriesを使う（in-process呼び出しのため、prepare.js自身のような
+// HTTP自己ループを経由する必要が無い）。
+// 安全策：カテゴリーは名前一致するもの以外を対象にしない・新規作成しない
+// （既存のfindCategory()と同じ制約）。
+async function resolveDemoTeams() {
+  const categories = await cheerQueries.listCategoriesForAdmin();
+  const category = categories.find((c) => c.name === DEMO_CATEGORY_NAME);
+  if (!category) {
+    throw new Error(
+      `category "${DEMO_CATEGORY_NAME}" not found. 新規作成は行わない設計のため、事前に管理画面等で作成してください。`
+    );
+  }
+
+  const organizations = await cheerQueries.listOrganizationsForAdmin(category.id);
+  if (organizations.length < 2) {
+    throw new Error(
+      `category "${DEMO_CATEGORY_NAME}" には2チーム以上の登録が必要です（現在${organizations.length}件）`
+    );
+  }
+
+  const sorted = [...organizations].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  return { category, orgA: sorted[0], orgB: sorted[1] };
 }
 
 // 実行中の子プロセスへSIGTERMを送り、終了（'exit'イベント）を待つ。
@@ -75,11 +108,17 @@ exports.setup = async (req, res, next) => {
       }
     }
 
+    // 対象チームは名前に依存せず、「デモ用」カテゴリーの中で作成日時が最も古い2件から
+    // 決める（2026-09-29変更）。決めたチーム名をprepare.main()へ明示的に渡す。
+    const { orgA: resolvedOrgA, orgB: resolvedOrgB } = await resolveDemoTeams();
+
     const result = await prepare.main([
       `--api-base=${API_BASE}`,
       '--yes',
       '--pause-other-live',
       `--devices-per-team=${demoModeState.DEVICES_PER_TEAM}`,
+      `--team-a-name=${resolvedOrgA.name}`,
+      `--team-b-name=${resolvedOrgB.name}`,
     ]);
 
     const screenUrl = buildScreenUrl(result.battle.id);
