@@ -269,6 +269,32 @@
   const gaugeRangePercent = parseParamNumber('range', 20, 0, 45);
   const gaugeRangeFraction = gaugeRangePercent / 100;
 
+  // 累計差が小さいときに、rangeを中央寄りに制限する（&narrowThresholdPct・&narrowRangePct、
+  // 2026-09-29追加。gauge=recentのときだけ有効）。
+  // narrowRangePctは「中央（50%）からの半width」として扱う（既定10 → 40%〜60%の意味）。
+  // 指示書中の「range=20の代わりに実質range=10相当にする」という記述は、既存のrange
+  // パラメータ（負けている側の下限=range%という定義）とは軸が異なる別表現であり、その
+  // まま同じ意味でnarrowRangePct=10を当てはめると逆に範囲が広がってしまう（「中央寄りに
+  // 制限する」という目的と矛盾する）ため、指示書の具体例（40%〜60%）の方を正として、
+  // 半width方式で解釈した。この解釈はKMT様へ停止ポイントで報告し確認を得ること。
+  const narrowThresholdPercent = parseParamNumber('narrowThresholdPct', 3, 0, 100);
+  const narrowRangePercent = parseParamNumber('narrowRangePct', 10, 0, 50);
+
+  // 累計の差（|a-b|/(a+b)）に応じた、実際に使うrange（%）を求める。
+  // 差がnarrowThresholdPercent以上なら、通常どおりgaugeRangePercentをそのまま使う。
+  // 差0%〜narrowThresholdPercent%の間は、(50-narrowRangePercent)からgaugeRangePercentへ
+  // 線形に補間する（差0%のとき最も狭い40%〜60%相当、差narrowThresholdPercent%のとき
+  // 既定rangeに達する）。
+  function computeEffectiveRangePercent(totalA, totalB) {
+    if (narrowThresholdPercent <= 0) return gaugeRangePercent;
+    const sum = totalA + totalB;
+    const diffPercent = sum > 0 ? (Math.abs(totalA - totalB) / sum) * 100 : 0;
+    if (diffPercent >= narrowThresholdPercent) return gaugeRangePercent;
+    const narrowFloorPercent = 50 - narrowRangePercent;
+    const t = diffPercent / narrowThresholdPercent;
+    return narrowFloorPercent + (gaugeRangePercent - narrowFloorPercent) * t;
+  }
+
   // --- 「常に動く仕組み」の定数（gauge=recentのときだけ使用、2026-09-28調整で追加） ---------
   // 2-(a) カウンターの連続表示：直近何ミリ秒の差分から増加速度を求めるか（指示書は固定15秒。
   // gauge=recentのwindowパラメータ（可変・既定15秒）とは独立させている）。
@@ -522,6 +548,11 @@
     history: [], // [{t, a, b}]（cheered_atではなくポーリング受信時刻を使う）
     leader: null, // 'A' | 'B' | null（同点継続中で未確定の場合）
     lastMagnitude: 0, // 直前の押し込み幅（0〜0.5）。dA+dBが小さすぎる場合に保持する
+    // 直近の応援が実質0で、lastMagnitudeを保持（更新せず）している間はtrue
+    // （2026-09-29追加。「揺れを止める」の判定に使う。tickRecent()参照）。
+    holding: true,
+    // 累計差に応じた、今この瞬間に使うrange（0〜0.5未満）。2026-09-29追加。
+    effectiveRangeFraction: gaugeRangeFraction,
   };
 
   function updateGaugeRecent(totalA, totalB, now) {
@@ -544,15 +575,23 @@
     const dB = totalB - oldest.b;
     const total = dA + dB;
 
+    // 累計差に応じたrange（2026-09-29追加）。holding中かどうかによらず、常に
+    // 現在の累計値から計算し直す（固定中の位置のclamp範囲にもそのまま使う）。
+    state.effectiveRangeFraction = computeEffectiveRangePercent(totalA, totalB) / 100;
+
     if (state.history.length >= 2 && total >= 1) {
       const shareA = dA / total;
       const shareL = state.leader === 'A' ? shareA : state.leader === 'B' ? (1 - shareA) : 0.5;
       // 押し込まれない範囲（&range、2026-09-28調整で追加）：リーダー側の上限を
       // 1.0ではなく1-range%に抑えることで、負けている側にも最低range%を残す。
-      const gaugeL = clampNum(0.5 + (shareL - 0.5) * gaugeAmp, 0.5, 1 - gaugeRangeFraction);
+      const gaugeL = clampNum(0.5 + (shareL - 0.5) * gaugeAmp, 0.5, 1 - state.effectiveRangeFraction);
       state.lastMagnitude = gaugeL - 0.5;
+      state.holding = false;
+    } else {
+      // total < 1、または履歴1件のみ（初回）の場合は、lastMagnitudeを更新せず保持する
+      // （＝直近の応援が実質0。「揺れを止める」対象、2026-09-29追加）。
+      state.holding = true;
     }
-    // total < 1、または履歴1件のみ（初回）の場合は、lastMagnitudeを更新せず保持する。
 
     if (state.leader === null) return 0.5; // 初回・同点継続中で未確定
     const gaugeL = 0.5 + state.lastMagnitude;
@@ -645,17 +684,23 @@
 
       // 2-(c) 呼吸の揺れ。加えた後、リーダー側が50%未満にならず、range%の範囲を
       // 超えないよう最後にclampする（表示中のptが同点継続中はrange%の範囲でclamp）。
+      // ただし直近の応援が実質0で位置を保持中（holding）のときは、揺れを止めて
+      // その位置に固定する（2026-09-29追加。「揺れを止める」対応）。
       const breathT = nowMs / 1000;
-      const wobblePoints = GAUGE_BREATH_AMPLITUDE_POINTS *
-        Math.sin((2 * Math.PI * breathT) / GAUGE_BREATH_PERIOD_SEC);
+      const wobblePoints = gaugeRecentState.holding
+        ? 0
+        : GAUGE_BREATH_AMPLITUDE_POINTS * Math.sin((2 * Math.PI * breathT) / GAUGE_BREATH_PERIOD_SEC);
+      // clampに使うrangeは、累計差に応じてupdateGaugeRecent()が毎ポーリング更新する
+      // 値を使う（固定range=gaugeRangeFractionではない。2026-09-29追加）。
+      const effectiveRangeFraction = gaugeRecentState.effectiveRangeFraction;
       const leaderGaugeValue = 0.5 + gaugeAnimState.smoothedMagnitude + wobblePoints / 100;
       let finalA;
       if (gaugeAnimState.displayLeader === 'A') {
-        finalA = clampNum(leaderGaugeValue, 0.5, 1 - gaugeRangeFraction);
+        finalA = clampNum(leaderGaugeValue, 0.5, 1 - effectiveRangeFraction);
       } else if (gaugeAnimState.displayLeader === 'B') {
-        finalA = clampNum(1 - leaderGaugeValue, gaugeRangeFraction, 0.5);
+        finalA = clampNum(1 - leaderGaugeValue, effectiveRangeFraction, 0.5);
       } else {
-        finalA = clampNum(0.5 + wobblePoints / 100, gaugeRangeFraction, 1 - gaugeRangeFraction);
+        finalA = clampNum(0.5 + wobblePoints / 100, effectiveRangeFraction, 1 - effectiveRangeFraction);
       }
       applyGaugeWidth(finalA);
 
