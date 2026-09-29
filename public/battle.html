@@ -314,6 +314,15 @@
   const UNCHANGED_CHECK_INTERVAL_MS = 500;
   const UNCHANGED_SPAN_THRESHOLD_MS = 3000;
 
+  // カウンター（表示中の推定pt合計）の短期停滞検知（2026-09-29追加）。
+  // 「揺れ・位置の保持（holding）」判定を、直近window秒の応援量差分だけでなく、
+  // この短期判定にもそろえる（gaugeAnimState周辺のコメント参照）。
+  // 直近COUNTER_STALL_WINDOW_MS間の増分がCOUNTER_STALL_EPSILON_POINTS未満なら
+  // 「増えていない」とみなす。既存の応援中の動き（毎秒十分な増分がある）には
+  // 影響しない程度に小さく、かつ応援停止をおおむね1秒程度で検知できる値とした。
+  const COUNTER_STALL_WINDOW_MS = 500;
+  const COUNTER_STALL_EPSILON_POINTS = 1;
+
   const loadingState = document.getElementById('loadingState');
   const errorState = document.getElementById('errorState');
   const battleContent = document.getElementById('battleContent');
@@ -579,7 +588,14 @@
     // 現在の累計値から計算し直す（固定中の位置のclamp範囲にもそのまま使う）。
     state.effectiveRangeFraction = computeEffectiveRangePercent(totalA, totalB) / 100;
 
-    if (state.history.length >= 2 && total >= 1) {
+    // カウンター（表示中の推定pt合計）が直近で増えていない場合も、holdingとして扱う
+    // （2026-09-29調整）。window秒の差分（total）だけで判定すると、応援停止直後も
+    // window秒かけて履歴が抜けていく間、まだ「応援あり」と誤判定され続け、
+    // その間ゲージが遅れて動いてしまう（実機確認で発覚。docs/worklog.md参照）。
+    // counterStallState.stalledは、tickRecent()側でカウンターの表示値から
+    // 毎フレーム（COUNTER_STALL_WINDOW_MSごと）判定しているため、window秒より
+    // ずっと短い時間で反映される。
+    if (state.history.length >= 2 && total >= 1 && !counterStallState.stalled) {
       const shareA = dA / total;
       const shareL = state.leader === 'A' ? shareA : state.leader === 'B' ? (1 - shareA) : 0.5;
       // 押し込まれない範囲（&range、2026-09-28調整で追加）：リーダー側の上限を
@@ -588,8 +604,8 @@
       state.lastMagnitude = gaugeL - 0.5;
       state.holding = false;
     } else {
-      // total < 1、または履歴1件のみ（初回）の場合は、lastMagnitudeを更新せず保持する
-      // （＝直近の応援が実質0。「揺れを止める」対象、2026-09-29追加）。
+      // total < 1、履歴1件のみ（初回）、またはカウンターが停滞中の場合は、
+      // lastMagnitudeを更新せず保持する（＝「揺れを止める」対象、2026-09-28〜29追加）。
       state.holding = true;
     }
 
@@ -606,6 +622,15 @@
   const counterState = {
     a: { history: [], base: 0, baseAt: 0, rate: 0, display: 0 },
     b: { history: [], base: 0, baseAt: 0, rate: 0, display: 0 },
+  };
+
+  // カウンターの短期停滞検知の状態（2026-09-29追加）。tickRecent()が毎フレーム、
+  // COUNTER_STALL_WINDOW_MSごとに直近の増分を見て更新する。updateGaugeRecent()側は
+  // これを読むだけ（このオブジェクト自体はtickRecent()側でのみ更新する）。
+  const counterStallState = {
+    referenceAt: null,
+    referenceTotal: 0,
+    stalled: false,
   };
 
   function updateCounterRate(totalA, totalB, now) {
@@ -663,6 +688,21 @@
       document.getElementById('scoreA').textContent = formatNumber(Math.round(counterState.a.display));
       document.getElementById('scoreB').textContent = formatNumber(Math.round(counterState.b.display));
 
+      // カウンターの短期停滞検知（2026-09-29追加）。直近COUNTER_STALL_WINDOW_MS間の
+      // 表示合計の増分がCOUNTER_STALL_EPSILON_POINTS未満なら「増えていない」とみなす。
+      // 揺れ・位置の保持（holding）を、この判定にもそろえる（下記の使用箇所参照）。
+      const totalDisplay = counterState.a.display + counterState.b.display;
+      if (counterStallState.referenceAt === null) {
+        counterStallState.referenceAt = nowMs;
+        counterStallState.referenceTotal = totalDisplay;
+      } else if (nowMs - counterStallState.referenceAt >= COUNTER_STALL_WINDOW_MS) {
+        counterStallState.stalled =
+          (totalDisplay - counterStallState.referenceTotal) < COUNTER_STALL_EPSILON_POINTS;
+        counterStallState.referenceAt = nowMs;
+        counterStallState.referenceTotal = totalDisplay;
+      }
+      // else: 判定用の窓の途中なので、前回判定したstalledをそのまま使う。
+
       // 表示中の推定pt（上で更新したcounterState.*.display）を比較し、今まさに画面に
       // 出しているptのリーダーを毎フレーム決める（同点なら直前を保持）。ゲージの符号は
       // 常にこれに同期させる（このファイル冒頭のgaugeAnimStateのコメント参照）。
@@ -685,9 +725,15 @@
       // 2-(c) 呼吸の揺れ。加えた後、リーダー側が50%未満にならず、range%の範囲を
       // 超えないよう最後にclampする（表示中のptが同点継続中はrange%の範囲でclamp）。
       // ただし直近の応援が実質0で位置を保持中（holding）のときは、揺れを止めて
-      // その位置に固定する（2026-09-29追加。「揺れを止める」対応）。
+      // その位置に固定する（2026-09-28追加。「揺れを止める」対応）。
+      // 2026-09-29調整：gaugeRecentState.holding（ポーリングのたびにのみ更新される）
+      // だけでなく、counterStallState.stalled（毎フレーム更新される、カウンターの
+      // 短期停滞検知）もORで加える。応援停止直後、次のポーリングが届くまでの間も
+      // 揺れを即座に止めるため（実機確認で発覚した「停止直後、数秒間ゲージが片方へ
+      // 振れてから中央へ戻る」現象への対応。docs/worklog.md参照）。
+      const isHolding = gaugeRecentState.holding || counterStallState.stalled;
       const breathT = nowMs / 1000;
-      const wobblePoints = gaugeRecentState.holding
+      const wobblePoints = isHolding
         ? 0
         : GAUGE_BREATH_AMPLITUDE_POINTS * Math.sin((2 * Math.PI * breathT) / GAUGE_BREATH_PERIOD_SEC);
       // clampに使うrangeは、累計差に応じてupdateGaugeRecent()が毎ポーリング更新する
