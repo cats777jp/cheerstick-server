@@ -14,6 +14,7 @@ const adminEventController = require('../controllers/adminEventController');
 const adminDeviceController = require('../controllers/adminDeviceController');
 const adminTargetController = require('../controllers/adminTargetController');
 const adminRankingController = require('../controllers/adminRankingController');
+const adminDemoController = require('../controllers/adminDemoController');
 const uploadController = require('../controllers/uploadController');
 const { adminIpLimiter } = require('../middleware/rateLimit');
 
@@ -90,5 +91,11 @@ router.delete('/targets/:id', adminTargetController.remove);
 
 // 画像アップロード（チームロゴ・選手/推し対象写真、改善3件フェーズ2、2026-09-16新設）
 router.post('/uploads/image', handleImageUpload, uploadController.uploadImage);
+
+// お客様向け「デモモード」機能（管理画面へのボタン追加、2026-09-29新設）
+router.post('/demo/setup', adminDemoController.setup);
+router.post('/demo/start', adminDemoController.start);
+router.post('/demo/stop', adminDemoController.stop);
+router.get('/demo/status', adminDemoController.status);
 
 module.exports = router;

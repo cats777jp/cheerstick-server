@@ -33,6 +33,17 @@
     font-size: 12px;
     padding: 6px 8px;
   }
+  /* デモモード（管理画面へのボタン追加、2026-09-29追加） */
+  .demo-status-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .demo-status-label { font-size: 14px; }
+  .demo-countdown { font-size: 20px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  .demo-screen-link.disabled { pointer-events: none; opacity: 0.5; }
 </style>
 </head>
 <body>
@@ -98,6 +109,25 @@
         <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- (H) デモモード（お客様向け「デモモード」機能、2026-09-29追加）。
+       お客様の前で、すぐに100 vs 100の応援合戦デモを見せられるようにするための操作パネル。
+       対象（カテゴリー「デモ用」・チーム・台数100・時間60秒固定）はサーバー側で固定しており、
+       この画面からは変更できない（docs/proposals/demo-mode-admin-ui.md参照）。 -->
+  <div class="card">
+    <h2>デモモード</h2>
+    <div class="demo-status-row">
+      <span class="demo-status-label">状態: <span id="demoStatusLabel">読み込み中...</span></span>
+      <span id="demoCountdown" class="demo-countdown hidden"></span>
+    </div>
+    <div>
+      <button id="demoSetupBtn">デモをセット</button>
+      <button id="demoStartStopBtn">デモを開始</button>
+      <a id="demoScreenLink" class="demo-screen-link disabled" href="#" target="_blank" rel="noopener">
+        <button type="button" id="demoScreenLinkBtn">表示画面を開く</button>
+      </a>
+    </div>
   </div>
 
   <!-- (G) 対抗戦ペア管理（2チーム対抗応援合戦機能、2026-09-11追加）。
@@ -715,6 +745,101 @@
   }
 
   loadBattles();
+
+  // ==========================================================
+  // (H) デモモード（お客様向け「デモモード」機能、2026-09-29追加）
+  // ==========================================================
+  const DEMO_POLL_INTERVAL_MS = 2500;
+  const DEMO_STATUS_LABELS = { idle: '未セット', set: 'セット済み', running: '実行中' };
+
+  const demoStatusLabelEl = document.getElementById('demoStatusLabel');
+  const demoCountdownEl = document.getElementById('demoCountdown');
+  const demoSetupBtn = document.getElementById('demoSetupBtn');
+  const demoStartStopBtn = document.getElementById('demoStartStopBtn');
+  const demoScreenLink = document.getElementById('demoScreenLink');
+
+  function formatCountdown(remainingMs) {
+    const totalSec = Math.ceil(remainingMs / 1000);
+    return `残り${totalSec}秒`;
+  }
+
+  // ボタンの活性・非活性（指示書1章の表のとおり）。
+  //   ①デモをセット：実行中でないときだけ押せる
+  //   ②デモを開始/停止：セット済みなら「開始」、実行中なら「停止」として押せる。未セットなら押せない
+  //   ③表示画面を開く：screenUrlがある（idleでない）ときだけリンクとして機能する
+  function renderDemoStatus(status) {
+    demoStatusLabelEl.textContent = DEMO_STATUS_LABELS[status.status] || status.status;
+
+    demoSetupBtn.disabled = status.status === 'running';
+
+    if (status.status === 'running') {
+      demoStartStopBtn.textContent = 'デモを停止';
+      demoStartStopBtn.disabled = false;
+      demoStartStopBtn.classList.add('danger');
+      demoCountdownEl.classList.remove('hidden');
+      demoCountdownEl.textContent = formatCountdown(status.remainingMs || 0);
+    } else {
+      demoStartStopBtn.textContent = 'デモを開始';
+      demoStartStopBtn.disabled = status.status !== 'set';
+      demoStartStopBtn.classList.remove('danger');
+      demoCountdownEl.classList.add('hidden');
+      demoCountdownEl.textContent = '';
+    }
+
+    if (status.screenUrl) {
+      demoScreenLink.href = `${APP_BASE}${status.screenUrl}`;
+      demoScreenLink.classList.remove('disabled');
+    } else {
+      demoScreenLink.href = '#';
+      demoScreenLink.classList.add('disabled');
+    }
+  }
+
+  async function pollDemoStatus() {
+    try {
+      const status = await apiFetch('/demo/status');
+      renderDemoStatus(status);
+    } catch (e) {
+      // ポーリング失敗はエラーバーで常時表示するとうるさいため、コンソールのみに残す。
+      console.error('デモ状態の取得に失敗しました', e);
+    }
+  }
+
+  demoSetupBtn.addEventListener('click', async () => {
+    demoSetupBtn.disabled = true;
+    try {
+      await apiFetch('/demo/setup', { method: 'POST' });
+      clearError();
+    } catch (e) {
+      if (e.status === 409 && e.body && e.body.error === 'DEMO_RUNNING') {
+        showError('デモが実行中のため、セットできません。先に停止してください。');
+      } else {
+        showError('デモのセットに失敗しました: ' + e.message);
+      }
+    } finally {
+      await pollDemoStatus();
+    }
+  });
+
+  demoStartStopBtn.addEventListener('click', async () => {
+    const starting = demoStartStopBtn.textContent === 'デモを開始';
+    demoStartStopBtn.disabled = true;
+    try {
+      await apiFetch(starting ? '/demo/start' : '/demo/stop', { method: 'POST' });
+      clearError();
+    } catch (e) {
+      if (starting && e.status === 409 && e.body && e.body.error === 'DEMO_NOT_SET') {
+        showError('先に「デモをセット」を押してください。');
+      } else {
+        showError((starting ? 'デモの開始' : 'デモの停止') + 'に失敗しました: ' + e.message);
+      }
+    } finally {
+      await pollDemoStatus();
+    }
+  });
+
+  pollDemoStatus();
+  setInterval(pollDemoStatus, DEMO_POLL_INTERVAL_MS);
 })();
 </script>
 </body>
