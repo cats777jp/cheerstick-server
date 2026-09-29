@@ -2405,6 +2405,83 @@ BLEブリッジ〜ネイティブアプリ間、またはネイティブアプ�
 **次回への申し送り**：Vanstone様への確認事項（5.2章のLEDブリッジ未実装の件と
 合わせて）に、本事象の再現条件・ログ有無を追加することを検討する。
 
+## 11.12 BLE切断のサーバー記録（`ble_disconnect`、migrations/013、2026-09-29実装・ローカル確認まで）
+
+Vanstone様からの逆質問（「BLE切断の頻度・条件を、サーバー側で集計できないか」）を受けて実装した。
+2026-07-25の幽霊接続問題調査時点では「接続の安定性を優先し、後回しにする」という優先順位づけの
+判断で意図的に見送られていた（4.4章・935行目参照）が、11.10章の幽霊接続対策（ping/pong・
+旧接続close等）が完了したことを受けて、今回対応した。**本番EC2への反映は未実施。**
+
+### クライアント側（`public/index.html`）
+
+`isBleDisconnectPayload()`（変更なし）が真になったとき、既存の
+`CheerStickBridge.sendLED({LED:{r:0,g:0,b:0}, stat:'BleRetry'})`に加えて、
+WebSocketで`{ type: 'ble_disconnect', id: <mac> }`をサーバーへ送信する。
+
+- **立ち上がりエッジのみ送信**：`bleDisconnectNotified`フラグにより、連続して異常データを
+  受信し続けている間（＝BLEが切断されたまま）は最初の1回のみ送信し、正常なペイロードが
+  戻ってくるまで再送しない。指示書には明記が無かった判断だが、`window.onCheerStickData`は
+  約1秒間隔で呼ばれるため（5.1章）、素直に毎回送信すると1回の物理的な切断につき
+  数十件の通知が送られてしまい、Vanstone様が求める「頻度」の集計が意味を持たなくなるため
+  追加した
+- 送信は既存の`send()`関数（WebSocketが`OPEN`状態でなければ何もしない）をそのまま使うため、
+  接続自体が切れている場合は自然に送信がスキップされる（指示書どおり、無理な再接続等は行わない）
+- 既存のカウント送信処理（BLE切断時は`return`し以降の処理に進まない設計）は変更していない
+
+### サーバー側
+
+`src/websocket/index.js`に新しいメッセージ種別`ble_disconnect`のハンドラを追加した
+（既存の`count`ハンドラと同じパターン）。`id`（MACアドレス）からデバイスを検索し、
+選択中チームに`status='live'`の試合があればその`event_id`とあわせて、
+`ble_disconnect_logs`テーブル（新規、`migrations/013_add_ble_disconnect_logs.sql`）へ
+1件INSERTする。レスポンスは返さない（クライアント側は応答を待たない設計）。
+`id`が無い・対応するデバイスが見つからない場合は、エラー応答もせず静かに何もしない
+（レスポンス不要のメッセージのため、不正な入力で`{type:'error'}`を送り返す必要は無いと判断）。
+
+```sql
+CREATE TABLE ble_disconnect_logs (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id   UUID        NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
+    event_id    UUID        REFERENCES events(id) ON DELETE SET NULL,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+**記録方式の判断（案A：ログのみ／案B：DB記録）**：**案B（DB記録）を採用した。**
+理由：Vanstone様が求めているのは「頻度・条件の傾向」の分析であり、pm2ログ
+（`out.log`/`error.log`）はログローテーションで古い分が失われる運用のため、
+長期間・大量デバイスにまたがる集計には不向きと判断した。DBテーブルであれば
+`docs/runbook.md`のSQL例のとおり任意の期間・条件で集計でき、既存の`cheer_logs`等と
+同じ運用（migrationで管理）にも馴染む。実装・確認の手間は案Aよりやや大きいが、
+新規テーブル1つ・ハンドラ1ケースのみで収まる範囲だった。
+
+**レート制限（トラックA）の対象外であることの確認**：`ble_disconnect`はWebSocket
+経由のメッセージであり、11.10章・12章で確認済みのとおり、`ws`パッケージはHTTPサーバーの
+`upgrade`イベントに直接フックしておりExpressのミドルウェアチェーン（レートリミッタ含む）を
+一切通らない。したがって`count`・`connect`等の既存WebSocketメッセージと同様、
+トラックAのレート制限は一切適用されない（コード変更・追加確認は不要、構造上そうなる）。
+
+### ローカル確認（`scripts/ble-disconnect/local-verify.js`新規、pg-mem＋実サーバー、
+実際のWebSocketクライアントで一気通貫確認。8項目、全PASS）
+
+- 選択中チームが無いデバイスからの`ble_disconnect`：`event_id`が`NULL`で1件記録される
+- 選択中チーム＋`live`中の試合があるデバイスからの`ble_disconnect`：`event_id`が
+  その試合のIDで記録される
+- 未登録デバイス（一度も`connect`していないMAC）・`id`が無いメッセージ：
+  エラーにならず（ソケットが切断されない）、記録もされない
+- `ble_disconnect`に対してレスポンスが送られないこと、サーバー側は重複排除せず
+  送られてきた分だけそのまま記録すること（立ち上がりエッジ制御はクライアント側の
+  責務という設計どおり）を確認した
+- クライアント側の立ち上がりエッジ判定（`bleDisconnectNotified`）は、決定的
+  シミュレーション（Node.js、リポジトリ非コミット）で、連続30回の切断ペイロードでも
+  送信は1回のみ、切断→復帰→再切断で送信が2回になる、正常ペイロードのみでは
+  一度も送信されないことを確認した
+- 既存の`scripts/demo/local-verify.js`（27項目）・`scripts/rate-limit/local-verify.js`
+  （26チェック）・`scripts/demo/local-verify-demo-mode.js`（29項目）とも
+  引き続き全PASS（回帰無し）
+
+集計用SQLクエリ例は`docs/runbook.md`「BLE切断ログの集計例」参照。
+
 ---
 
 ## 12. 大規模イベント対応：レート制限（トラックA、2026-09-28実装）

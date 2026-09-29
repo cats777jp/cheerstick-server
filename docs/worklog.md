@@ -4,6 +4,91 @@
 
 ---
 
+## 2026-09-29（続き5） Vanstone様とのやり取り：BLE切断・終了イベント・LED送信の調査、BLE切断のサーバー記録を実装
+
+Vanstone様（BLEデバイスメーカー）から`public/index.html`の実装について質問があり、
+2回のセッションに分けて対応した（1回目：読み取り専用の調査のみ、`docs/worklog.md`への
+記録は不要と指示されていたためこの時点では未記録。2回目：本エントリで、KMT様指示により
+1回目の内容もあわせて記録する）。
+
+### 1回目：調査結果（`public/index.html`、コード変更なし）
+
+**質問1（BLE再接続要求へのレスポンス）**：
+- BLE切断の検知（`isBleDisconnectPayload()`、accel全軸ゼロ＋volt/rssiゼロ判定）は実装済み
+- `{LED:{r:0,g:0,b:0}, stat:'BleRetry'}`のAPPへの送信（`CheerStickBridge.sendLED`）も実装済み
+- **WebSocketでのBLE切断のサーバー通知は未実装。** コード内のコメントに「サーバー通知
+  （type: "ble_disconnect"）は将来対応とし、今回はまずクライアント側の表示のみ行う」と
+  明記されており、`docs/spec.md`（935行目）にも同じ方針が記載済みだった（意図的な未実装）
+
+**質問2（終了イベントの送信）**：
+- `endCheeringBtn`は`{stat:'end'}`を実際に送信している（実装済み）。あわせて
+  `intentionalClose`フラグを立てたうえで`socket.close()`も呼んでおり、WebSocket自体も
+  明示的にクローズする（2026-09-20の幽霊接続対策で追加・本番デプロイ・実機検証済み）
+- 「終了ボタンを押すとアプリが最小化される」不具合について：`public/index.html`には
+  そもそも「結果表示」画面自体が実装されておらず、終了ボタンは単に開始前の画面
+  （`welcomeCard`）へ戻るだけだった。WebView側のコードには「最小化」を引き起こしうる
+  処理は見当たらず、`{stat:'end'}`受信後の実際の挙動（アプリを終了する／最小化する等）は
+  ネイティブアプリ側（Vanstone様管轄）の実装に依存していると考えられる、と回答した
+  （`docs/worklog.md` 2026-09-24エントリで「調査未着手」だった項目に対する回答）
+
+**質問3（BLE切断の頻度・条件の集計、逆質問への回答）**：
+- 専用のログ・DBテーブルは無い。質問1のとおり、そもそもBLE切断イベントがサーバーへ
+  送信されていないため記録しようがない
+- pm2ログから読み取れる近い情報は、pingタイムアウトによる強制切断ログ
+  （`[WS] heartbeat timeout ... terminated`）のみだが、これはネットワーク層の断であり、
+  BLEペアリングのみが切れてWebSocket接続自体は生きているケース（質問1の対象）とは別の事象
+
+### 2回目：実装（KMT様指示書、`cheerstick-ble-disconnect-and-led-investigation-20260929.md`）
+
+1回目の調査結果を踏まえ、KMT様から「BLE切断のサーバー通知・記録を新規実装する」との
+指示があった。あわせて「通常時のLED送信の実装状況」の調査も依頼された。
+
+**実装（BLE切断のサーバー記録）**：
+- `public/index.html`：`isBleDisconnectPayload()`が真のとき、既存のLED送信に加えて
+  `{type:'ble_disconnect', id:<mac>}`をWebSocketで送信する。**連続して異常データを
+  受信し続けている間は最初の1回のみ送信する（立ち上がりエッジ検出、`bleDisconnectNotified`
+  フラグ）。** 毎回送信すると1回の物理的な切断で数十件の通知になり、「頻度」の集計が
+  意味を持たなくなるための追加判断（指示書に明記は無かったが、Vanstone様の要望
+  「頻度・条件の集計」の実質的な要件から必要と判断した）
+- `src/websocket/index.js`：新規メッセージ種別`ble_disconnect`のハンドラを追加。
+  デバイスの選択中チームに`live`中の試合があればその`event_id`とあわせて記録する
+  （`count`ハンドラと同じ判定パターン）
+- `migrations/013_add_ble_disconnect_logs.sql`：新規テーブル`ble_disconnect_logs`
+  （`device_id`・`event_id`・`occurred_at`）
+- **記録方式は案B（DB記録）を採用。** 理由：pm2ログはローテーションで古い分が失われる
+  運用のため、Vanstone様が求める「頻度・条件の傾向」の長期的な分析にはDBテーブルの方が
+  向いていると判断した。詳細はdocs/spec.md 11.12章参照
+- レート制限（トラックA）は、WebSocketメッセージである以上、既存の`count`等と同じく
+  対象外であることを確認した（構造上そうなるため、コード変更は無し）
+
+**調査（通常時のLED送信）**：指示書は「通常時のLED送信は現状未実装の可能性がある」という
+前提だったが、**この前提は誤りだった。** `public/index.html`の`onCheerStickData`内、
+BLE切断でない通常のペイロード受信時に、`computeLedColor()`（`organizations.color`＝
+`currentTeamColor`と振動強度から算出）の結果を`CheerStickBridge.sendLED({LED:led,
+stat:'OK'})`で毎回（呼び出しのたび、約1秒間隔）送信する処理が**既に実装済み**であることを
+確認した。過去の「LEDブリッジ未実装」の懸念（`docs/worklog.md`過去エントリ、Vanstone様への
+確認事項1件目）は、WebView側が送信しているかではなく、**ネイティブアプリ側が受信して
+実際にLEDを点灯させる処理を実装しているか**という、別の（既に確認依頼済みの）論点だった
+ことが今回の調査で明確になった。
+
+### ローカル確認
+
+- 新規`scripts/ble-disconnect/local-verify.js`（pg-mem＋実サーバー、実際のWebSocket
+  クライアントで一気通貫確認、8項目）：全PASS。選択中チーム有無・live試合有無による
+  `event_id`の出し分け、未登録デバイス・`id`欠如時にエラーにならないこと、レスポンスが
+  返らないこと、サーバー側は重複排除せずそのまま記録することを確認
+- クライアント側の立ち上がりエッジ判定は、決定的シミュレーション（Node.js、リポジトリ
+  非コミット）で、連続30回の切断ペイロードで送信1回のみ・切断→復帰→再切断で送信2回・
+  正常ペイロードのみでは送信0回、を確認
+- 既存の`scripts/demo/local-verify.js`（27項目）・`scripts/rate-limit/local-verify.js`
+  （26チェック）・`scripts/demo/local-verify-demo-mode.js`（29項目）とも引き続き全PASS
+
+### コミット
+
+コード・ドキュメントを別々にコミットしてpushする。詳細はコミットログ参照。
+
+---
+
 ## 2026-09-29（続き4） gauge=recent：揺れ・位置の固定タイミングをカウンターの増減にそろえる
 
 KMT様が、実際の管理画面（デモモード機能）から100 vs 100のデモを実行して確認した結果、

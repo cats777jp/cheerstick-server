@@ -620,6 +620,51 @@ git log --oneline -1
 
 ---
 
+## BLE切断ログの集計例（2026-09-29追加）
+
+`ble_disconnect_logs`テーブル（`migrations/013_add_ble_disconnect_logs.sql`、
+`docs/spec.md` 11.12章）へのSQLクエリ例。Vanstone様から要望のあった「頻度・条件の傾向」を
+確認する際に使う。専用の画面・APIは今回実装していないため、`psql`等で直接実行する。
+
+```sql
+-- 直近7日間の、日別の切断回数
+SELECT DATE(occurred_at) AS day, COUNT(*) AS disconnect_count
+FROM ble_disconnect_logs
+WHERE occurred_at >= NOW() - INTERVAL '7 days'
+GROUP BY DATE(occurred_at)
+ORDER BY day;
+
+-- デバイスごとの切断回数（直近7日間、多い順）
+SELECT d.mac_address, COUNT(*) AS disconnect_count
+FROM ble_disconnect_logs bdl
+JOIN devices d ON d.id = bdl.device_id
+WHERE bdl.occurred_at >= NOW() - INTERVAL '7 days'
+GROUP BY d.mac_address
+ORDER BY disconnect_count DESC
+LIMIT 50;
+
+-- 試合中（event_idが記録されている）の切断と、それ以外（練習中・試合前後等）の内訳
+SELECT
+  (event_id IS NOT NULL) AS during_live_event,
+  COUNT(*) AS disconnect_count
+FROM ble_disconnect_logs
+WHERE occurred_at >= NOW() - INTERVAL '7 days'
+GROUP BY (event_id IS NOT NULL);
+
+-- 特定の試合中の切断一覧（デバイス別、発生時刻順）
+SELECT d.mac_address, bdl.occurred_at
+FROM ble_disconnect_logs bdl
+JOIN devices d ON d.id = bdl.device_id
+WHERE bdl.event_id = '<event_idをここに>'
+ORDER BY bdl.occurred_at;
+```
+
+「切断時の条件（距離など）」自体はサーバー側では持っていない（BLEの信号強度・距離等の
+生データはAPPからサーバーへ送られていないため）。集計できるのは、あくまで
+「いつ・どのデバイスが・どの試合中に」切断したかという頻度・タイミングの傾向のみ。
+
+---
+
 ## リポジトリバックアップ手順（gitタグ方式、2026-09-13新設）
 
 **実施タイミングの目安**：大きな機能追加の後、本番デプロイ前など、要所での実施を想定する。
