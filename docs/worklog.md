@@ -4,6 +4,70 @@
 
 ---
 
+## 2026-09-29（続き2） お客様向け「デモモード」機能：管理画面へのボタン追加（実装・ローカル確認）
+
+KMT様の指示書（`cheerstick-demo-mode-impl-20260929.md`、貼り付け）に基づき、
+`docs/proposals/demo-mode-admin-ui.md`（実装前調査、コミット`76f8383`）の結果を受けた
+実装を行った。**実装・ローカル確認まで。本番EC2・WebARENAへの反映は今回行っていない
+（岩村がTeraTermで別途実施）。**
+
+### 実装内容
+
+- `src/services/demoModeState.js`（新規）：`idle`/`set`/`running`の3状態をモジュール
+  レベル変数で保持。setup/start/stopの二重呼び出し防止用の排他ロック（`transitioning`
+  フラグ、awaitを挟む前の同期チェック）を持つ
+- `src/controllers/adminDemoController.js`（新規）：`POST /admin/demo/setup|start|stop`・
+  `GET /admin/demo/status`。`scripts/demo/battle-demo-prepare.js`・
+  `scripts/demo/battle-demo.js`はいずれも無改修（in-process require /
+  `child_process.spawn`でそのまま再利用）
+- `src/routes/admin.js`：上記4エンドポイントを追加
+- `src/index.js`：pm2再起動・終了（SIGINT/SIGTERM）時に、実行中のデモ子プロセスを
+  確実に終了させる処理を追加（従来このプロセスにシグナルハンドラは無かった）
+- `public/admin/events.html`：「デモモード」カードを試合一覧の直後に新設
+  （セット・開始/停止・表示画面を開くの3ボタン、2.5秒間隔のポーリングで状態・
+  残り秒数を反映）
+
+詳細な設計（エンドポイント仕様・状態遷移・screenUrlの扱い等）は`docs/spec.md` 9.12章参照。
+
+### 指示書との解釈の相違
+
+- チーム・カテゴリーの取得ロジックについて、指示書は「デモ用カテゴリーに属する最初の
+  2チーム」等の汎用的な取得を想定した書き方だったが、実際の`battle-demo-prepare.js`は
+  チーム名（既定`EMUTTO`・`J SPORTS`）を直接指定して検索する設計（新規作成はしない）
+  だった。既存のデフォルトをそのまま使う形にしたため、動作上の実害は無いと考えられる
+  （詳細はspec.md 9.12章参照。無改修の方針を優先し、この点についてはbattle-demo-prepare.js
+  側を変更しなかった）
+
+### ローカル確認
+
+- 新規`scripts/demo/local-verify-demo-mode.js`（pg-mem＋実サーバー、HTTP経由で
+  setup/start/stop/statusを一気通貫確認、25項目）：全PASS
+  - setup/startの同時呼び出し（ダブルクリック相当）が二重に試合・子プロセスを
+    作らないこと、`running`中の`start`/`setup`が409になること、`stop`応答時点で
+    子プロセスが実際に終了していること（PID生存確認）、テスト専用の短縮durationMs
+    経過後に自動的に`set`へ戻ること、pm2相当のSIGTERM（実際にpm2から呼ばれるのと
+    同じ関数を直接呼ぶ形でシミュレート）で子プロセスが道連れで終了することを確認
+  - 実装中、`battle-demo.js`の自動終了判定が`reportIntervalMs`（既定10秒）ごとの
+    定期チェックでしか行われないことが判明し、テスト専用の短縮durationMsのままだと
+    検出が大幅に遅れる不具合を発見。コントローラー側で`reportIntervalMs`を
+    `durationMs`に比例させる調整を行った（60秒固定の本番設定では結果的に従来と
+    同じ10秒間隔のままで、挙動は変わらない）
+- 既存の`scripts/demo/local-verify.js`（27項目）・`scripts/rate-limit/local-verify.js`
+  （26チェック）とも引き続き全PASS（回帰無し）
+- ブラウザでの確認（claude-in-chrome、スクラッチ領域の一時サーバー＋pg-mem、
+  リポジトリ非コミット）：セット→開始（カウントダウン表示）→「表示画面を開く」で
+  新規タブに実際の対抗戦画面が開き、WebSocket経由の応援データが反映されて動くことを
+  確認→停止（即座に「セット済み」へ戻る）→ページリロード後も状態が復元されることを
+  確認した
+- 副次的に判明した点：試合一覧テーブルは既存実装どおりカテゴリーによる絞り込みが無く、
+  デモで作成した試合が通常の試合一覧にも表示される（今回のスコープ外の既存動作）
+
+### コミット
+
+コード・ドキュメントを別々にコミットしてpushする。詳細はコミットログ参照。
+
+---
+
 ## 2026-09-29（続き） お客様向け「デモモード」機能：管理画面へのボタン追加 調査（読み取りのみ）
 
 KMT様の指示書（`cheerstick-demo-mode-investigation-20260929.md`、貼り付け）に基づき、

@@ -1612,6 +1612,115 @@ public/ranking-target.html         … 会場スクリーン用。選手・推�
 >   `ranking-target.html`はいずれも200で配信されることを確認
 > - **実際の会場での大画面表示・演出面の調整は引き続き未実施のまま**（`battle.html`と同様）
 
+### 9.12 お客様向け「デモモード」機能（管理画面へのボタン追加、2026-09-29実装・ローカル確認まで）
+
+`docs/proposals/demo-mode-admin-ui.md`（実装前調査）の結果（方式1＝子プロセス起動）に
+基づく実装。管理画面（`public/admin/events.html`）に、お客様の前ですぐに100 vs 100の
+応援合戦デモを見せられるボタン3つを追加した。**本番EC2・WebARENAへの反映は未実施。**
+
+- カテゴリー「デモ用」・対象チーム・台数（各100台）・実行時間（60秒固定）は
+  サーバー側で固定しており、リクエストボディからは一切受け付けない
+  （安全策。`scripts/demo/battle-demo-prepare.js`の既存の「デモ用」カテゴリー不在時に
+  例外を投げる仕組み、`--pause-other-live`の対象限定と合わせた二重の保護）
+- `scripts/demo/battle-demo-prepare.js`・`scripts/demo/battle-demo.js`はいずれも
+  無改修（in-process require / `child_process.spawn`でそのまま再利用）
+
+**状態管理（`src/services/demoModeState.js`）：** `cheerstick-server`プロセスの
+メモリ上（モジュールレベル変数）にのみ持つ。`idle`（未セット）→`set`（セット済み）→
+`running`（実行中）の3状態。pm2再起動時は意図的に引き継がず、常に`idle`から始まる。
+setup/start/stopの二重呼び出し（ダブルクリック等）を防ぐため、awaitを挟む前に
+同期的にチェックする排他ロック（`transitioning`フラグ）を持つ。
+
+**管理API（`src/controllers/adminDemoController.js`、`src/routes/admin.js`に追加。
+既存の管理APIと同じくnginx側のIP制限のみ、アプリケーションレベル認証なし）：**
+
+```
+POST /admin/demo/setup
+  現在runningなら409 { error: "DEMO_RUNNING" }。二重呼び出し中なら409 { error: "DEMO_BUSY" }。
+  前回のbattleIdがあれば先にbattle-demo-prepare.jsの--finish-run相当を実行してから
+  （失敗しても続行）、--yes --pause-other-live --devices-per-team=100で新規セットアップする。
+  成功時201 { status, battleId, screenUrl, elapsedMs, remainingMs }
+
+POST /admin/demo/start
+  setでなければ409（{error:"DEMO_RUNNING"}または{error:"DEMO_NOT_SET"}）。
+  二重呼び出し中なら409 DEMO_BUSY。battle-demo.jsをchild_process.spawnで起動する
+  （--url=ws://127.0.0.1:<PORT>/cheer・--score-url=.../event-battles/:id/score・
+  --duration-ms=60000・--burst --target-range=0.35-0.65、9/28〜29のテスト設定を踏襲）。
+  成功時200 { status:"running", ... }
+
+POST /admin/demo/stop
+  runningでなければ409 DEMO_NOT_RUNNING。子プロセスへSIGTERMを送り、終了（'exit'イベント）を
+  待ってから応答する。5秒応答が無ければSIGKILL。応答時点で子プロセスは実際に終了している。
+
+GET /admin/demo/status
+  { status, battleId, screenUrl, elapsedMs, remainingMs }を返す。runningでないときは
+  elapsedMs/remainingMsはnull。screenUrlは`/battle.html?battle_id=...&gauge=recent&poll=1000`
+  という相対パス（絶対URL化はフロント側のAPP_BASEに委ねる。対抗戦ペア一覧の
+  battleScreenUrl()と同じ考え方）
+```
+
+**子プロセスの`--report-interval-ms`について（実装時に判明した調整）：**
+`battle-demo.js`の「duration-ms経過で自動終了」判定は、`reportIntervalMs`（既定10秒）
+ごとの定期チェックでのみ行われる。本番の60秒固定設定では`10000ms`のままで従来と
+変わらないが、コントローラー側では`durationMs`に比例させた値
+（`max(1000, min(10000, floor(durationMs/6)))`）を明示的に渡すようにした
+（ローカル確認でテスト専用の短縮durationMsを使った際、既定の10秒間隔のままだと
+自動終了の検出が大幅に遅れることが判明したため。60秒固定の場合は`60000/6=10000`で
+結果的に同じ値になり、本番の挙動は変わらない）。
+
+**pm2再起動時のorphan化防止（`src/index.js`に追加）：** 従来`cheerstick-server`本体に
+`SIGINT`/`SIGTERM`のハンドラは無かった。デモの子プロセスが実行中にpm2から再起動・終了
+させられた場合に子プロセスが残り続けないよう、両シグナルのハンドラを新規に追加し、
+追跡中の子プロセスへ`SIGTERM`を送ってから、従来と同じ即時終了（`process.exit`）を
+行うようにした。
+
+**画面側（`public/admin/events.html`、試合一覧カードの直後に「デモモード」カードを新設）：**
+①デモをセット・②デモを開始/停止（トグル）・③表示画面を開く（`target="_blank"`のリンク）
+の3つ。`GET /admin/demo/status`を2.5秒間隔でポーリングし、状態・残り秒数の表示、
+ボタンの活性/非活性を切り替える。ページのリロード・別タブへの遷移をまたいでも、
+状態はサーバー側のメモリに保持されているため復元される。
+
+**指示書の記述との解釈の相違（要確認）：** 指示書の「デバイス・チームの取得ロジック」の
+記述は「デモ用カテゴリーに属する最初の2チーム」等の汎用的な取得を想定していたが、
+実際の`battle-demo-prepare.js`は`findOrganization()`でチーム名（既定`EMUTTO`・
+`J SPORTS`）を直接指定して検索する設計（新規作成はしない）。今回はこの既存デフォルトを
+そのまま使う形にした（結果的に対象は正しく「デモ用カテゴリーの既存2チーム」に絞られる
+ため、動作上の実害はないと考えられる）。
+
+**ローカル確認（`scripts/demo/local-verify-demo-mode.js`新規、pg-mem＋実サーバー、
+HTTP経由でAPIを一気通貫確認。25項目、全PASS）：**
+
+- 初期状態`idle`、`idle`時の`start`は409 `DEMO_NOT_SET`
+- `setup`の同時呼び出し（Promise.allで2件同時発行）は一方だけ201、他方は409
+  `DEMO_BUSY`になり、`event_battles`が1件しか作られないことを確認
+- `setup`後は`set`、`battleId`・`screenUrl`（`battle_id`・`gauge=recent`・`poll=1000`を
+  含む）が正しく返る
+- `start`で`running`になり、`remainingMs`が`durationMs`付近であること、実際に子プロセスが
+  起動している（PIDの生存確認）ことを確認
+- `running`中の`start`・`setup`はいずれも409（`DEMO_RUNNING`）
+- `stop`は応答時点で子プロセスが実際に終了していること（PID生存確認）、
+  `running`でないときの`stop`は409 `DEMO_NOT_RUNNING`であることを確認
+- 再度`setup`すると、前回のバトルの両試合が`finished`になり（自動終了）、
+  新しい`battleId`が発行されることを確認
+- テスト専用の短縮`durationMs`経過後、自動的に`set`へ戻ること、その際も子プロセスが
+  実際に終了していることを確認（本番用の60秒固定はAPIのリクエストボディからは
+  変更不可のまま。環境変数`DEMO_MODE_TEST_DURATION_MS_OVERRIDE`はテスト専用）
+- pm2相当の終了シグナルのシミュレーション：実際にpm2からのSIGTERMを受けて呼ばれるのと
+  同じ関数（`killRunningChildForShutdown()`）を直接呼び、実行中の子プロセスが実際に
+  終了することを確認
+- 既存の`scripts/demo/local-verify.js`（27項目）・`scripts/rate-limit/local-verify.js`
+  （26チェック）とも引き続き全PASS（回帰無し）
+
+**ブラウザでの確認（claude-in-chrome、スクラッチ領域の一時サーバー＋pg-mem、
+リポジトリ非コミット）：** セット→開始（カウントダウン表示）→表示画面を開く（新規タブで
+実際の対抗戦画面が開き、WebSocket経由の応援データが反映されて動くことを確認）→停止
+（即座に「セット済み」へ戻る）→ページリロード後も状態が復元される、の一連の流れを確認した。
+
+**次回への申し送り：** 試合一覧テーブルは既存実装どおりカテゴリーによる絞り込みが無いため、
+デモで作成した試合（「デモ対抗戦 EMUTTO vs J SPORTS ...」）が通常の試合一覧にも
+表示される（今回のスコープ外の既存動作。実害は無いと考えられるが、運用上気になる場合は
+別途対応を検討）。
+
 ## 10. 未実施の検証
 
 **2,000〜20,000本規模の負荷試験は一度も実施していない。**

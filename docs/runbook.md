@@ -818,6 +818,20 @@ sudo -iu cheerdemo bash -c 'cd /home/cheerdemo/cheerstick-demo && npm ci --omit=
 `.nvm`・`.npm`が残っている。今回の`cheerdemo`ユーザー環境とは独立しており支障はないが、
 将来デモ専用VPSへ移設するタイミングでまとめて整理する予定（未実施）。
 
+## お客様向け「デモモード」機能の一時ファイル（2026-09-29追加）
+
+理由：管理画面「デモをセット」「デモを開始」ボタン（`docs/spec.md` 9.12章）の追加に伴い、
+`cheerstick-server`本体（本番EC2、`/home/ubuntu/cheerstick-server-new/`）が
+`scripts/demo/battle-demo.js`を子プロセスとして起動するようになった。同スクリプトの
+`--metrics-log-path`には、Node標準の`os.tmpdir()`（本番EC2＝Linuxのため実質`/tmp`）配下に
+`cheerstick-demo-metrics-<timestamp>.jsonl`というファイル名で、デモ実行1回ごとに新規作成される。
+
+- 削除の自動処理は無い（`battle-demo.js`自体が既存の仕組みとしてファイルを残す設計のため、
+  今回それを変更していない）。デモを繰り返すたびに増えるため、ディスク容量が気になる場合は
+  `/tmp/cheerstick-demo-metrics-*.jsonl`を手動で削除して問題ない（応援ログ本体はDBの
+  `cheer_logs`に残っており、このファイルは診断用の副産物に過ぎないため）
+- 本番の`/tmp`はOS再起動で消える想定のディレクトリのため、放置していても実害は限定的
+
 ---
 
 ## 未確認・保留中のファイル
