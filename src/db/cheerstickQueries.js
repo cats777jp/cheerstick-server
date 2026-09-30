@@ -277,6 +277,45 @@ async function findLiveEventForOrganization(organizationId) {
   return rows[0] || null;
 }
 
+// --- live試合の短期キャッシュ（トラックB-①、CHEER_LOG_WRITE_MODE=cached用） ----
+// 組織ごと・プロセス共通。「その時点で確認したlive試合（またはliveなし）」を
+// LIVE_EVENT_CACHE_TTL_MSの間だけ記憶し、findLiveEventForOrganizationのSELECT実行のみを省く
+// （insertCheerLogの呼び出し可否の判断材料が最大TTLぶん古くなりうる点は、docs/spec.md参照）。
+// 管理画面からのevents変更（updateEventStatus/updateEvent/hideEvent）成功時に即時破棄する。
+// ※即時破棄は同一プロセス内のみ有効（cluster mode化した場合は他ワーカーに届かない）。
+const LIVE_EVENT_CACHE_TTL_MS = 2000;
+// organizationId -> { promise } （取得中） | { event, expiresAt } （確定）
+const liveEventCache = new Map();
+
+function invalidateLiveEventCache() {
+  // 全組織分を破棄する（updateEventでorganization_idが変わる場合に旧・新の両方が対象になるため、
+  // 組織を絞らない）。取得中のエントリも消えるため、破棄前に始まったSELECTの結果は保存されない。
+  liveEventCache.clear();
+}
+
+function findLiveEventForOrganizationCached(organizationId) {
+  const entry = liveEventCache.get(organizationId);
+  if (entry) {
+    if (entry.promise) return entry.promise; // 取得中のPromiseを共有（同時の大量SELECTを防ぐ）
+    if (entry.expiresAt > Date.now()) return Promise.resolve(entry.event);
+  }
+  const holder = {};
+  holder.promise = findLiveEventForOrganization(organizationId).then(
+    (event) => {
+      if (liveEventCache.get(organizationId) === holder) {
+        liveEventCache.set(organizationId, { event, expiresAt: Date.now() + LIVE_EVENT_CACHE_TTL_MS });
+      }
+      return event;
+    },
+    (err) => {
+      if (liveEventCache.get(organizationId) === holder) liveEventCache.delete(organizationId);
+      throw err;
+    }
+  );
+  liveEventCache.set(organizationId, holder);
+  return holder.promise;
+}
+
 /**
  * 応援量カウント機能：応援ログ（cheer_logs）へ1件INSERTする。
  */
@@ -354,6 +393,7 @@ async function updateEventStatus(eventId, status) {
     `UPDATE events SET status = $1 WHERE id = $2 RETURNING id, status`,
     [status, eventId]
   );
+  invalidateLiveEventCache();
   return rows[0] || null;
 }
 
@@ -464,6 +504,7 @@ async function updateEvent(eventId, fields) {
      RETURNING id, organization_id, title, starts_at, ends_at, status, metadata, created_at`,
     values
   );
+  invalidateLiveEventCache();
   return rows[0] || null;
 }
 
@@ -767,7 +808,10 @@ async function hideEvent(eventId) {
      RETURNING id, title, status, hidden_at`,
     [eventId]
   );
-  if (rows[0]) return rows[0];
+  if (rows[0]) {
+    invalidateLiveEventCache();
+    return rows[0];
+  }
 
   const { rows: existing } = await db.query(`SELECT status FROM events WHERE id = $1`, [eventId]);
   if (!existing[0]) return null;
@@ -1365,6 +1409,9 @@ module.exports = {
   getRecentEventCheerTotals,
   getAllTimeCheerTotal,
   findLiveEventForOrganization,
+  findLiveEventForOrganizationCached,
+  invalidateLiveEventCache,
+  LIVE_EVENT_CACHE_TTL_MS,
   insertCheerLog,
   insertBleDisconnectLog,
   updateEventStatus,
