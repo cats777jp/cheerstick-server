@@ -4,6 +4,87 @@
 
 ---
 
+## 2026-09-30（続き2） トラックB-①：応援データ書き込みのDB往復削減（調査＋実装・ローカル確認まで）
+
+ブランチ`feature/scale-cheer-log-write`（`origin/feature/reference-data`から作成）。
+コード変更は`src/websocket/index.js`・`src/db/cheerstickQueries.js`・`.env.example`、
+確認スクリプト`scripts/cheer-log-write/local-verify.js`（新規）。DBスキーマ変更・依存追加なし。
+**本番EC2へのSSH・実行なし。本番未反映。** 仕様は`docs/spec.md` 12.6章。
+
+### 調査結果（1回目：往復の内訳、`src/websocket/index.js:255-283`）
+
+`count`は①`findDeviceWithProfile`（devices・users・targets・organizationsの4テーブルJOIN）
+②`findLiveEventForOrganization`③`insertCheerLog`の3往復。INSERTは`pool.query`の自動コミットで
+1件ずつ。クライアントへの応答は無く、DB完了を待つ必要は元々ない。live試合が無い場合も①②の
+2往復を使って捨てていた。詳細比較で案1（1a：デバイス情報の接続ごとキャッシュ、1b：live試合の
+組織ごと短期キャッシュ）を採用、案2（INSERTバッチ化）は見送りと承認された。
+
+### 追加調査（2回目：1-1〜1-3、`src/websocket/index.js` `count`ハンドラ）
+
+- **1-1** `count`ハンドラ：`row && row.selected_organization_id`のときだけ`findLiveEventForOrganization`を呼び、
+  `if (liveEvent)`のときだけ`insertCheerLog`を呼ぶ。`liveEvent`がnullなら`insertCheerLog`は呼ばれず終了する
+  （`event_id`をnullにして書く経路は`count`には存在しない）。**「live試合なしのとき`cheer_logs`へ記録されることは無い」
+  という理解で正しい。** 想定と異なる重大な事実は無かったため、停止せず実装に進んだ
+- **1-2** 「liveなしキャッシュ」は「直近2秒以内に確認した時点でlive試合が無かった」という事実の記憶で、
+  省略されるのは`findLiveEventForOrganization`のSELECTのみ。`insertCheerLog`自体には関与しない。
+  ただし`insertCheerLog`を**呼ぶか否か**の判断材料になるため、「新たなリスクは一切無い」とまでは言えず、
+  リスクは1-3の古さと同一のもの（最大TTLぶん）に限られる、と整理した
+- **1-3** 起こりうる：live化直後の最大2秒は記録されない／finished・paused直後の最大2秒は記録され続ける。
+  ただし**管理画面経由の変更は同一プロセス内で即時破棄される**ため、これが発生するのは
+  SQL直接書き換え等の破棄をバイパスした場合のみ。影響は当該組織のみ・最大TTL（2秒）で、
+  試合をまたいで残らない（ローカルで実際に確認、下記E）
+
+### 実装
+
+- `CHEER_LOG_WRITE_MODE`（`legacy`既定／`cached`。他の値は`legacy`扱い）。`count`の都度読むため、
+  `legacy`のコード経路は従来と同一（`findDeviceWithProfile`→`findLiveEventForOrganization`→`insertCheerLog`）
+- デバイス情報キャッシュ：`ws`ごと、TTL 60秒、4項目のみ保持。`connect`・`register`・`select_team`・`set_oshi`の
+  処理前後で破棄、世代番号で取得中の古い結果を保存しない
+- live試合キャッシュ：`cheerstickQueries.js`内、組織ごと、TTL 2秒（「liveなし」も保持）、取得中Promiseの共有。
+  `updateEventStatus`・`updateEvent`・`hideEvent`の成功後に全組織分を破棄（新規ファイルを作らず、
+  変更許可範囲内の`cheerstickQueries.js`に置いた）
+- 起動ログ：`[WS] cheer-log-write config: mode=... device_cache_ttl_ms=60000 live_event_cache_ttl_ms=2000`
+- `ble_disconnect`のlive確認は今回の対象外（`legacy`と同じ）
+
+### ローカル確認（pg-mem、`scripts/cheer-log-write/local-verify.js`：PASS=35 FAIL=0）
+
+**DB往復回数（`db.query`をラップして実測、1countあたり）**
+
+| モード | live試合あり | liveなし |
+|---|---|---|
+| `legacy` | 3（device 1 + live 1 + insert 1） | 2（device 1 + live 1、INSERTなし） |
+| `cached`（定常） | **1**（INSERTのみ） | **0** |
+
+`cached`の初回（キャッシュミス）は3往復。liveなしの初回（デバイス情報はキャッシュ済み）はlive確認1往復。
+
+**キャッシュの古さのシミュレーション（SQL直接書き換えで即時破棄をバイパス）**
+- E-1 `live`→`finished`：直後（TTL内）は記録され続け、2.2秒後に記録停止。別組織（ORG2）は影響なし
+- E-2 「liveなし」キャッシュ中に`live`化：直後は記録されず、2.2秒後に再開。試合をまたぐ影響は残らない
+- 影響範囲は想定どおり「最大2秒・当該組織のみ」
+
+**その他の確認**
+- 管理API（HTTP `PATCH /api/v1/admin/events/:id/status`）で`paused`/`live`にした直後（2秒を待たず）のcountが即時反映される
+- `select_team`（ORG1→ORG2）・`set_oshi`後のcountが正しい`event_id`・`target_id`・`device_id`で記録される
+  （チーム変更直後は`target_id`NULL、推し設定後にT3）。`register`前後でcheer_logsの`user_id`がNULL→値に切り替わる
+- 同一デバイス再接続：旧接続がcode 4000でcloseされ、新接続は自身のキャッシュ（未取得）から始まり正しく記録
+- キャッシュ空の状態で20デバイスが同時にcount → live確認SELECTは1回のみ。破棄前に始まった取得の結果はキャッシュに保存されない
+- `legacy`へ戻す／不正な値 → 3往復（従来動作）
+
+**回帰確認（`CHEER_LOG_WRITE_MODE`未指定＝`legacy`）**：`scripts/demo/local-verify.js` 27/27、
+`scripts/rate-limit/local-verify.js` 26/26、`scripts/demo/local-verify-demo-mode.js` 29/29、
+`scripts/ble-disconnect/local-verify.js` 8/8、いずれもPASS。念のため`cached`でも
+`demo/local-verify.js`・`ble-disconnect/local-verify.js`を実行し全PASS。
+
+### コミット・未対応
+
+- コード：`e5913f1`（ブランチ`feature/scale-cheer-log-write`）。ドキュメントは別コミット
+- 効果測定計画：`docs/tasks/2026-09-30-cheer-log-write-measurement-plan.md`（計画のみ、未実行）
+- 未対応：本番反映、WebARENAからの`legacy`/`cached`比較、`cached`への切り替え判断は別途指示待ち。
+  INSERTは1メッセージ1回のまま残るため、`pg.Pool`（max 20）の余力は本番の実測で判断する。
+  ブランチ`feature/scale-cheer-log-write`は`feature/reference-data`へ未マージ
+
+---
+
 ## 2026-09-30（続き） 定期バックアップ（コード・DB・画像）の実施結果
 
 岩村様がTeraTermで`docs/tasks/2026-09-30-backup-checkpoint.md`のSTEP 1〜5を実施済み
