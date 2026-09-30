@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-09-30（セッション終了・引継ぎ）
+
+### 実施したこと
+- 定期バックアップの手順書作成と実施結果の記録、トラックB-①（`CHEER_LOG_WRITE_MODE`）の調査・実装・ローカル確認
+  （詳細は直下の2エントリ参照）
+
+### 変更したファイル
+- 本日のdocs：`docs/tasks/2026-09-30-backup-checkpoint.md`、`docs/tasks/2026-09-30-cheer-log-write-measurement-plan.md`、
+  `docs/spec.md`（12.6章）、`docs/proposals/large-event-scaling.md`、`docs/worklog.md`
+- コード（ブランチ`feature/scale-cheer-log-write`のみ）：`src/websocket/index.js`、`src/db/cheerstickQueries.js`、
+  `.env.example`、`scripts/cheer-log-write/local-verify.js`
+
+### 判明した事実 / 想定と違ったこと
+- 特になし（追加調査1-1〜1-3は想定どおり）
+
+### 次回への申し送り
+KMT様指示：**ブランチ`feature/scale-cheer-log-write`は`feature/reference-data`へマージしない。本番への反映も行わない。**
+次回は以下から再開する。
+1. WebARENAからの負荷試験による`legacy`/`cached`の比較測定（計画：`docs/tasks/2026-09-30-cheer-log-write-measurement-plan.md`）
+2. 測定結果を踏まえた`cached`への切り替え判断
+3. 切り替えると判断した場合のみ、本番への反映（ブランチのマージ・デプロイ手順書の作成を含む）
+
+### 未解決のまま残した課題
+- `~/backups/`に2026-07-23以降のバックアップが蓄積（整理方針は未決定、直下の実施結果エントリ参照）
+- INSERTのバッチ化（案2）は見送り。`pg.Pool`（max 20）の余力は本番の実測で判断
+- 未追跡の`cheerstick-ws`（下書きファイル）は従来どおり対象外
+
+---
+
 ## 2026-09-30（続き2） トラックB-①：応援データ書き込みのDB往復削減（調査＋実装・ローカル確認まで）
 
 ブランチ`feature/scale-cheer-log-write`（`origin/feature/reference-data`から作成）。
