@@ -4,6 +4,51 @@
 
 ---
 
+## 2026-10-01 トラックB-①：マージ・本番反映／負荷試験の手順書作成
+
+指示書`cheerstick-rollout-cheer-log-write-mode-prep-20261001.md`に基づく。**本番EC2へのSSH・実行、
+負荷試験の実施は行っていない**（岩村がTeraTermで実施）。
+
+### 実施したこと
+- `feature/scale-cheer-log-write`を`feature/reference-data`へ`--no-ff`でマージし、push（マージコミット`ea833ad`）。
+  コンフリクトなし。**2026-09-30の引継ぎ（「マージしない・本番反映しない」）は、本日のKMT様の指示書で更新された**
+  （負荷試験でlegacy/cachedを比較するため、`.env`未設定なら動作不変の状態でマージ・反映する方針に変更）
+- マージ後にローカルテスト5本を実行し全PASS（`demo/local-verify.js` 27/27、`rate-limit/local-verify.js` 26/26、
+  `demo/local-verify-demo-mode.js` 29/29、`ble-disconnect/local-verify.js` 8/8、`cheer-log-write/local-verify.js` 35/35）
+- 差分確認（`git diff --stat 28dc9c3..HEAD`）：8ファイル、+796/-9。コード変更は`src/websocket/index.js`・
+  `src/db/cheerstickQueries.js`、設定は`.env.example`、他は`scripts/cheer-log-write/local-verify.js`・`docs/`。
+  `package.json`・`package-lock.json`・`migrations/`の変更なし（`npm install`・DB変更は不要）。`public/`の変更もなし（`cp`不要）
+- 実行可能な手順書を新規作成：`docs/tasks/2026-10-01-rollout-cheer-log-write-mode.md`
+  （既存の`2026-09-30-cheer-log-write-measurement-plan.md`は計画メモとしてそのまま残した）
+
+### 変更したファイル
+- `docs/tasks/2026-10-01-rollout-cheer-log-write-mode.md`（新規）、`docs/worklog.md`、`docs/spec.md`（変更履歴に1行追記）
+- マージによる取り込み：上記「差分確認」のとおり（コードの変更は9/30の`e5913f1`で、本日は未変更）
+
+### 判明した事実 / 想定と違ったこと
+- **9/28の段階1は各50台**（指示書の「9/28の段階1〜3と同じ規模」「各100・250・500台」と1段階目がずれる）。
+  手順書は指示書どおり各100台とし、付録Aの9/28の結果は「参考値（直接比較しない）」と明記した。
+  また、9/28以降にトラックA等が反映されているため、**比較の基準は9/28ではなく、STEP 3の本日の`legacy`**とした
+- 「`CHEER_LOG_WRITE_MODE`未設定でも起動ログに`legacy`と出るか」：出る。`src/websocket/index.js`が起動時に常に
+  `[WS] cheer-log-write config: mode=...`を出力する（未設定・不正値は`legacy`扱い）
+- 元の計画メモは`legacy`→`cached`→`legacy`の順を推奨していたが、指示書は`legacy`→`cached`の2回のため、
+  手順書は2回とし、結果が微妙なときのみ`legacy`を再実行する形にした
+- 判断の数値基準は指示書に無かったため、手順書に「案」として明記した（500/250台の平均で相対約20%以上低下＝効果あり候補、
+  ±10%以内＝効果なし候補、間は`legacy`再実行）。**KMT様の確認が必要**
+
+### 次回への申し送り
+1. 岩村様がTeraTermで手順書のSTEP 0〜7を実施（ロールバック用タグ`prod-before-cheer-log-write-mode-20261001`の作成を含む。
+   タグは未作成）。結果（比較表・判断）をClaude Codeへ共有
+2. 判断結果に応じて`docs/spec.md` 12.6章・本ファイルへ結果を記録
+3. 手順書の判断基準（数値の目安）をKMT様が確認
+
+### 未解決のまま残した課題
+- 本番未反映（`feature/reference-data`に取り込み済みだが、本番EC2は`28dc9c3`のまま）
+- `~/backups/`の整理方針、INSERTのバッチ化（案2）の要否は従来どおり未決定
+- 未追跡の`cheerstick-ws`（下書きファイル）は従来どおり対象外
+
+---
+
 ## 2026-09-30（セッション終了・引継ぎ）
 
 ### 実施したこと
