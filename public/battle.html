@@ -140,6 +140,58 @@
     transition: width 0.6s ease;
   }
 
+  /* 火花演出（&gauge=recent&fx=spark、2026-10-01追加）。fx=spark指定時のみJSがクラスを付与／
+     要素を生成する。未指定時は#tugGaugeShake・#tugGaugeWrapが素通りの箱として存在するだけで、
+     見た目は変わらない。
+     揺れ（.gauge-shake）は、JSがwidthを毎フレーム更新しているゲージ本体（#tugFillA/B）ではなく、
+     その外側のラッパー（#tugGaugeShake）にのみ適用する（transformとの競合回避）。 */
+  #tugGaugeWrap { position: relative; }
+  #tugGaugeShake { transform-origin: 50% 50%; }
+  #tugGaugeShake.gauge-shake { animation: barShake .35s ease-in-out infinite; }
+
+  /* バー色（グラデーション）：外側が濃く、拮抗点側が薄い。 */
+  #tugGauge.fx-spark #tugFillA { background: linear-gradient(90deg, #7A0F12 0%, #DC2626 42%, #FFC9A6 100%); }
+  #tugGauge.fx-spark #tugFillB { background: linear-gradient(90deg, #D8E8FF 0%, #2563EB 58%, #0A1F52 100%); }
+
+  /* 火花・光のレイヤー：ゲージ（高さ56px）と同じ高さ・幅の透明な重ね合わせ。 */
+  #sparkLayer {
+    position: absolute; left: 0; right: 0; top: 0; height: 56px;
+    pointer-events: none; display: none; z-index: 5;
+  }
+  #sparkLayer.on { display: block; }
+  .spark-field { position: absolute; top: 50%; width: 0; height: 0; }
+  .gauge-hot-glow {
+    position: absolute; top: 50%; width: 110px; height: 110px;
+    margin-left: -55px; margin-top: -55px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,210,120,.65) 0%, rgba(255,120,40,.3) 40%, transparent 70%);
+    animation: hotGlow .6s ease-in-out infinite;
+    mix-blend-mode: screen; pointer-events: none;
+  }
+  .spark-dot {
+    position: absolute; left: 0; top: 0; border-radius: 50%;
+    animation-name: spark; animation-timing-function: cubic-bezier(.15,.7,.3,1);
+    animation-iteration-count: infinite;
+    mix-blend-mode: screen;
+  }
+  .spark-dot.hot   { background: radial-gradient(circle, #FFFBEA 0%, #FFE59A 45%, transparent 78%); }
+  .spark-dot.warm  { background: radial-gradient(circle, #FFF6DA 0%, #FFB84D 50%, transparent 80%); }
+  .spark-dot.ember { background: radial-gradient(circle, #FFD98C 0%, #FF7A28 55%, transparent 82%); }
+  @keyframes spark {
+    0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+    100% { transform: var(--end) scale(.05);     opacity: 0; }
+  }
+  @keyframes barShake {
+    0%, 100% { transform: translateX(0)    scaleY(1);    }
+    20%      { transform: translateX(-5px) scaleY(1.12); }
+    45%      { transform: translateX(4px)  scaleY(.92);  }
+    70%      { transform: translateX(-3px) scaleY(1.08); }
+    90%      { transform: translateX(3px)  scaleY(.96);  }
+  }
+  @keyframes hotGlow {
+    0%, 100% { opacity: .6; transform: scale(1);   }
+    50%      { opacity: 1;  transform: scale(1.6); }
+  }
+
   .theme-image {
     display: block;
     width: auto;
@@ -209,7 +261,10 @@
   <div id="battleContent" hidden style="display: contents;">
     <img id="themeImage" class="theme-image" alt="" hidden>
     <div id="label"></div>
-    <div id="tugGauge"><div id="tugFillA"></div><div id="tugFillB"></div></div>
+    <div id="tugGaugeWrap">
+      <div id="tugGaugeShake"><div id="tugGauge"><div id="tugFillA"></div><div id="tugFillB"></div></div></div>
+      <div id="sparkLayer"></div>
+    </div>
     <div id="gaugeModeLabel" hidden></div>
     <div id="battleGrid">
       <div id="panelA" class="team-panel">
@@ -323,6 +378,12 @@
   const COUNTER_STALL_WINDOW_MS = 500;
   const COUNTER_STALL_EPSILON_POINTS = 1;
 
+  // 火花演出（&fx=spark、2026-10-01追加）の発火しきい値。「勢い」＝なめらかに追従済みの
+  // リーダー側への押し込み幅gaugeAnimState.smoothedMagnitude（0〜0.5-range、ゲージ位置の
+  // 50%からのずれ）。これがこの値以上、かつ揺れ停止中（holding）でないときだけ発火する。
+  // 0.20＝リーダー側が70%以上（既定range=20のとき最大は0.30＝80%）。
+  const SPARK_INTENSITY_THRESHOLD = 0.20;
+
   const loadingState = document.getElementById('loadingState');
   const errorState = document.getElementById('errorState');
   const battleContent = document.getElementById('battleContent');
@@ -339,6 +400,63 @@
     // 既存のCSS transitionと二重に効いて遅延が積み重なるのを避けるため無効化する。
     tugFillAEl.style.transition = 'none';
     tugFillBEl.style.transition = 'none';
+  }
+
+  // 火花演出（2026-10-01追加）：&fx=sparkとgauge=recentの両方が揃っているときだけ有効。
+  // 「勢い」の値がgauge=recentの計算結果（smoothedMagnitude）に依存するため。
+  const sparkFxActive = urlParams.get('fx') === 'spark' && gaugeMode === 'recent';
+  const sparkLayerEl = document.getElementById('sparkLayer');
+  const tugGaugeShakeEl = document.getElementById('tugGaugeShake');
+  let sparkFieldEl = null;
+  let sparkGlowEl = null;
+  let sparkOn = false;
+
+  if (sparkFxActive) {
+    document.getElementById('tugGauge').classList.add('fx-spark');
+    // [色, 直径px, 終点x, 終点y, 継続秒, 遅延秒]（28個）
+    const SPARKS = [
+      ['hot',15,-120,-150,.5,0],['warm',11,100,-170,.58,.04],['ember',17,-60,-190,.46,.08],
+      ['hot',9,150,-110,.52,.12],['warm',13,-160,-80,.6,.16],['ember',11,40,-210,.44,.2],
+      ['hot',15,-90,-175,.56,.24],['warm',11,130,-150,.5,.28],['ember',13,-20,-140,.48,.32],
+      ['hot',9,70,-90,.54,.36],['warm',15,-140,-130,.58,.4],['ember',11,180,-60,.5,.44],
+      ['hot',13,10,-230,.46,.02],['warm',9,-180,-40,.62,.06],['ember',17,110,-200,.5,.1],
+      ['hot',11,-50,-100,.4,.14],['warm',13,200,-130,.54,.18],['ember',9,-110,-210,.48,.22],
+      ['hot',15,30,-160,.56,.26],['warm',11,-200,-100,.5,.3],['ember',13,160,-40,.6,.34],
+      ['hot',9,-30,-220,.44,.38],['warm',17,80,-180,.58,.42],['ember',11,-140,-170,.46,.46],
+      ['hot',13,190,-90,.52,0],['warm',9,-70,-60,.4,.24],['ember',15,20,-100,.5,.48],
+      ['hot',11,-180,-150,.54,.36],
+    ];
+    sparkFieldEl = document.createElement('div');
+    sparkFieldEl.className = 'spark-field';
+    SPARKS.forEach(([cls, size, ex, ey, dur, delay]) => {
+      const dot = document.createElement('div');
+      dot.className = 'spark-dot ' + cls;
+      dot.style.width = dot.style.height = size + 'px';
+      dot.style.setProperty('--end', `translate(${ex}px,${ey}px)`);
+      dot.style.animationDuration = dur + 's';
+      dot.style.animationDelay = delay + 's';
+      sparkFieldEl.appendChild(dot);
+    });
+    sparkGlowEl = document.createElement('div');
+    sparkGlowEl.className = 'gauge-hot-glow';
+    sparkLayerEl.appendChild(sparkGlowEl);
+    sparkLayerEl.appendChild(sparkFieldEl);
+  }
+
+  // 毎フレーム（tickRecent）から呼ぶ。位置（拮抗点＝ゲージ境界のA側幅%）は毎フレーム追従し、
+  // 発火のON/OFFはクラスの付け外しだけで行う。
+  function updateSparkFx(gaugeAFraction, isHolding, magnitude) {
+    const leftPct = `${(gaugeAFraction * 100).toFixed(2)}%`;
+    sparkFieldEl.style.left = leftPct;
+    sparkGlowEl.style.left = leftPct;
+    tugGaugeShakeEl.style.transformOrigin = `${leftPct} 50%`;
+    const shouldBeOn = !isHolding && magnitude >= SPARK_INTENSITY_THRESHOLD;
+    if (shouldBeOn !== sparkOn) {
+      sparkOn = shouldBeOn;
+      sparkLayerEl.classList.toggle('on', sparkOn);
+      tugGaugeShakeEl.classList.toggle('gauge-shake', sparkOn);
+      battleDebug.sparkOn = sparkOn;
+    }
   }
 
   // 診断用（3-(c)、2026-09-28調整で追加）：画面には出さない。テスト後にブラウザの
@@ -749,6 +867,7 @@
         finalA = clampNum(0.5 + wobblePoints / 100, effectiveRangeFraction, 1 - effectiveRangeFraction);
       }
       applyGaugeWidth(finalA);
+      if (sparkFxActive) updateSparkFx(finalA, isHolding, gaugeAnimState.smoothedMagnitude);
 
       // 3-(b) 最後の成功取得からSTALE_INDICATOR_THRESHOLD_MS以上経ったら表示、回復したら消す。
       const staleMs = battleDebug.lastOkAt === null ? 0 : nowMs - battleDebug.lastOkAt;

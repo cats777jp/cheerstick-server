@@ -44,6 +44,7 @@
   .demo-status-label { font-size: 14px; }
   .demo-countdown { font-size: 20px; font-weight: bold; font-variant-numeric: tabular-nums; }
   .demo-screen-link.disabled { pointer-events: none; opacity: 0.5; }
+  .demo-spark-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -127,6 +128,11 @@
       <a id="demoScreenLink" class="demo-screen-link disabled" href="#" target="_blank" rel="noopener">
         <button type="button" id="demoScreenLinkBtn">表示画面を開く</button>
       </a>
+      <!-- 火花演出（&fx=spark、2026-10-01追加）。既定は常にOFF（サーバー側の状態は問い合わせない）。
+           「デモをセット」を押した瞬間の状態だけが、そのデモのscreenUrlに反映される。 -->
+      <label class="demo-spark-toggle">
+        <input type="checkbox" id="sparkEffectToggle" autocomplete="off"> ゲージ演出（火花）
+      </label>
     </div>
   </div>
 
@@ -808,7 +814,11 @@
   demoSetupBtn.addEventListener('click', async () => {
     demoSetupBtn.disabled = true;
     try {
-      await apiFetch('/demo/setup', { method: 'POST' });
+      await apiFetch('/demo/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sparkEffect: document.getElementById('sparkEffectToggle').checked }),
+      });
       clearError();
     } catch (e) {
       if (e.status === 409 && e.body && e.body.error === 'DEMO_RUNNING') {
