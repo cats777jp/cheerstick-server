@@ -1790,6 +1790,37 @@ HTTP経由でAPIを一気通貫確認。25項目、全PASS）：**
 > 選ばれないこと）をDBで確認した。既存25項目・`scripts/demo/local-verify.js`（27項目）・
 > `scripts/rate-limit/local-verify.js`（26チェック）とも引き続き全PASS（回帰無し）。
 
+### 9.13 ゲージ火花演出 `fx=spark`（デモモードのみ、2026-10-01実装・ローカル確認まで）
+
+`battle.html`（対抗戦画面）の綱引きゲージに、勢いが強いときだけ火花・光・揺れを出す演出。
+**本番未反映。** 対象は`battle.html`のみ（`ranking-user.html`・`ranking-target.html`・`public/index.html`には無関係）。
+
+**発火条件・有効化**
+- URLに`fx=spark`と`gauge=recent`の**両方**があるときだけ有効（「勢い」が`gauge=recent`の計算結果に依存するため）。
+  どちらか欠ければ見た目・挙動は従来と変わらない（`fx`単独・`gauge=recent`のみ・パラメータ無しの3経路で、変更前後のレイアウト座標が一致することをヘッドレスChromeで確認）
+- 「勢い」＝既存の`gaugeAnimState.smoothedMagnitude`（リーダー側への押し込み幅。0〜0.5-range、なめらか追従後）をそのまま再利用（新しい計算式は追加していない）
+- **発火** ＝ `smoothedMagnitude >= SPARK_INTENSITY_THRESHOLD`（初期値`0.20`＝リーダー側が70%以上）かつ、揺れ停止中（`holding`＝`gaugeRecentState.holding || counterStallState.stalled`）でないとき。
+  holding中は自動的にOFF。ON/OFFは毎フレーム（`tickRecent()`）にクラス（`#sparkLayer.on`・`#tugGaugeShake.gauge-shake`）の付け外しで行う。定数は他のゲージ定数（`COUNTER_STALL_*`の直後）に置いた
+- しきい値の決め方：既定`amp=3`・`range=20`ではリーダー側の最大が80%（`smoothedMagnitude`の最大0.30）。拮抗〜中程度のリードでは出さず、最大押し込みの約2/3（70%）以上で出す値として仮決め。実機のデモで見て調整する想定（定数1箇所の変更のみ）
+- 診断：`window.__battleDebug.sparkOn`に現在の発火状態を出す
+
+**見た目**
+- `fx`有効時のみ、バー色を固定グラデーション（A側：外側が濃い赤→拮抗点側が薄いオレンジ、B側：拮抗点側が薄い水色→外側が濃紺）にする。`organizations.color`には追従しない（今回の固定値でよいとの指示）
+- 火花28個・拮抗点の光（`.gauge-hot-glow`）は、ゲージと同サイズの透明な重ねレイヤー`#sparkLayer`内に置き、位置（left）は毎フレームのゲージ境界（`finalA`）に追従
+- 揺れ（`barShake`）は、JSが`width`を毎フレーム更新するゲージ本体（`#tugFillA/B`）ではなく、外側の新規ラッパー`#tugGaugeShake`にのみ適用（`transform`と`width`更新の競合回避）。ゲージ幅の値（リーダー側50%以上等の不変条件）は揺れの影響を受けず、ヘッドレス確認で強い勢い（80%）〜停止の間、ゲージ幅が従来の計算結果のままであることを確認
+
+**管理画面のチェックボックス（`public/admin/events.html`）**
+- 配置：「デモモード」枠内、「表示画面を開く」ボタンの右。ラベル「ゲージ演出（火花）」、`id="sparkEffectToggle"`
+- 既定は常にOFF（`autocomplete="off"`、サーバー状態は問い合わせない。リロードでOFFに戻ることを確認）
+- 「デモをセット」押下時の状態だけが反映される：`POST /admin/demo/setup`のボディに`{ sparkEffect: true|false }`を含める。
+  あとからチェックを変えても、すでにセット済みのデモの`screenUrl`は変わらない（次の「デモをセット」で反映）
+- サーバー（`adminDemoController.js`）：`sparkEffect === true`（真偽値のtrueのみ。省略・文字列"true"等はfalse）のとき、`screenUrl`の末尾に`&fx=spark`を付ける
+  （例：`/battle.html?battle_id=...&gauge=recent&poll=1000&fx=spark`）。`demoModeState.js`に`sparkEffect`を保持し、`GET /admin/demo/status`の応答にも`sparkEffect`・`fx=spark`入りの`screenUrl`が出る
+- **対抗戦ペア登録（実機イベント用、8.4章）への対応は見送り**（デモモードのみの機能とするKMT様判断、2026-10-01）。ペア一覧のURLは従来どおり`battle_id`のみ
+
+**確認結果（ローカル）**：`scripts/demo/local-verify-demo-mode.js`に`sparkEffect`の検証5項目を追加し34/34 PASS。他4本（27/26/8/35）も全PASS。
+ブラウザ確認は模擬スコアAPI＋ヘッドレスChrome（CDP）で実施：強い勢いで約3秒後に発火、応援停止後約2〜3秒で消火、拮抗では非発火。
+
 ## 10. 未実施の検証
 
 **2,000〜20,000本規模の負荷試験は一度も実施していない。**
@@ -2659,3 +2690,4 @@ WebARENA VPSから`battle-demo.js`で、本番EC2（t3.micro）に対し`legacy`
 | 2026-09-30 | 12.6「応援ログ書き込みモード`CHEER_LOG_WRITE_MODE`（トラックB-①）」を新設 | `count`1件あたり3回のDB往復を減らす切り替え可能な実装（既定`legacy`＝従来どおり、`cached`＝デバイス情報の接続ごと60秒キャッシュ＋live試合の組織ごと2秒キャッシュ）。DBスキーマ変更・依存追加なし。ローカル（pg-mem）で往復回数の削減・キャッシュの古さの影響範囲（最大2秒・当該組織のみ）・管理画面経由の即時破棄を確認。本番未反映 |
 | 2026-10-01 | 12.6の「本番未反映」状態の更新（追記のみ）：`feature/scale-cheer-log-write`を`feature/reference-data`へマージ済み（`ea833ad`）、本番反映・負荷試験の手順書を`docs/tasks/2026-10-01-rollout-cheer-log-write-mode.md`に作成 | 2026-09-30は「マージ・本番反映しない」方針だったが、KMT様の2026-10-01指示書により、`.env`未設定なら動作不変（既定`legacy`）の状態でマージし、本番でlegacy/cachedを負荷試験で比較する方針に変更された。12.6章の既存記述（「本番未反映」等）は削除せず残す。本番反映・負荷試験は岩村様がTeraTermで実施予定で、本記載時点では未実施（本番は`28dc9c3`のまま） |
 | 2026-10-01 | 12.6に追記：本番でのlegacy/cached比較測定の結果と`cached`採用の判断を記録 | WebARENAからの負荷試験（各100・250・500台）で、`cached`は各250台・500台の`cpu_user`平均が約33%低下（基準の20%以上を超過）、送信失敗・サーバーエラーは全規模で0だったため、効果ありとして本番`.env`の`CHEER_LOG_WRITE_MODE=cached`を採用。コード変更なし。数値は岩村様の報告に基づく記録。12.6章の既存記述は削除せず追記のみ |
+| 2026-10-01 | 9.13「ゲージ火花演出`fx=spark`（デモモードのみ）」を新設 | KMT様指示書に基づき、`battle.html`に火花・光・揺れの演出（`gauge=recent`＋`fx=spark`のときのみ）を追加し、管理画面「デモモード」枠にON/OFFチェックボックスを設置。対抗戦ペア登録（実機）への対応は見送り（デモモードのみとするKMT様判断）。既存記述の変更・削除なし |

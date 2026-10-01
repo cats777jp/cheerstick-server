@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-10-01（続き2） ゲージ火花演出`fx=spark`（デモモードのみ）：実装・ローカル確認まで
+
+指示書`20261001_cheerstick_effects.txt`に基づく。**本番EC2・WebARENAへの反映は行っていない**（停止ポイントで岩村様の判断待ち）。
+
+### 実施したこと
+- `public/battle.html`：`gauge=recent`＋`fx=spark`のときだけ、火花28個・拮抗点の光・バー色グラデーション・揺れを有効化
+- `public/admin/events.html`：「デモモード」枠の「表示画面を開く」右にチェックボックス`sparkEffectToggle`（既定OFF）。「デモをセット」のボディに`sparkEffect`を含める
+- `src/controllers/adminDemoController.js`・`src/services/demoModeState.js`：`sparkEffect`（trueのみ有効）を保持し、`screenUrl`に`&fx=spark`を付与
+- `scripts/demo/local-verify-demo-mode.js`：`sparkEffect`の検証5項目を追加
+- コードコミット：`ff56c27`（docsは別コミット）
+- スクリーンショット（`C:\Projects\screenshots\`）：`spark-active.png`（発火中）、`spark-normal.png`（fx有効・通常時）、`spark-admin-checkbox.png`（管理画面）、`spark-regress-*.png`（回帰4パターン）
+
+### 変更したファイル
+- コード：上記5ファイル／docs：`docs/spec.md`（9.13新設・変更履歴追記）、`docs/worklog.md`
+
+### 判明した事実 / 想定と違ったこと
+- **方針変更（KMT様、同日）**：当初の指示書は「試合一覧のボタン列に配置」「対抗戦ペア登録にも対応」だったが、デモモードのみの機能に変更。チェックボックスは「デモモード」枠内へ、ペア登録（実機）は見送り。
+  なお着手時点で、ペア登録のURLはサーバー保持でなく`events.html`が`battle_id`だけで組み立てており、登録時の状態を記録する場所が無いこと・`gauge=recent`が付かず`fx=spark`単独では何も起きないことを確認しており、これが方針変更の背景
+- 「勢い」の既存変数：`gaugeAnimState.smoothedMagnitude`（取得元は`updateGaugeRecent()`の`lastMagnitude`へのなめらか追従）。holdingは`gaugeRecentState.holding || counterStallState.stalled`を再利用
+- しきい値`SPARK_INTENSITY_THRESHOLD=0.20`（リーダー70%以上。最大0.30＝80%の約2/3）。**仮決め**。実機で見て調整する想定
+- 弱い勢いに切り替えた直後も、直近`window`秒（既定15秒）の履歴が残るため、数秒は発火したまま（`gauge=recent`の既存設計に由来）
+- 回帰確認：変更前の`battle.html`をgitから取り出し、同条件（パラメータ無し・`gauge=recent`のみ）でヘッドレスChromeのレイアウト座標を比較し完全一致。`fx`単独は何も起きないことも確認
+- 確認用スクリプトは`scratchpad`にあり非コミット（模擬スコアAPI＋CDP）。Claude in Chromeは使っていない（過去の知見：自動化タブでrAFが動かないため）
+
+### 次回への申し送り
+1. 岩村様が停止ポイントの報告を確認し、本番反映を判断（静的ファイル：`battle.html`→`/var/www/cheerstick-app/`、`events.html`→`/var/www/cheerstick-admin/`、`diff`確認、`pm2 restart`が必要＝`adminDemoController`等の変更のため）
+2. しきい値・見た目を実機のデモ画面で確認し、必要なら調整
+
+### 未解決のまま残した課題
+- 対抗戦ペア登録（実機）での火花演出は見送り（将来必要なら、登録時の状態の保存先から再設計）
+- 未追跡の`cheerstick-ws`（下書きファイル）は従来どおり対象外
+
+---
+
 ## 2026-10-01（続き） トラックB-①：legacy/cached比較測定の結果記録と`cached`採用
 
 岩村様がWebARENAからの負荷試験を完了し、結果の記録を依頼された（Claude Codeは本番EC2へのSSH・実行なし。
