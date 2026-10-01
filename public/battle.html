@@ -149,13 +149,27 @@
   #tugGaugeShake { transform-origin: 50% 50%; }
   #tugGaugeShake.gauge-shake { animation: barShake .35s ease-in-out infinite; }
 
-  /* バー色（グラデーション）：外側が濃く、拮抗点側が薄い。 */
-  #tugGauge.fx-spark #tugFillA { background: linear-gradient(90deg, #7A0F12 0%, #DC2626 42%, #FFC9A6 100%); }
-  #tugGauge.fx-spark #tugFillB { background: linear-gradient(90deg, #D8E8FF 0%, #2563EB 58%, #0A1F52 100%); }
+  /* gauge=recent全般（fx=sparkの有無によらず）：ゲージの縦幅を2倍（56px→112px）にし、
+     火花レイヤーの高さも連動させる。増えた高さは、flex:1の#battleGrid（数値エリア）が
+     自動的に吸収して縮む。パラメータ無しの画面は、このクラスが付かないため変わらない
+     （2026-10-01追加）。 */
+  #tugGaugeWrap.gauge-tall #tugGauge { height: 112px; }
+  #tugGaugeWrap.gauge-tall #sparkLayer { height: 112px; }
+
+  /* ゲージが2倍になった分、画面の高さが低い場合に数値エリアが窮屈になるため、gauge=recentのときだけ
+     pt表示のフォントを画面の高さ（vh）にも比例させて縮める。1280x900以上では従来のclamp上限
+     （96px）のままで変わらない。 */
+  html.gauge-recent-mode .team-score { font-size: clamp(32px, min(9vw, 11vh), 96px); }
+  html.gauge-recent-mode .team-score-unit { margin-bottom: 0; }
+
+  /* バー色（グラデーション）：外側が濃く、拮抗点側が薄い。gauge=recent全般に適用
+     （当初はfx=sparkのみ。2026-10-01、gauge=recent全般へ昇格）。 */
+  #tugGauge.gauge-recent #tugFillA { background: linear-gradient(90deg, #7A0F12 0%, #DC2626 42%, #FFC9A6 100%); }
+  #tugGauge.gauge-recent #tugFillB { background: linear-gradient(90deg, #D8E8FF 0%, #2563EB 58%, #0A1F52 100%); }
 
   /* 火花・光のレイヤー：ゲージ（高さ56px）と同じ高さ・幅の透明な重ね合わせ。 */
   #sparkLayer {
-    position: absolute; left: 0; right: 0; top: 0; height: 56px;
+    position: absolute; left: 0; right: 0; top: 0; height: 56px; /* gauge-tall時は112px（上記） */
     pointer-events: none; display: none; z-index: 5;
   }
   #sparkLayer.on { display: block; }
@@ -400,6 +414,10 @@
     // 既存のCSS transitionと二重に効いて遅延が積み重なるのを避けるため無効化する。
     tugFillAEl.style.transition = 'none';
     tugFillBEl.style.transition = 'none';
+    // 縦幅2倍・グラデーション（2026-10-01、gauge=recent全般に適用。fx=sparkとは独立）。
+    document.documentElement.classList.add('gauge-recent-mode');
+    document.getElementById('tugGaugeWrap').classList.add('gauge-tall');
+    document.getElementById('tugGauge').classList.add('gauge-recent');
   }
 
   // 火花演出（2026-10-01追加）：&fx=sparkとgauge=recentの両方が揃っているときだけ有効。
@@ -412,7 +430,6 @@
   let sparkOn = false;
 
   if (sparkFxActive) {
-    document.getElementById('tugGauge').classList.add('fx-spark');
     // [色, 直径px, 終点x, 終点y, 継続秒, 遅延秒]（28個）
     const SPARKS = [
       ['hot',15,-120,-150,.5,0],['warm',11,100,-170,.58,.04],['ember',17,-60,-190,.46,.08],
@@ -428,7 +445,10 @@
     ];
     sparkFieldEl = document.createElement('div');
     sparkFieldEl.className = 'spark-field';
-    SPARKS.forEach(([cls, size, ex, ey, dur, delay]) => {
+    // 上下両方向に飛び散らせる（2026-10-01）：上記の座標（元はすべて上方向＝yが負）のうち、
+    // 奇数番目（0始まり）のyの符号を反転して下方向にする（14個ずつ。x・個数・色・速さは不変）。
+    SPARKS.forEach(([cls, size, ex, eyUp, dur, delay], i) => {
+      const ey = (i % 2 === 1) ? -eyUp : eyUp;
       const dot = document.createElement('div');
       dot.className = 'spark-dot ' + cls;
       dot.style.width = dot.style.height = size + 'px';
