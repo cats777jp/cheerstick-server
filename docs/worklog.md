@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-10-01（続き3） ゲージの見た目調整（縦幅2倍・グラデーション全般化・火花の上下両方向化）：実装・ローカル確認まで
+
+指示書`cheerstick-gauge-visual-adjustments-20261001.md`に基づく。見た目のみ（API・DB・WebSocket等は未変更）。
+**本番反映は行っていない**（火花演出`ff56c27`の本番反映手順書`docs/tasks/2026-10-01-rollout-spark-effect.md`は作成済みだが、本日の記録時点で実行の報告は受けていない。手順書の対象コミットは本作業を含まない）。
+
+### 実施したこと
+- `public/battle.html`のみ変更（コード`ae510e6`、docsは別コミット）
+  - `gauge=recent`のときゲージ高さ56px→112px（`#tugGaugeWrap.gauge-tall`、火花レイヤー高さも連動）。数値エリアは`#battleGrid`が吸収
+  - グラデーションの条件を`fx=spark`→`gauge=recent`に変更（クラス`fx-spark`→`gauge-recent`）
+  - 火花は奇数番目14個のyを反転して下方向に（上14・下14）
+  - 低い画面向けに、`gauge=recent`時のみpt表示フォントを`min(9vw,11vh)`連動に（指示書で許容された調整）
+- スクリーンショット（`C:\Projects\screenshots\`）：`gauge-recent-only.png`・`gauge-recent-theme.png`・`gauge-recent-fx-spark.png`・`gauge-recent-fx-spark-theme.png`・`gauge-recent-fx-spark-Bside.png`・`gauge-recent-fx-spark-1024x640.png`・`gauge-spark-frozen.png`（火花を途中で静止）
+
+### 変更したファイル
+- コード：`public/battle.html`／docs：`docs/spec.md`（9.4・9.13へ追記、変更履歴）、`docs/worklog.md`
+
+### 判明した事実 / 想定と違ったこと
+- 高さだけ変えると、1024×640＋テーマ画像のような低い画面で数値エリアがはみ出した（旧版は収まっていた）ため、フォントをvh連動にした。
+  最初は`10vh`で、1280×900でも96px→90pxに縮むことが分かり`11vh`に修正（1280×900・1920×1080は従来の96px）
+- 回帰確認：旧`battle.html`（git HEAD）と新版を同一条件で描画し、パラメータ無しは4通り（1280×900／1920×1080／1024×640、テーマ画像の有無）でレイアウト座標・画素とも完全一致
+- 火花は個々が小さく半透明で、静止画ではかなり淡い（今回は変更対象外。必要なら次回、サイズ・不透明度の調整を検討）
+- **影響範囲に注意**：縦幅・グラデーションは`gauge=recent`全般に効くため、実機の本番イベントの対抗戦画面（`gauge=recent`付きURL）の見た目も変わる（KMT様確認済み）
+
+### 次回への申し送り
+1. 岩村様が報告を確認し、本番反映を判断。**反映する場合、`docs/tasks/2026-10-01-rollout-spark-effect.md`は対象コミットが`ff56c27`までのため、この調整（`ae510e6`以降）を含めるなら手順書の更新が必要**（静的ファイルのみの変更なら`battle.html`の`cp`＋`diff`、`pm2 restart`不要）
+2. 実機のデモ画面での見え方（火花の淡さ、下方向の火花が数値エリアに被る見え方）の確認
+
+### 未解決のまま残した課題
+- 火花の淡さ（上記）、対抗戦ペア登録（実機）での火花演出は見送りのまま、未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-01（続き2） ゲージ火花演出`fx=spark`（デモモードのみ）：実装・ローカル確認まで
 
 指示書`20261001_cheerstick_effects.txt`に基づく。**本番EC2・WebARENAへの反映は行っていない**（停止ポイントで岩村様の判断待ち）。
