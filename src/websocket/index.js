@@ -32,7 +32,48 @@ const ENABLE_REFERENCE_TOKEN = process.env.ENABLE_REFERENCE_TOKEN === 'true';
 const HEARTBEAT_INTERVAL_MS = 30000;
 const HEARTBEAT_TIMEOUT_MS = 90000;
 
-// --- connect接続ログ（2026-08-18追加） ------------------------------------
+// --- 応援ログ書き込みモード（トラックB-①、2026-09-30追加） ------------------
+// CHEER_LOG_WRITE_MODE=legacy（既定）：countごとに findDeviceWithProfile / findLiveEvent... /
+//   insertCheerLog の3往復（従来どおり）。
+// CHEER_LOG_WRITE_MODE=cached：デバイス情報を接続ごとにDEVICE_CACHE_TTL_MS、live試合を組織ごと
+//   （プロセス共通、TTLはcheerstickQueries.LIVE_EVENT_CACHE_TTL_MS）にキャッシュし、
+//   live試合ありなら1往復（INSERTのみ）、liveなしなら0往復にする。
+// モードはcountの都度読む（起動後に環境変数を変えても再起動までは反映されない運用だが、
+// ローカル確認で同一プロセス内切り替えができるようにするため）。
+const DEVICE_CACHE_TTL_MS = 60000;
+
+function getCheerLogWriteMode() {
+  return process.env.CHEER_LOG_WRITE_MODE === 'cached' ? 'cached' : 'legacy';
+}
+
+// 接続(ws)ごとのデバイス情報キャッシュ。countで使う4項目のみ保持する
+// （メールアドレス等の個人情報は保持しない）。msg.idが保持しているidと一致するときだけ使う。
+// ws.deviceCacheVersionは、取得中にselect_team等で破棄された場合に古い結果を保存しないための世代番号。
+function invalidateDeviceCache(ws) {
+  ws.deviceCache = null;
+  ws.deviceCacheVersion = (ws.deviceCacheVersion || 0) + 1;
+}
+
+async function getDeviceForCount(ws, id) {
+  const cache = ws.deviceCache;
+  if (cache && cache.id === id && cache.expiresAt > Date.now()) return cache.row;
+
+  const version = ws.deviceCacheVersion || 0;
+  const full = await cheerQueries.findDeviceWithProfile(id);
+  if (!full) return null; // 未登録デバイスはキャッシュしない（後から作成される可能性があるため）
+  const row = {
+    device_id: full.device_id,
+    owner_user_id: full.owner_user_id,
+    selected_organization_id: full.selected_organization_id,
+    current_target_id: full.current_target_id,
+  };
+  if ((ws.deviceCacheVersion || 0) === version) {
+    ws.deviceCache = { id, row, expiresAt: Date.now() + DEVICE_CACHE_TTL_MS };
+  }
+  return row;
+}
+
+// --- connect接続ログ（2026-08-18追加）------------------------------------
 // 目的：どのデバイスがいつ接続を試み、どのstatusが返ったかを事後に追えるようにする。
 // 既存の判定ロジック（computeStatus）・クライアントへの応答内容は変更しない、記録の追加のみ。
 // メールアドレス・ニックネームは出力しない（devicesの行はmac_address等のみ参照する）。
@@ -174,6 +215,7 @@ class CheerWebSocketServer {
               }
               deviceId = msg.id;
               ws.deviceId = deviceId; // ハートビートのterminateログでMACを識別するために保持
+              invalidateDeviceCache(ws);
 
               // 同一デバイスの旧接続が残っていれば、新しい接続に置き換える前に切断する
               // （幽霊接続対策、2026-09-20実装）。close()コードは4000番台（アプリ定義）とし、
@@ -221,7 +263,12 @@ class CheerWebSocketServer {
               if (!EMAIL_RE.test(email)) {
                 return this.send(ws, { type: 'error', message: 'invalid email format' });
               }
-              await cheerQueries.registerDeviceOwner(id, email, name);
+              invalidateDeviceCache(ws);
+              try {
+                await cheerQueries.registerDeviceOwner(id, email, name);
+              } finally {
+                invalidateDeviceCache(ws);
+              }
               this.send(ws, await buildConnectResponse(id));
               break;
             }
@@ -234,7 +281,12 @@ class CheerWebSocketServer {
                   message: 'id and organization_id are required',
                 });
               }
-              await cheerQueries.setDeviceOrganization(id, organizationId);
+              invalidateDeviceCache(ws);
+              try {
+                await cheerQueries.setDeviceOrganization(id, organizationId);
+              } finally {
+                invalidateDeviceCache(ws);
+              }
               this.send(ws, await buildConnectResponse(id));
               break;
             }
@@ -247,7 +299,12 @@ class CheerWebSocketServer {
                   message: 'id and target_id are required',
                 });
               }
-              await cheerQueries.setDeviceTarget(id, targetId);
+              invalidateDeviceCache(ws);
+              try {
+                await cheerQueries.setDeviceTarget(id, targetId);
+              } finally {
+                invalidateDeviceCache(ws);
+              }
               this.send(ws, await buildConnectResponse(id));
               break;
             }
@@ -261,11 +318,14 @@ class CheerWebSocketServer {
                 });
               }
 
-              const row = await cheerQueries.findDeviceWithProfile(id);
+              const cached = getCheerLogWriteMode() === 'cached';
+              const row = cached
+                ? await getDeviceForCount(ws, id)
+                : await cheerQueries.findDeviceWithProfile(id);
               if (row && row.selected_organization_id) {
-                const liveEvent = await cheerQueries.findLiveEventForOrganization(
-                  row.selected_organization_id
-                );
+                const liveEvent = cached
+                  ? await cheerQueries.findLiveEventForOrganizationCached(row.selected_organization_id)
+                  : await cheerQueries.findLiveEventForOrganization(row.selected_organization_id);
                 if (liveEvent) {
                   await cheerQueries.insertCheerLog({
                     deviceId: row.device_id,
@@ -341,6 +401,9 @@ class CheerWebSocketServer {
     this.startHeartbeat();
 
     console.log(`[WS] CheerStick WebSocket server attached at ${path}`);
+    console.log(
+      `[WS] cheer-log-write config: mode=${getCheerLogWriteMode()} device_cache_ttl_ms=${DEVICE_CACHE_TTL_MS} live_event_cache_ttl_ms=${cheerQueries.LIVE_EVENT_CACHE_TTL_MS}`
+    );
   }
 
   // 30秒間隔で全接続を走査し、90秒間pong応答が無い接続をterminate()する。

@@ -2543,6 +2543,45 @@ CREATE TABLE ble_disconnect_logs (
 仕様のため、キャッシュヒットで同値が繰り返されるケースは、通常のポーリングで実際の
 応援量が一時的に変化しなかったケースと区別できない（同じ入力に対して同じ結果になるだけ）。
 
+### 12.6 応援ログ書き込みモード `CHEER_LOG_WRITE_MODE`（トラックB-①、2026-09-30実装・ローカル確認まで）
+
+`count`1件あたり3回だったDB往復（4.3章）を減らすための切り替え可能な実装。
+ブランチ`feature/scale-cheer-log-write`。DBスキーマ変更・依存追加は無い。
+**本番未反映。** 効果測定計画は`docs/tasks/2026-09-30-cheer-log-write-measurement-plan.md`。
+
+| 値 | 挙動 |
+|---|---|
+| `legacy`（既定。未設定・`legacy`/`cached`以外の値も同じ） | 従来どおり。`count`ごとに①`findDeviceWithProfile`②`findLiveEventForOrganization`③`insertCheerLog`の3往復（live試合が無い場合は①②の2往復） |
+| `cached` | ①をデバイス情報キャッシュ、②をlive試合キャッシュで置き換える。**live試合あり=1往復（INSERTのみ）、liveなし=0往復** |
+
+起動ログに`[WS] cheer-log-write config: mode=<legacy|cached> device_cache_ttl_ms=60000 live_event_cache_ttl_ms=2000`を1行出す。
+`.env`変更後は`pm2 restart cheerstick-server --update-env`（`.env.example`参照）。TTLは固定値で環境変数化していない。
+
+**デバイス情報キャッシュ（接続ごと、TTL 60秒）**
+- `ws`オブジェクトに`device_id`・`owner_user_id`・`selected_organization_id`・`current_target_id`の4項目のみ保持（メールアドレス等は保持しない）
+- `msg.id`が保持しているidと一致するときだけ使う。未登録デバイス（`findDeviceWithProfile`がnull）はキャッシュしない
+- `connect`・`register`・`select_team`・`set_oshi`の処理前後でその接続のキャッシュを破棄する。取得中に破棄された場合は世代番号で古い結果を保存しない
+- 旧接続の`close`（幽霊接続対策、11.10章）では接続オブジェクトごと消えるため追加処理なし。新接続は自分のキャッシュ（未取得）から始まる
+- 管理画面のデバイス更新（CSV取込・一括適用等、`owner_user_id`等の変更）や、SQL直接変更は即時には反映されず最大60秒遅れる
+
+**live試合キャッシュ（組織ごと・プロセス共通、TTL 2秒）**
+- 「その組織に、直近2秒以内に確認した時点でlive試合が有った／無かった」という事実を記憶する（「liveなし」も同様にキャッシュ）。省略されるのは`findLiveEventForOrganization`のSELECTのみで、`insertCheerLog`そのものには関与しない。ただし`insertCheerLog`を呼ぶか・どの`event_id`で呼ぶかの判断材料が最大TTLぶん古くなりうる（下記）
+- 期限切れ時は取得中のPromiseを共有し、同時に大量のSELECTが走らないようにする
+- `updateEventStatus`・`updateEvent`・`hideEvent`の成功時に、同一プロセス内で**全組織分を即時破棄**する（`updateEvent`で`organization_id`が変わる場合に旧・新の両方が対象になるため）。破棄前に始まって取得中だったSELECTの結果はキャッシュに保存されない
+- `ble_disconnect`のlive試合確認（4.2章、11.12章）はキャッシュを使わない（`legacy`と同じ）
+
+**キャッシュが古いことによる影響範囲（ローカルで実際にシミュレーションし確認済み）**
+管理画面（`PATCH /admin/events/:id/status`等）経由の変更は即時破棄されるため影響なし。**SQLの直接書き換えなど、破棄をバイパスした場合のみ**：
+- `live`になった直後、最大2秒間：その組織のcountが記録されない
+- `finished`/`paused`になった直後、最大2秒間：その組織のcountが記録され続ける（旧`event_id`で）
+- 影響は**その組織のみ・最大2秒**で、TTL経過後は自動で解消し、試合をまたいで残ることは無い
+
+**cluster mode（トラックB）との関係**
+- 即時破棄は**同一プロセス内のみ**有効。pm2 cluster mode化した場合、管理画面のリクエストを受けたワーカー以外には破棄が届かず、他ワーカーはTTL（2秒）が切れるまで古い状態を使う（管理画面経由の変更でも、最大2秒の遅れが発生する）
+- デバイス情報キャッシュは接続（`ws`）ごとのため、cluster mode化の影響は受けない
+
+**ローカル確認結果**：`scripts/cheer-log-write/local-verify.js`（pg-mem、35項目PASS）。1countあたりの実測往復数は`legacy`=3（live試合なし=2）、`cached`=1（liveなし=0）。詳細は`docs/worklog.md`2026-09-30「トラックB-①」エントリ参照。
+
 ---
 
 ## 変更履歴
@@ -2590,3 +2629,4 @@ CREATE TABLE ble_disconnect_logs (
 | 2026-09-26 | 9.4に追記：staging実データ確認・ゲージ追加太さ調整（56px）・本番デプロイ完了を記録 | KMT様がSSHトンネルを確立し、staging実データ確認（EMUTTO vs J SPORTSは実際には本番の恒久デモデータでありstagingには無いことが判明）を実施。KMT様からのスマホ幅ゲージ崩れの報告は調査したがコード上再現条件が見当たらず、本番デプロイ未実施状態での確認だった可能性を報告し、KMT様の判断で別タスクへ先送りとした。ゲージ太さの追加要望（40px→56px）のみ先に対応し、承認を得て`git push`・本番EC2への反映（コミット`55eff67`）まで完了した。詳細はdocs/worklog.md 2026-09-26「続き」エントリ参照 |
 | 2026-09-26 | 9.4に追記：スマートフォン幅懸念の解消確認（セッション終了記録） | 本番デプロイ完了後、KMT様がスマートフォンで改めて確認し、デスクトップと同じ「画像→ゲージ→カウンター」の順序で正しく表示されることを確認。原因はpush・本番デプロイ前の旧コードを見ていたことによる混同で、コード自体に画面幅依存の順序切り替え機構は存在せず、追加修正は不要と確定した。詳細はdocs/worklog.md 2026-09-26「セッション終了記録」エントリ参照 |
 | 2026-09-28 | 第12章「大規模イベント対応：レート制限（トラックA）」を新設 | `docs/proposals/large-event-scaling.md`の調査結果を受け、会場Wi-Fiが1つの公開IPに集約される想定（8,000〜10,000接続）に向けたレート制限の再設計を実装（ブランチ`feature/rate-limit-large-event`）。ルートを4系統（観客の入口・スコア閲覧系・管理API・その他）に分け、系統ごとに別のリミッター・環境変数・（スコア系のみ）短時間キャッシュを適用した。DBスキーマ変更・依存追加は無し。本番未反映（手順書は`docs/tasks/2026-09-28-rate-limit-deploy.md`） |
+| 2026-09-30 | 12.6「応援ログ書き込みモード`CHEER_LOG_WRITE_MODE`（トラックB-①）」を新設 | `count`1件あたり3回のDB往復を減らす切り替え可能な実装（既定`legacy`＝従来どおり、`cached`＝デバイス情報の接続ごと60秒キャッシュ＋live試合の組織ごと2秒キャッシュ）。DBスキーマ変更・依存追加なし。ローカル（pg-mem）で往復回数の削減・キャッシュの古さの影響範囲（最大2秒・当該組織のみ）・管理画面経由の即時破棄を確認。本番未反映 |
