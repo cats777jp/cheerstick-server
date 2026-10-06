@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-10-06（続き4） 火花演出の既定ON化（`fx=none`除外方式）・対抗戦ペア一覧に「対抗戦画面を開く」を追加（コミット`ff15313`、本番未反映）
+
+### 実施したこと
+- セッション冒頭に、引継ぎ資料・worklog・git状態の確認と、Vanstone様回答待ち／KMT様判断待ちの現状調査を実施（回答や進捗を示す記述なし、`src/`のTODO/FIXME 0件、強度0は現状記録される、`cheer_summaries`は未実装）。読み取りのみ
+- 岩村様の依頼で、火花演出を`gauge=recent`の画面で既定ONにし、`&fx=none`で無効化する除外方式に変更
+- 現場でURLが分かりにくかったため、`events.html`の対抗戦ペア一覧のURLを`battle_id=…&gauge=recent&poll=1000`にし、「コピー」の隣に「対抗戦画面を開く」リンクを追加（DB変更なし、`battle_id`から都度組み立て）
+- デモモードのチェックボックスは案A（ラベル「ゲージ演出（火花）OFF」、初期チェックなし、チェックで火花OFF、送信は`sparkEffect: !checked`）。岩村様の「`checked`既定＋ラベルOFF」は意味が逆に読めるため案Aを提案し、承認済み
+- 実描画の目視確認（模擬スコアAPI＋Claude in Chrome、`scratchpad`の一時サーバー、非コミット・確認後に停止）：`fx`なしで火花28個が生成され、勢いの強い間は光・火花・揺れが発火（約14秒中710/776フレームで`on`）。`fx=none`は火花DOM 0個で発火なし（縦幅2倍・グラデは維持）。`fx=spark`は28個。スクリーンショット：`C:\Projects\screenshots\spark-default-on-20261006.jpg`・`spark-fx-none-20261006.jpg`
+
+### 変更したファイル
+- コード（`ff15313`）：`public/battle.html`、`public/admin/events.html`、`src/controllers/adminDemoController.js`、`src/services/demoModeState.js`、`scripts/demo/local-verify-demo-mode.js`
+- docs（別コミット）：`docs/spec.md`（9.13追記・変更履歴）、`docs/worklog.md`（本エントリ）
+
+### 判明した事実 / 想定と違ったこと
+- デモの`screenUrl`はサーバー側（`adminDemoController.js`）で組み立てており、`events.html`は`sparkEffect`を送るだけ。よって**`pm2 restart`が必要**
+- 実機用のペア一覧URLは`battle_id`だけで`gauge=recent`が無く、2026-10-01時点では火花が出ない構成だった。今回`gauge=recent`を付けたため、実機の対抗戦画面は「綱引き式」から「直近の勢い方式」に切り替わる（岩村様了承済み）。旧URLのブックマークは従来表示のまま
+- `local-verify-demo-mode.js`はPASS=35/FAIL=0（step 8bを新仕様に更新し、文字列`"false"`の項目を追加）
+- ブラウザの自動化ではJS内の長い待機（20秒超）がタイムアウトする。rAFの発火は問題なかった（10/1の「rAFが動かない」とは異なる）
+
+### 次回への申し送り
+1. **本番反映（岩村様、TeraTerm）**：進行中の実機イベント・デモが無いタイミングで。`git pull`→`sudo cp public/battle.html /var/www/cheerstick-app/`・`sudo cp public/admin/events.html /var/www/cheerstick-admin/`→`diff`確認→`pm2 restart cheerstick-server`（WebSocketが一度切れる）。詳細はセッション中に案内済み
+2. 反映後の確認：一覧の「対抗戦画面を開く」のURLに`&gauge=recent&poll=1000`が付くこと、火花が出ること、デモで「ゲージ演出（火花）OFF」をチェックして「デモをセット」すると`&fx=none`が付いて火花が出ないこと
+3. Vanstone様回答待ち（終了ボタンの最小化・再送仕様・BLE仕様書）とKMT様の仕様判断（チーム選び直し・強度0・`cheer_summaries`のNULL行）は、引継ぎ資料`handoff-2026-10-06.md`3章のまま未着手
+
+### 未解決のまま残した課題
+- 本番未反映。`cheerstick-ws`（未追跡、従来どおり対象外）
+
+---
+
 ## 2026-10-06（続き3） 引継ぎの記録（決定事項・RDSの作業リスト・未決事項）
 
 詳細は`docs/proposals/handoff-2026-10-06.md`。本エントリは要約。コード・設定の変更、本番への接続は行っていない（記録のみ）。
