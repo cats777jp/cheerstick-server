@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-10-06（続き） アプリの再送仕様が`cheer_logs`の記録に与える影響の調査（読み取りのみ）
+
+### 実施したこと
+- ネイティブアプリが未送信データを保持し再接続後にまとめて送る仕様について、`docs/proposals/count-resend-investigation.md`にまとめた。
+  コード・設定の変更、本番EC2・WebARENA・本番DBへの接続は行っていない
+
+### 変更したファイル
+- `docs/proposals/count-resend-investigation.md`（新規）、`docs/worklog.md`（本エントリ追記）
+
+### 判明した事実 / 想定と違ったこと
+- `cheered_at`は常にサーバーのINSERT時刻（`DEFAULT NOW()`）。`count`に時刻・連番は無く、サーバーも読まない。`src/`に`cheered_at`を使う集計は無い
+- WebView自身は再送もバッファもしない。再接続すると応援中画面が隠れ、STARTを押し直すまで`onCheerStickData`は捨てられる
+- 試合終了後の`count`はlive試合が無ければ記録されない。次の試合がliveなら、その`event_id`に入る（受信時刻で振り分け）
+- サーバーに重複排除は無く、`count`にackも無い。重複が起きうるかは、ネイティブの再送がどの層か（BLE／WebView呼び出し／WebSocket直送）で決まり、コードからは判断できない
+
+### 次回への申し送り
+- Vanstone様へ再送仕様の確認（報告書末尾の6項目）。回答次第で、発生時刻の追加（案T）・重複防止（案D）の要否を判断
+
+### 未解決のまま残した課題
+- 上記の確認待ち。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-06 セッション：Node.js複数プロセス化（cluster mode等）の設計調査（読み取りのみ）
 
 ### 実施したこと
