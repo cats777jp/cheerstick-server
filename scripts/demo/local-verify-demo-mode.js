@@ -282,25 +282,30 @@ async function main() {
     firstBattleRow.rows[0].event_b_status === 'finished';
   check('前回のバトルの両試合がfinishedになっている（自動終了）', firstFinished, JSON.stringify(firstBattleRow.rows));
 
-  // === 8b. 火花演出（sparkEffect → screenUrlの&fx=spark、2026-10-01追加） =======
+  // === 8b. 火花演出（既定ON。sparkEffect:false のときだけ screenUrlに&fx=none、2026-10-06変更） ===
   console.log('\n[verify] === step 8b: sparkEffect ===');
-  check('sparkEffect省略のsetupでは、screenUrlに fx=spark が含まれない（従来動作）',
-    !resetupResult.body.screenUrl.includes('fx=spark') && resetupResult.body.sparkEffect === false,
+  check('sparkEffect省略のsetupでは、screenUrlに fx=none が含まれない（既定ON）',
+    !resetupResult.body.screenUrl.includes('fx=none') && resetupResult.body.sparkEffect === true,
     JSON.stringify(resetupResult.body));
   const sparkOn = await callDemo('/demo/setup', 'POST', { sparkEffect: true });
-  check('sparkEffect:true のsetupでは、screenUrlに &fx=spark が含まれる（gauge=recentも維持）',
-    sparkOn.status === 201 && sparkOn.body.screenUrl.includes('&fx=spark') &&
+  check('sparkEffect:true のsetupでは、screenUrlに fx=none が含まれない（gauge=recentは維持）',
+    sparkOn.status === 201 && !sparkOn.body.screenUrl.includes('fx=none') &&
     sparkOn.body.screenUrl.includes('gauge=recent') && sparkOn.body.sparkEffect === true,
     JSON.stringify(sparkOn.body));
   const sparkOnStatus = await callDemo('/demo/status', 'GET');
-  check('/demo/status のscreenUrlにも &fx=spark が反映されている',
-    sparkOnStatus.body.screenUrl.includes('&fx=spark'), sparkOnStatus.body.screenUrl);
+  check('/demo/status のscreenUrlにも fx=none が含まれない',
+    !sparkOnStatus.body.screenUrl.includes('fx=none'), sparkOnStatus.body.screenUrl);
   const sparkOff = await callDemo('/demo/setup', 'POST', { sparkEffect: false });
-  check('sparkEffect:false で再setupすると、新しいscreenUrlに fx=spark が含まれない',
-    sparkOff.status === 201 && !sparkOff.body.screenUrl.includes('fx=spark'), JSON.stringify(sparkOff.body));
+  check('sparkEffect:false で再setupすると、新しいscreenUrlに &fx=none が含まれる（gauge=recentも維持）',
+    sparkOff.status === 201 && sparkOff.body.screenUrl.includes('&fx=none') &&
+    sparkOff.body.screenUrl.includes('gauge=recent') && sparkOff.body.sparkEffect === false,
+    JSON.stringify(sparkOff.body));
   const sparkTruthy = await callDemo('/demo/setup', 'POST', { sparkEffect: 'true' });
-  check('真偽値true以外（文字列"true"）はfalse扱い',
-    sparkTruthy.status === 201 && !sparkTruthy.body.screenUrl.includes('fx=spark'), JSON.stringify(sparkTruthy.body));
+  check('真偽値false以外（文字列"true"）は既定のtrue扱い（fx=noneなし）',
+    sparkTruthy.status === 201 && !sparkTruthy.body.screenUrl.includes('fx=none'), JSON.stringify(sparkTruthy.body));
+  const sparkFalsy = await callDemo('/demo/setup', 'POST', { sparkEffect: 'false' });
+  check('真偽値false以外（文字列"false"）も既定のtrue扱い（fx=noneなし）',
+    sparkFalsy.status === 201 && !sparkFalsy.body.screenUrl.includes('fx=none'), JSON.stringify(sparkFalsy.body));
 
   // === 9. 60秒（テストではTEST_DURATION_MS）経過後、自動的にsetへ戻る ============
   console.log('\n[verify] === step 9: auto-return to "set" after duration elapses ===');

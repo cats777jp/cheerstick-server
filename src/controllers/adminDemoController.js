@@ -26,8 +26,8 @@ const DEMO_CATEGORY_NAME = 'デモ用';
 function buildScreenUrl(battleId, sparkEffect) {
   // 絶対URL化（APP_BASE、環境ごとに異なるドメイン）はフロント側（common.js）に委ねる。
   // 既存の対抗戦ペア一覧のbattleScreenUrl()と同じ考え方。
-  // 火花演出（&fx=spark、2026-10-01追加）：「デモをセット」時のチェック状態がtrueのときだけ付与する。
-  return `/battle.html?battle_id=${battleId}&gauge=recent&poll=1000${sparkEffect ? '&fx=spark' : ''}`;
+  // 火花演出は既定ON（2026-10-06変更）：sparkEffectがfalseのときだけ&fx=noneを付けて無効化する。
+  return `/battle.html?battle_id=${battleId}&gauge=recent&poll=1000${sparkEffect ? '' : '&fx=none'}`;
 }
 
 // 「デモ用」カテゴリーに属するチームのうち、作成日時が最も古い2件を返す
@@ -94,8 +94,8 @@ exports.setup = async (req, res, next) => {
   }
 
   const previousBattleId = demoModeState.state.battleId;
-  // 真偽値のtrueのみ有効（省略・その他の値は常にfalse＝従来動作）。
-  const sparkEffect = !!req.body && req.body.sparkEffect === true;
+  // 真偽値のfalseのみ火花OFF（省略・その他の値は既定のtrue＝火花ON、2026-10-06変更）。
+  const sparkEffect = !(req.body && req.body.sparkEffect === false);
 
   try {
     // ①「前回のデモ試合があれば自動で終了し」（指示書0章）。

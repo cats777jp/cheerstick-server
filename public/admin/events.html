@@ -128,10 +128,11 @@
       <a id="demoScreenLink" class="demo-screen-link disabled" href="#" target="_blank" rel="noopener">
         <button type="button" id="demoScreenLinkBtn">表示画面を開く</button>
       </a>
-      <!-- 火花演出（&fx=spark、2026-10-01追加）。既定は常にOFF（サーバー側の状態は問い合わせない）。
+      <!-- 火花演出（2026-10-01追加、2026-10-06に既定ONへ変更）。初期はチェックなし＝火花ON。
+           チェックを入れると火花OFF（screenUrlに&fx=none）。サーバー側の状態は問い合わせない。
            「デモをセット」を押した瞬間の状態だけが、そのデモのscreenUrlに反映される。 -->
       <label class="demo-spark-toggle">
-        <input type="checkbox" id="sparkEffectToggle" autocomplete="off"> ゲージ演出（火花）
+        <input type="checkbox" id="sparkEffectToggle" autocomplete="off"> ゲージ演出（火花）OFF
       </label>
     </div>
   </div>
@@ -627,7 +628,9 @@
   const battlesTableBody = document.getElementById('battlesTableBody');
 
   function battleScreenUrl(battleId) {
-    return `${APP_BASE}/battle.html?battle_id=${battleId}`;
+    // 2026-10-06変更：現場で常に正しいURLで開けるよう、gauge=recent&poll=1000を付与
+    // （デモの表示画面と同じ表示方式。火花は既定ONのためfxパラメータは不要）。
+    return `${APP_BASE}/battle.html?battle_id=${battleId}&gauge=recent&poll=1000`;
   }
 
   // 試合一覧（events）が更新されるたびに呼ばれる。プルダウンの選択状態は
@@ -668,6 +671,7 @@
           <div class="battle-url-row">
             <input type="text" readonly value="${escapeHtml(url)}">
             <button type="button" class="battle-copy-btn">コピー</button>
+            <a href="${escapeHtml(url)}" target="_blank" rel="noopener"><button type="button">対抗戦画面を開く</button></a>
           </div>
         </td>
         <td class="action-cell"></td>
@@ -817,7 +821,7 @@
       await apiFetch('/demo/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sparkEffect: document.getElementById('sparkEffectToggle').checked }),
+        body: JSON.stringify({ sparkEffect: !document.getElementById('sparkEffectToggle').checked }),
       });
       clearError();
     } catch (e) {

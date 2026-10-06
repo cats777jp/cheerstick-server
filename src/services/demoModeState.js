@@ -19,7 +19,7 @@ const state = {
   orgAId: null,
   orgBId: null,
   screenUrl: null,
-  sparkEffect: false, // 「デモをセット」時点のチェック状態（火花演出、2026-10-01追加）。screenUrlの&fx=sparkに反映済み
+  sparkEffect: true, // 火花演出の有無（2026-10-01追加、2026-10-06に既定ONへ変更）。true=火花ON（既定）、false=OFF（screenUrlに&fx=noneを付与済み）
   startedAt: null, // ms epoch（Date.now()）。runningのときのみ
   durationMs: DEMO_DURATION_MS,
   childProcess: null, // spawnしたChildProcess。runningのときのみ
@@ -47,18 +47,18 @@ function setIdle() {
   state.orgAId = null;
   state.orgBId = null;
   state.screenUrl = null;
-  state.sparkEffect = false;
+  state.sparkEffect = true;
   state.startedAt = null;
   state.childProcess = null;
 }
 
-function setSet({ battleId, orgAId, orgBId, screenUrl, sparkEffect = false }) {
+function setSet({ battleId, orgAId, orgBId, screenUrl, sparkEffect = true }) {
   state.status = 'set';
   state.battleId = battleId;
   state.orgAId = orgAId;
   state.orgBId = orgBId;
   state.screenUrl = screenUrl;
-  state.sparkEffect = sparkEffect === true;
+  state.sparkEffect = sparkEffect !== false;
   state.startedAt = null;
   state.childProcess = null;
 }
