@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-10-06（続き2） 複数プロセス化（B案）の設定の下書きと、CLAUDE.mdのRDS方針の確認（読み取り＋docs新規のみ）
+
+### 実施したこと
+- nginx変更案（diff）、`ecosystem.config.js`案と切り替え手順、dotenv優先順位のローカル確認、`monitor-server.sh`の改修方針、DB接続数の整理、
+  RDS方針の事実確認、一時インスタンスでの試験観点を`docs/proposals/multi-process-config-draft.md`にまとめた。
+  コード・設定ファイルの変更、本番EC2・WebARENA・本番DBへの接続は行っていない（ローカルで`scratchpad`の小スクリプトのみ実行、リポジトリの`.env`には触れていない）
+
+### 変更したファイル
+- `docs/proposals/multi-process-config-draft.md`（新規）、`docs/worklog.md`（本エントリ追記）
+
+### 判明した事実 / 想定と違ったこと
+- `.env`に`PORT=3000`があっても、環境変数`PORT`が優先される（`PORT=3001`で3001待ち受けをローカル確認。dotenv 16.6.1）。`.env`の編集は不要
+- dotenvはcwdの`.env`を探し、無くてもエラーにならない。ecosystemに`cwd`の明記が必須
+- 「RDS不使用」は2026-07-25のコミット`840e36d`でCLAUDE.mdに初出。理由として追えるのは`docs/spec.md` 7章の「最小コスト構成」のみ。決定の日付・決定者・議論は不明。2026-06-09の引継ぎ書には「EC2 or ECS + RDS」の計画があった
+- `assertNotConnectedToProduction`はDB名（`cheerstick_production`）で判定しておりホストは見ない。RDS側のDB名を変えるとガードが黙って効かなくなる
+- `monitor-server.sh`は`PM2_APP_NAME`固定・`head -1`で先頭1件のみ。複数プロセス・RDS（`ps -C postgres`）の両方で改修が要る
+
+### 次回への申し送り
+- 実ファイル（nginx全文、`NODE_ENV`、PostgreSQLのバージョン・SSL、pm2の起動コマンド）の確認依頼リストは報告書末尾。適用前にnginxのdiff確認が必要
+- 名前を`cheerstick-3000`に揃えるか、既存名`cheerstick-server`を保つかの判断
+- 一時インスタンスでの試験（7章）は未着手
+
+### 未解決のまま残した課題
+- 上記の判断・確認、`DB_POOL_MAX`の環境変数化（N=3では必須でない）。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-06（続き） アプリの再送仕様が`cheer_logs`の記録に与える影響の調査（読み取りのみ）
 
 ### 実施したこと
