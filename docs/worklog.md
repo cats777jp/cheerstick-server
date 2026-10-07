@@ -4,6 +4,53 @@
 
 ---
 
+## 2026-10-07（続き3） コミット・push、デモ用ユーザーの`users`集計への混入と除外方法をrunbookに明記
+
+### 実施したこと
+- 岩村様の指示で、コード（デモの`register`・空表示の文言）とdocsを別コミットでpush
+- `docs/runbook.md`に「デモ用ユーザー（`.invalid`）が`users`の集計に混入しうる点と除外方法」を追記。コード上で`users`を集計するのは順位確定のユーザー別（`INNER JOIN users`、`event_id`で絞る）のみで、デモ用デバイスはデモの試合にしか応援しないため**実イベントの順位には混ざらない**ことを確認（`src/`の`FROM/JOIN users`を全て確認）。人の手による登録ユーザー数の集計・今後のメール配信等で混ざりうるため、見分け方（メール`demo-%@example.invalid`、ニックネーム、`is_demo`デバイスの所有者）と除外SQLを記載
+- デモ用ユーザーは**削除しない**方針を明記（`cheer_logs.user_id`・`devices.owner_user_id`は`ON DELETE SET NULL`のため、削除するとデモの`user_id`が再びNULLになり、順位確定の対象外＝本件が再発する）
+
+### 変更したファイル
+- `docs/runbook.md`、`docs/worklog.md`。コードの変更なし
+
+### 次回への申し送り
+- 本番反映は岩村様の指示待ち（直前のエントリの申し送り2・3のとおり）。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
+## 2026-10-07（続き2） デモの応援データを`register`済みユーザーに紐づける・空表示の文言変更・旧デモ分の埋め戻し手順（ローカル確認まで・本番未反映・未コミット）
+
+### 実施したこと
+- 調査（読み取りのみ）：デモ後の`ranking-battle.html`が両チームとも「応援データがありません」になった原因を特定。デモのデバイスは`POST /admin/devices`で作られ`owner_user_id`なし、`battle-demo.js`は`register`を送らない（`connect → select_team → count`）ため`cheer_logs.user_id`がNULL。順位確定のユーザー別集計は`INNER JOIN users`でNULLを除外する（`battle.html`のスコアは`event_id`単位のSUMなので表示される）。選手別も`set_oshi`をしないため`target_id`がNULLで0件。本番ではニックネーム・メール登録が必須のため、デモ特有の問題と岩村様が確認
+- 岩村様の指示（選択肢a・c1・埋め戻し）で実装：
+  - `battle-demo.js`が`connect`応答後、`select_team`の前に`register`を送る（既定。`--no-register`で従来動作）。メール`demo-<MAC>@example.invalid`、ニックネーム`デモ応援団A-0001`。再実行は`ON CONFLICT (email)`で同じユーザーを使い回す。登録失敗時もデモは続行（匿名で記録）
+  - `ranking-battle.html`のユーザー別0件の文言を「ニックネーム登録済みの応援がまだありません」に変更（選手別は「選手への応援がまだありません」）
+  - 旧デモ分の`cheer_logs.user_id`埋め戻し手順を`docs/runbook.md`に追加（デモを1回実行し直して`owner_user_id`を埋めてから、旧デモ分をUPDATE）
+- 変更しなかったもの：順位確定の集計（`ranking-user.html`・`ranking-target.html`含む、INNER JOINでNULLを除外する仕様）、本番の応援フロー（`register`の要否等）、`src/`
+
+### 変更したファイル
+- コード：`scripts/demo/battle-demo.js`、`scripts/demo/local-verify-demo-mode.js`、`scripts/demo/README.md`、`public/ranking-battle.html`
+- docs：`docs/spec.md`（9.12・9.14追記、変更履歴）、`docs/runbook.md`（埋め戻し手順）、`docs/worklog.md`（本エントリ）
+
+### 判明した事実 / 想定と違ったこと
+- 確認：`local-verify-demo-mode.js`は41項目PASS（既存35＋追加6：デモ後の全`cheer_logs`に`user_id`、デモ用ユーザーのメール一意、デバイスの`owner_user_id`設定、再実行でも所有ユーザー不変）。`ranking-battle`の自動確認は37項目PASSのまま。空表示はスタブ応答でブラウザ目視（スクリーンショット`C:\Projects\screenshots\ranking-battle-empty-message-20261007.jpg`、コンソールエラーなし）
+- **旧デモ分は遡って埋まらない**：`cheer_logs.user_id`は`count`受信時点の`owner_user_id`で記録され、旧デモ用デバイスの`owner_user_id`は今もNULL。そのため「`devices.owner_user_id`で埋め戻す」には、先に修正版のデモを1回実行して`register`させる必要がある（runbookに順序を明記）
+- 埋め戻しSQLの確認：pg-memは`UPDATE ... FROM`の別名・`UPDATE`内の相関サブクエリのどちらも未対応のため、staging（実PostgreSQL、岩村様のSSHトンネル経由）で、トランザクション内に投入データを作り最後にROLLBACKする形で確認した（対象2件のみ更新、実デバイス・所有者なし・対象外の試合は不変、2回目0件、残存0件）。本番では未実行
+- 前回までの私のローカル・staging確認はすべて`register`済みユーザーのデータだったため、デモ経路（匿名）が未カバーだった。今回、デモ経路そのものを`local-verify-demo-mode.js`で確認するようにした
+- 副作用：デモ用デバイス数ぶん（既定1,000）の`users`行が残る。再実行では増えない。`users`に`is_demo`列は無い（メールの`.invalid`ドメインで識別）
+
+### 次回への申し送り
+1. 未コミット（コード・docsとも）。コードと`docs:`は別コミット。`git diff --stat docs/`の確認後、岩村様の承認でコミット・push
+2. 本番反映（岩村様、TeraTerm）：`git pull`→`pm2 restart cheerstick-server`（デモの子プロセス`battle-demo.js`は`scripts/`を直接読むためコピー不要。`ranking-battle.html`は`/var/www/cheerstick-app/`へ`cp`＋`diff`確認）。反映後にデモを1回実行→`ranking-battle.html`でユーザー別が出ることを確認
+3. 旧デモ分の救済が必要なら、2の後にrunbookの埋め戻し手順（SELECTで件数確認→BEGIN/UPDATE/COMMIT）→「両チーム順位確定」を押し直す
+4. 前回までの申し送り（`ranking-battle.html`・`ranking-control.html`の本番反映、装飾枠の入力欄、実機スクリーンでの見え方）は未反映のまま
+
+### 未解決のまま残した課題
+- 8,000人・20,000人規模の確定時間（`docs/proposals/ranking-battle-future-scaling.md`）。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-07（続き） 対抗戦順位発表画面のコミット・push、staging実DBでの確認完了
 
 ### 実施したこと

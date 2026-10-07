@@ -879,6 +879,86 @@ sudo -iu cheerdemo bash -c 'cd /home/cheerdemo/cheerstick-demo && npm ci --omit=
 
 ---
 
+## デモの応援データ（cheer_logs.user_id）の埋め戻し（2026-10-07追加）
+
+理由：2026-10-07、デモモードで実行した「EMUTTO vs J SPORTS 2026-10-07T04」の順位確定結果（`ranking-battle.html`）が空になった。
+`battle-demo.js`が`register`を送らず、デモ用デバイスの`owner_user_id`・`cheer_logs.user_id`がNULLだったため、順位確定のユーザー別集計
+（`INNER JOIN users`、仕様は変更しない）から全件除外されていた。以後のデモは`register`を送る（`docs/spec.md` 9.12章・`scripts/demo/README.md`）。
+**過去のデモ分は`user_id`がNULLのまま**（`user_id`は`count`受信時点の所有者で記録されるため、後から`register`されても遡って埋まらない）。
+
+### 手順（本番DB。岩村様がTeraTermで実行。実行前に必ずSELECTで確認）
+
+**1. 先に、修正済みのコードを本番へ反映し、デモを1回実行し直す**（`register`でデモ用デバイスの`owner_user_id`が埋まる。
+旧デモ分の埋め戻しは、この後でないとできない＝埋め戻しの材料である`devices.owner_user_id`が空のため）。
+これだけでも新しいデモ分は正しく記録される（旧デモ分を救う必要が無ければここで完了）。
+
+**2. （任意）旧デモ分の埋め戻し。** `label`は`event_battles`で確認する。
+
+```sql
+-- 対象の対抗戦と試合IDの確認
+SELECT id, label, event_a_id, event_b_id FROM event_battles WHERE label LIKE '%2026-10-07T04%';
+
+-- 事前確認：埋まる件数（is_demoのデバイスで、所有者が設定済みのものだけが対象）
+SELECT count(*) AS will_fill
+FROM cheer_logs cl JOIN devices d ON d.id = cl.device_id
+WHERE cl.user_id IS NULL AND d.is_demo = true AND d.owner_user_id IS NOT NULL
+  AND cl.event_id IN (SELECT event_a_id FROM event_battles WHERE label LIKE '%2026-10-07T04%'
+                      UNION SELECT event_b_id FROM event_battles WHERE label LIKE '%2026-10-07T04%');
+
+-- 実行（トランザクション内。件数が上の will_fill と一致することを確認してから COMMIT）
+BEGIN;
+UPDATE cheer_logs cl SET user_id = d.owner_user_id
+FROM devices d
+WHERE d.id = cl.device_id AND d.is_demo = true AND d.owner_user_id IS NOT NULL
+  AND cl.user_id IS NULL
+  AND cl.event_id IN (SELECT event_a_id FROM event_battles WHERE label LIKE '%2026-10-07T04%'
+                      UNION SELECT event_b_id FROM event_battles WHERE label LIKE '%2026-10-07T04%');
+-- UPDATE n の n を確認 → 問題なければ COMMIT; 想定外なら ROLLBACK;
+```
+
+- 対象は「`is_demo = true`かつ`owner_user_id`設定済みのデバイス」の「対象の試合」の「`user_id`がNULLの行」だけ。実デバイス・他の試合・所有者未設定のデバイスは変わらない。2回実行しても2回目は0件（冪等）。
+- 埋め戻した後、`ranking-battle.html`に反映するには**「両チーム順位確定」を押し直す**（確定済みのスナップショットは作り直されない）。
+- `user_id`が埋まるのは`register`済みのデバイスの分のみ。旧デモで送信したデバイスのうち、新しいデモに参加しなかったMACは埋まらない。
+- 2026-10-07、このUPDATEの構文・対象の絞り込み・冪等性をstaging（実PostgreSQL）で、トランザクション内に投入データを作り最後にROLLBACKする形で確認済み（対象2件のみ更新、他は変わらない、2回目0件、残存0件）。本番では未実行。
+
+### デモ用ユーザー（`.invalid`）が`users`の集計に混入しうる点と除外方法（2026-10-07追加）
+
+理由：デモが`register`を送るようになり、本番の`users`にデモ用ユーザー（デモ用デバイス数ぶん、既定1,000行）が恒久的に残るため。
+`users`に`is_demo`列は無く、運用者がSQLで`users`を数えたり抽出したりすると実ユーザーと混ざる。
+
+**デモ用ユーザーの見分け方（どれか一つで足りる。確実なのは1）：**
+
+1. メールが`demo-%@example.invalid`（`example.invalid`は予約済みTLDで、実在のアドレスにならない。実ユーザーが使うことはない）
+2. ニックネームが`デモ応援団A-0001`／`デモ応援団B-0001`形式
+3. `is_demo = true`のデバイスの所有者（`devices.owner_user_id`）
+
+**混入しうる場所：**
+- **アプリのコード上は限定的。** `users`を集計するのは順位確定のユーザー別（`computeUserRanking`、`INNER JOIN users`）だけで、`cheer_logs`の`event_id`で絞る。デモ用デバイスはデモ用のチーム・試合にしか応援しないため、**実イベントの順位には混ざらない**（デモの試合の順位にだけ載る）。他は`devices.owner_user_id`からの名前の参照のみ
+- **人の手による集計・今後の機能で混ざる：** 登録ユーザー数（`SELECT count(*) FROM users`）、新規登録の推移、メール配信・通知、ユーザー一覧などを今後作る場合や、`psql`での手集計。デモの`.invalid`アドレスにはメールは届かない（配信機能を作るなら必ず除外する）
+
+**除外方法（SQL）：**
+
+```sql
+-- 実ユーザー数（デモ用を除く）
+SELECT count(*) AS real_users FROM users WHERE email NOT LIKE '%@example.invalid';
+
+-- デモ用ユーザーの一覧・件数（確認用）
+SELECT count(*) AS demo_users FROM users WHERE email LIKE 'demo-%@example.invalid';
+
+-- 実デバイスの所有者に限定する場合（is_demoのデバイスの所有者を除く）
+SELECT u.* FROM users u
+WHERE NOT EXISTS (SELECT 1 FROM devices d WHERE d.owner_user_id = u.id AND d.is_demo = true);
+
+-- 応援ログ・順位をデモ分を除いて集計する場合（デバイス側で除外）
+SELECT ... FROM cheer_logs cl JOIN devices d ON d.id = cl.device_id WHERE d.is_demo = false ...;
+```
+
+**デモ用ユーザーを削除しないこと。** `cheer_logs.user_id`と`devices.owner_user_id`は`users`への`ON DELETE SET NULL`のため、
+削除するとデモの応援ログの`user_id`が再びNULLになり、順位確定のユーザー別集計から外れて`ranking-battle.html`が空になる
+（本件の再発）。デモ用ユーザーは残したまま、上記のように**集計側で除外**する。
+
+---
+
 ## 未確認・保留中のファイル
 
 - `cheerstick-ws`：**2026-07-31、内容確認済み。** nginx設定の下書きであることを確認した。

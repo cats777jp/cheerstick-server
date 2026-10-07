@@ -1796,6 +1796,13 @@ HTTP経由でAPIを一気通貫確認。25項目、全PASS）：**
 > 選ばれないこと）をDBで確認した。既存25項目・`scripts/demo/local-verify.js`（27項目）・
 > `scripts/rate-limit/local-verify.js`（26チェック）とも引き続き全PASS（回帰無し）。
 
+> **2026-10-07追記（9.12へ・デモの応援データを`register`済みのユーザーに紐づける）：** デモモード（`scripts/demo/battle-demo.js`）の仮想デバイスは、従来`register`を送らず（`connect → select_team → count`）、デモ用デバイス（`POST /admin/devices`で作成、`owner_user_id`なし）の応援は`cheer_logs.user_id`がNULLで記録されていた。
+> `battle.html`のスコアは`event_id`単位の`SUM(intensity)`のため表示されるが、順位確定のユーザー別集計（`INNER JOIN users`、8.9章）はNULLを除外するため、`ranking-battle.html`（9.14章）が「応援データがありません」になった（2026-10-07、EMUTTO vs J SPORTS 2026-10-07T04）。本番ではニックネーム・メールの登録が必須で匿名応援は発生しないため、**デモ特有の問題**であり、順位確定の集計仕様・本番の応援フローは変更していない。
+> - `battle-demo.js`が`connect`の応答後、`select_team`の前に`register`を送る（既定。`--no-register`で従来動作）。メールは`demo-<MAC小文字・コロン無し>@example.invalid`、ニックネームは`デモ応援団A-0001`形式。メールがMACから決まる固定値のため、再実行しても同じ`users`行を使い回す（`findOrCreateUserByEmail`の`ON CONFLICT (email)`）。登録に失敗してもデモは続行する（その場合は匿名で記録される）
+> - 副作用：デモ用デバイス数ぶんの`users`行が残る（既定の1,000デバイスなら1,000行。再実行では増えない）。`users`に`is_demo`列は無い。メールが`.invalid`ドメインで識別できる
+> - `user_id`は`count`受信時点の所有者で記録されるため、**過去のデモ分は遡って埋まらない。** 救済は`docs/runbook.md`「デモの応援データ（cheer_logs.user_id）の埋め戻し」参照（デモを1回実行し直して`owner_user_id`を埋めてから、旧デモ分をUPDATE）
+> - `scripts/demo/local-verify-demo-mode.js`に確認項目を追加（デモ後の全`cheer_logs`に`user_id`が入る、デモ用ユーザーのメールが一意、再実行でも所有ユーザーが変わらない）。全41項目PASS（ローカル・pg-mem）。本番未反映
+
 ### 9.13 ゲージ火花演出 `fx=spark`（デモモードのみ、2026-10-01実装・ローカル確認まで）
 
 `battle.html`（対抗戦画面）の綱引きゲージに、勢いが強いときだけ火花・光・揺れを出す演出。
@@ -1937,6 +1944,8 @@ GET /api/v1/event-battles/:id/ranking-snapshots/latest      （src/controllers/e
 > - 両チーム順位確定（A・Bへ同時POST、実DBの`RANK() OVER`）→新GET：ユーザー別20件打ち切り、同点の同順位（1,2,2,4）、選手の画像・背番号の補完、選手なしチームの選手別が空、装飾キーの返却、再確定で最新に切り替わること、確定後も試合のstatusが`live`のままであること、既存GETの応答キーが従来どおりであること
 > - `ranking-battle.html`を実データで目視（背番号2桁の表示を含む。コンソールエラーなし）。スクリーンショット：`C:Projectsscreenshotsanking-battle-staging-20261007.jpg`
 > - 確認用データ（`RBV-`プレフィックス）は確認後に全件削除し、残存0件・試合数が確認前と同じ（15件）であることを確認。確認スクリプトはリポジトリ外（非コミット）。本番は未接続・未反映。
+
+> **2026-10-07追記（空表示の文言）：** ユーザー別が0件のときの文言を「応援データがありません」から「ニックネーム登録済みの応援がまだありません」に変更した（選手別は「選手への応援がまだありません」）。ユーザー別は`cheer_logs.user_id`ありの応援のみが対象で、応援データ自体はあっても未登録なら0件になるため、原因が分かる表現にした（9.12章の追記参照）。集計仕様・API応答は変更なし。
 
 ## 10. 未実施の検証
 
@@ -2813,3 +2822,4 @@ WebARENA VPSから`battle-demo.js`で、本番EC2（t3.micro）に対し`legacy`
 | 2026-10-06 | 9.13の2026-10-06追記（火花の既定ON化・`fx=none`・対抗戦ペア一覧の「対抗戦画面を開く」）の状態を「本番未反映」から「本番反映済み」へ更新（追記のみ） | 岩村様がTeraTermで本番へ反映し、反映後の確認3点（ペア一覧URLの`&gauge=recent&poll=1000`付与、デモのチェックなしで火花・シェイク発火、チェックありで非発火）が問題なしとの報告を受けたため。数値・結果は岩村様の報告に基づく記録。既存記述は削除せず、9.13追記の「本番未反映」は本行をもって現行を更新 |
 | 2026-10-07 | 9.14「対抗戦向け順位発表画面`ranking-battle.html`」を新設。8.9・9.11の既存画面・既存GETは変更なし | KMT様（岩村様）の依頼。対抗戦向けに左右2チーム・選手（顔写真）／ユーザー別ランキング・冠・チームカラー・装飾枠（`events.metadata`）の画面を追加。新規テーブルなし、新規GET（`/event-battles/:id/ranking-snapshots/latest`）1本とPATCHのmetadataキー2つ（`ranking_background_url`・`sponsor_logo_url`）を追加。ローカル（pg-mem）で37項目確認、実PostgreSQLでの`jsonb`演算子確認と本番デプロイは未実施。装飾枠の管理画面入力欄は後日 |
 | 2026-10-07 | 9.14に追記：staging実DB（実PostgreSQL）での確認完了（23項目合格） | 前回のpg-mem確認で未確認だった`events.metadata`の`jsonb ||`／`-`のSQLと、実DBの`RANK() OVER`による順位確定→新GETの流れを、岩村様が張ったSSHトンネル経由でstagingに対して確認した。確認用データは全件削除済み。既存記述の変更・削除なし。本番は未反映 |
+| 2026-10-07 | 9.12に追記：デモ（`battle-demo.js`）が`select_team`の前に`register`を送るよう変更（既定。`--no-register`で従来動作）。9.14に追記：ユーザー別0件時の文言変更。`docs/runbook.md`に旧デモ分の`cheer_logs.user_id`埋め戻し手順を追加 | デモ後の`ranking-battle.html`が空になった件の調査（デモのデバイスが`register`されず`cheer_logs.user_id`がNULLで、順位確定のユーザー別集計の`INNER JOIN users`から除外されていた）を受けた岩村様の指示。本番ではニックネーム・メール登録が必須で匿名応援は発生しないためデモ特有の問題。順位確定の集計仕様（`ranking-user.html`・`ranking-target.html`含む）・本番の応援フローは変更していない。ローカル（pg-mem）でデモ検証41項目PASS、埋め戻しSQLはstaging実DBでROLLBACK前提で確認。本番未反映 |
