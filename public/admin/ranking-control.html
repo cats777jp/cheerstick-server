@@ -30,8 +30,39 @@
   <p><a href="index.html">&larr; 管理画面トップ</a></p>
   <div id="errorBar" class="error-bar"></div>
 
+  <!-- 対抗戦用（上）：両チーム一括の順位確定と、順位発表画面（ranking-battle.html）のURL。
+       下の「単独イベント用」とは独立。確定自体は既存のPOST /events/:id/ranking-snapshotを
+       A・Bに対して続けて呼ぶだけ（新しいAPIは使わない）。順位発表画面は、推し選手ランキングと
+       応援ユーザーランキングを別のURL（view=target／view=user）に分けている（画面スペースの都合）。 -->
+  <div id="battleCard" class="card">
+    <h2>対抗戦用（2つの試合をペアにした対抗戦）</h2>
+    <label for="battleSelect">対抗戦</label>
+    <select id="battleSelect"></select>
+
+    <div style="margin-top: 16px;">
+      <button id="battleConfirmBtn" class="primary hidden">両チーム順位確定</button>
+    </div>
+    <div id="battleConfirmNote" class="triggered-at-note" style="margin-top: 10px;"></div>
+
+    <label for="battleTopSelect" style="margin-top: 14px;">順位発表画面の表示件数（2つのURL共通）</label>
+    <select id="battleTopSelect">
+      <option value="10">上位10件（既定）</option>
+      <option value="20">上位20件（&amp;top=20）</option>
+    </select>
+    <label>順位発表画面URL：推し選手ランキング</label>
+    <div class="screen-url-row">
+      <input id="battleTargetUrlInput" type="text" readonly>
+      <button type="button" id="battleTargetCopyBtn">コピー</button>
+    </div>
+    <label>順位発表画面URL：応援ユーザーランキング</label>
+    <div class="screen-url-row">
+      <input id="battleUserUrlInput" type="text" readonly>
+      <button type="button" id="battleUserCopyBtn">コピー</button>
+    </div>
+  </div>
+
   <div class="card">
-    <h2>対象試合を選択</h2>
+    <h2>単独イベント用：対象試合を選択（対抗戦を組まない試合）</h2>
     <label for="eventSelect">試合</label>
     <select id="eventSelect"></select>
 
@@ -41,7 +72,7 @@
   </div>
 
   <div id="screenUrlCard" class="card hidden">
-    <h2>会場スクリーンURL</h2>
+    <h2>単独イベント用：会場スクリーンURL</h2>
     <label>ユーザー別</label>
     <div class="screen-url-row">
       <input id="userScreenUrlInput" type="text" readonly>
@@ -54,33 +85,8 @@
     </div>
   </div>
 
-  <!-- 対抗戦（2チーム）向け：両チーム一括の順位確定と、順位発表画面（ranking-battle.html）のURL。
-       既存の「試合を選んで順位確定」とは独立。確定自体は既存のPOST /events/:id/ranking-snapshotを
-       A・Bに対して続けて呼ぶだけ（新しいAPIは使わない）。 -->
-  <div id="battleCard" class="card">
-    <h2>対抗戦（2チーム）</h2>
-    <label for="battleSelect">対抗戦</label>
-    <select id="battleSelect"></select>
-
-    <div style="margin-top: 16px;">
-      <button id="battleConfirmBtn" class="primary hidden">両チーム順位確定</button>
-    </div>
-    <div id="battleConfirmNote" class="triggered-at-note" style="margin-top: 10px;"></div>
-
-    <label for="battleTopSelect" style="margin-top: 14px;">順位発表画面の表示件数</label>
-    <select id="battleTopSelect">
-      <option value="10">上位10件（既定）</option>
-      <option value="20">上位20件（&amp;top=20）</option>
-    </select>
-    <label>順位発表画面URL（対抗戦用）</label>
-    <div class="screen-url-row">
-      <input id="battleScreenUrlInput" type="text" readonly>
-      <button type="button" id="battleScreenCopyBtn">コピー</button>
-    </div>
-  </div>
-
   <div id="resultCard" class="card hidden">
-    <h2>確定結果</h2>
+    <h2>単独イベント用：確定結果</h2>
     <div id="triggeredAtNote" class="triggered-at-note"></div>
 
     <h3>ユーザー別（上位20件）</h3>
@@ -258,12 +264,13 @@
     }
   }
 
-  // --- 対抗戦（2チーム）：両チーム順位確定＋順位発表画面URL ------------------------
+  // --- 対抗戦用：両チーム順位確定＋順位発表画面URL（推し選手・応援ユーザーは別URL） ------------------------
   const battleSelect = document.getElementById('battleSelect');
   const battleConfirmBtn = document.getElementById('battleConfirmBtn');
   const battleConfirmNote = document.getElementById('battleConfirmNote');
   const battleTopSelect = document.getElementById('battleTopSelect');
-  const battleScreenUrlInput = document.getElementById('battleScreenUrlInput');
+  const battleTargetUrlInput = document.getElementById('battleTargetUrlInput');
+  const battleUserUrlInput = document.getElementById('battleUserUrlInput');
 
   let lastBattles = [];
 
@@ -275,7 +282,8 @@
     const battle = selectedBattle();
     if (!battle) {
       battleConfirmBtn.classList.add('hidden');
-      battleScreenUrlInput.value = '';
+      battleTargetUrlInput.value = '';
+      battleUserUrlInput.value = '';
       return;
     }
     // 片方の試合がscheduled/cancelledでも、もう片方は確定できる（結果は下の通知で個別に表示する）。
@@ -284,7 +292,10 @@
     battleConfirmBtn.classList.toggle('hidden', !eligible);
     // 既定（10件）は&topを付けない（画面側の既定と一致）。
     const topSuffix = battleTopSelect.value === '20' ? '&top=20' : '';
-    battleScreenUrlInput.value = `${APP_BASE}/ranking-battle.html?battle_id=${battle.id}${topSuffix}`;
+    // 推し選手ランキング（view=target）と応援ユーザーランキング（view=user）は別のURL。
+    const base = `${APP_BASE}/ranking-battle.html?battle_id=${battle.id}`;
+    battleTargetUrlInput.value = `${base}&view=target${topSuffix}`;
+    battleUserUrlInput.value = `${base}&view=user${topSuffix}`;
   }
 
   function populateBattleSelect(battles) {
@@ -320,8 +331,11 @@
 
   battleSelect.addEventListener('change', updateBattleControls);
   battleTopSelect.addEventListener('change', updateBattleControls);
-  document.getElementById('battleScreenCopyBtn').addEventListener('click', (e) => {
-    copyToClipboard(battleScreenUrlInput.value, e.target);
+  document.getElementById('battleTargetCopyBtn').addEventListener('click', (e) => {
+    copyToClipboard(battleTargetUrlInput.value, e.target);
+  });
+  document.getElementById('battleUserCopyBtn').addEventListener('click', (e) => {
+    copyToClipboard(battleUserUrlInput.value, e.target);
   });
 
   function describeBattleConfirmError(e) {
@@ -355,7 +369,7 @@
       });
       battleConfirmNote.textContent = lines.join(' ／ ');
       if (results.some((r) => r.status === 'rejected')) {
-        showError('一部のチームで順位確定に失敗しました。詳細は「対抗戦（2チーム）」欄の表示を確認してください。');
+        showError('一部のチームで順位確定に失敗しました。詳細は「対抗戦用」欄の表示を確認してください。');
       } else {
         clearError();
       }

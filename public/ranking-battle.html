@@ -7,7 +7,9 @@
 <style>
   /* 対抗戦（2チーム）向け順位発表画面。会場スクリーン用の「確定結果」表示。
      トーンはbattle.html・ranking-user.htmlに合わせる。ライブ更新ではなく、
-     確定ボタンが押されて新しいスナップショットが出来たときだけ描画し直す。 */
+     確定ボタンが押されて新しいスナップショットが出来たときだけ描画し直す。
+     表示は view で2種類に分ける（画面スペースの都合）：view=target＝推し選手ランキング、
+     view=user＝応援ユーザーランキング。左右2チームそれぞれ、1つのランキングを大きく表示する。 */
   :root {
     --bg: #0b0f14;
     --text: #f4f6f8;
@@ -68,13 +70,11 @@
   .team-name { font-size: clamp(16px, 3.2vh, 34px); font-weight: bold; text-align: center; word-break: break-word; }
   .confirmed-at { text-align: center; font-size: clamp(10px, 1.5vh, 14px); color: var(--text-muted); flex: 0 0 auto; }
 
-  .sections { flex: 1; display: grid; gap: 12px; min-height: 0; }
-  .sections.two { grid-template-columns: 1.15fr 1fr; }
-  .sections.one { grid-template-columns: 1fr; }
-  .section { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .sections { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .section { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
   .section-title {
-    flex: 0 0 auto; font-size: clamp(11px, 1.9vh, 20px); font-weight: bold; color: var(--text-muted);
-    border-bottom: 2px solid var(--panel-color); padding-bottom: 3px; margin-bottom: 4px;
+    flex: 0 0 auto; font-size: clamp(12px, 2.2vh, 24px); font-weight: bold; color: var(--text-muted);
+    border-bottom: 2px solid var(--panel-color); padding-bottom: 4px; margin-bottom: 6px;
   }
   .rank-list { flex: 1; min-height: 0; display: grid; grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 3px; }
 
@@ -82,8 +82,9 @@
     display: flex; align-items: center; gap: clamp(4px, 0.9vh, 10px); min-height: 0; min-width: 0;
     background: rgba(11, 15, 20, 0.62); border: 1px solid rgba(255, 255, 255, 0.10);
     border-radius: 8px; padding: 2px clamp(4px, 1vh, 10px);
-    /* 文字は「画面高さ」と「表示件数あたりの行の高さ」の小さい方に合わせる（top=20でも行からはみ出さない） */
-    font-size: clamp(9px, min(2.3vh, calc(40vh / var(--rows))), 26px);
+    /* 文字は「画面高さ」と「表示件数あたりの行の高さ」の小さい方に合わせる（top=20でも行からはみ出さない）。
+       1画面に1つのランキングだけなので、行の高さに余裕があり、従来より大きく表示できる。 */
+    font-size: clamp(9px, min(3.2vh, calc(32vh / var(--rows))), 38px);
   }
   .rank-row.top1 { border-color: #f5c518; background: linear-gradient(90deg, rgba(245, 197, 24, 0.22), rgba(11, 15, 20, 0.62)); }
   .rank-row.top2 { border-color: #cfd6de; background: linear-gradient(90deg, rgba(207, 214, 222, 0.16), rgba(11, 15, 20, 0.62)); }
@@ -111,7 +112,10 @@
     flex: 1; display: flex; align-items: center; justify-content: center;
     color: var(--text-muted); font-size: clamp(14px, 2.4vh, 24px); text-align: center; padding: 10px;
   }
-  .empty { font-size: clamp(11px, 1.8vh, 18px); }
+  .empty { font-size: clamp(12px, 2.2vh, 22px); }
+  /* view指定が無いときの案内（旧URL・ブックマーク向け） */
+  #errorState a { color: #7fb0ff; margin: 0 10px; }
+  #errorState .guide-links { margin-top: 14px; white-space: normal; }
 
   /* スポンサー枠：未設定ならスロットごと出さない（レイアウトを崩さない） */
   .sponsor-slot {
@@ -185,6 +189,33 @@
     showFatalError('URLに battle_id パラメータがありません。\n管理画面の「順位確定」からURLを確認してください。');
     return;
   }
+
+  // 表示の種類：target＝推し選手ランキング／user＝応援ユーザーランキング（1画面に1つだけ表示）。
+  // view が無い・不正なとき（旧URL・ブックマーク）は何も表示せず、正しい2つのURLを案内する。
+  const view = params.get('view');
+  if (view !== 'target' && view !== 'user') {
+    loadingState.hidden = true;
+    errorState.hidden = false;
+    errorState.textContent = '';
+    const msg = document.createElement('div');
+    msg.textContent = 'このURLには表示の種類（view）の指定がありません。\n下のどちらかを開いてください。（管理画面の「順位確定」にもURLがあります）';
+    msg.style.whiteSpace = 'pre-line';
+    errorState.appendChild(msg);
+    const links = document.createElement('div');
+    links.className = 'guide-links';
+    [['target', '推し選手ランキング'], ['user', '応援ユーザーランキング']].forEach(([v, label]) => {
+      const p = new URLSearchParams(location.search);
+      p.set('view', v);
+      const a = document.createElement('a');
+      a.href = location.pathname + '?' + p.toString();
+      a.textContent = label;
+      links.appendChild(a);
+    });
+    errorState.appendChild(links);
+    errorState.style.flexDirection = 'column';
+    return;
+  }
+  document.title = (view === 'target' ? '順位発表（対抗戦・推し選手）' : '順位発表（対抗戦・応援ユーザー）') + ' | 推しフル';
 
   function formatNumber(n) { return Number(n || 0).toLocaleString('ja-JP'); }
 
@@ -359,15 +390,18 @@
       at.textContent = '確定日時: ' + new Date(snap.triggeredAt).toLocaleString('ja-JP');
       inner.appendChild(at);
 
-      // 選手が存在しないチーム（スポンサー対抗戦等、target_idがNULL）は、選手セクションを
-      // 出さずユーザーランキングのみ全幅で表示する。
-      const hasTargets = snap.target.length > 0;
+      // 1画面に表示するのは、view で指定された1種類のランキングだけ。
       const sections = document.createElement('div');
-      sections.className = 'sections ' + (hasTargets ? 'two' : 'one');
-      if (hasTargets) sections.appendChild(buildSection('選手ランキング', snap.target, { withPhoto: true, color, emptyMessage: '選手への応援がまだありません' }));
-      // ユーザー別は、ニックネーム登録済み（cheer_logs.user_idあり）の応援のみが対象。
-      // 応援データ自体はあっても未登録なら0件になるため、原因が分かる文言にする。
-      sections.appendChild(buildSection('応援ユーザーランキング', snap.user, { withPhoto: false, color, emptyMessage: 'ニックネーム登録済みの応援がまだありません' }));
+      sections.className = 'sections';
+      if (view === 'target') {
+        // 選手が存在しないチーム（スポンサー対抗戦等、target_idがNULL）や、誰も選手を推さなかった
+        // チームは、選手別が0件になる（スナップショットからは区別できない）。見出しと案内だけを出す。
+        sections.appendChild(buildSection('推し選手ランキング', snap.target, { withPhoto: true, color, emptyMessage: 'このチームには選手ランキングの対象がありません' }));
+      } else {
+        // ユーザー別は、ニックネーム登録済み（cheer_logs.user_idあり）の応援のみが対象。
+        // 応援データ自体はあっても未登録なら0件になるため、原因が分かる文言にする。
+        sections.appendChild(buildSection('応援ユーザーランキング', snap.user, { withPhoto: false, color, emptyMessage: 'ニックネーム登録済みの応援がまだありません' }));
+      }
       inner.appendChild(sections);
     }
 
@@ -427,6 +461,14 @@
   let stopped = false;
   let lastSignature = null;
 
+  function signatureFor(data) {
+    const pick = (t) => ({
+      id: t.event_id, title: t.event_title, org: t.organization, decor: t.decor,
+      snapshot: { id: t.snapshot.snapshotId, at: t.snapshot.triggeredAt, rows: view === 'target' ? t.snapshot.target : t.snapshot.user },
+    });
+    return JSON.stringify({ label: data.label, theme: data.theme_image_url, a: pick(data.team_a), b: pick(data.team_b) });
+  }
+
   async function poll() {
     if (stopped) return;
     try {
@@ -437,12 +479,14 @@
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
+      const data = JSON.parse(await res.text());
       clearConnError();
-      // 確定結果・装飾に変化が無い間は再描画しない（画像のちらつき防止）。
-      if (text !== lastSignature) {
-        render(JSON.parse(text));
-        lastSignature = text;
+      // 表示中のviewに関係する部分（確定結果・装飾・チーム情報）に変化が無い間は再描画しない
+      // （画像のちらつき防止。表示していない側のランキングが変わっただけでは再描画しない）。
+      const signature = signatureFor(data);
+      if (signature !== lastSignature) {
+        render(data);
+        lastSignature = signature;
       }
     } catch (e) {
       // 一時的な通信断は、直前の表示を保持したまま次回ポーリングへ続ける。
