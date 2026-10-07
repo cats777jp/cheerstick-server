@@ -43,6 +43,7 @@
   }
   .demo-status-label { font-size: 14px; }
   .demo-countdown { font-size: 20px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  .demo-showcase-note { font-size: 13px; color: var(--text-muted); }
   .demo-screen-link.disabled { pointer-events: none; opacity: 0.5; }
   .demo-spark-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; cursor: pointer; }
 </style>
@@ -121,6 +122,8 @@
     <div class="demo-status-row">
       <span class="demo-status-label">状態: <span id="demoStatusLabel">読み込み中...</span></span>
       <span id="demoCountdown" class="demo-countdown hidden"></span>
+      <!-- ランキング見せ用（2026-10-07）：デモ用チームにダミー選手がいると、推しエントリー付きで実行される -->
+      <span id="demoShowcaseNote" class="demo-showcase-note hidden"></span>
     </div>
     <div>
       <button id="demoSetupBtn">デモをセット</button>
@@ -764,6 +767,7 @@
 
   const demoStatusLabelEl = document.getElementById('demoStatusLabel');
   const demoCountdownEl = document.getElementById('demoCountdown');
+  const demoShowcaseNoteEl = document.getElementById('demoShowcaseNote');
   const demoSetupBtn = document.getElementById('demoSetupBtn');
   const demoStartStopBtn = document.getElementById('demoStartStopBtn');
   const demoScreenLink = document.getElementById('demoScreenLink');
@@ -781,6 +785,15 @@
     demoStatusLabelEl.textContent = DEMO_STATUS_LABELS[status.status] || status.status;
 
     demoSetupBtn.disabled = status.status === 'running';
+
+    // ランキング見せ用（選手の推しエントリー付き）のとき、その旨を表示する。
+    if (status.showcase) {
+      demoShowcaseNoteEl.textContent = `ランキング見せ用（選手 A:${status.showcase.targetsA}名／B:${status.showcase.targetsB}名）`;
+      demoShowcaseNoteEl.classList.remove('hidden');
+    } else {
+      demoShowcaseNoteEl.textContent = '';
+      demoShowcaseNoteEl.classList.add('hidden');
+    }
 
     if (status.status === 'running') {
       demoStartStopBtn.textContent = 'デモを停止';

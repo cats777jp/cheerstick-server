@@ -23,6 +23,24 @@ const PORT = process.env.PORT || 3000;
 const API_BASE = `http://127.0.0.1:${PORT}/api/v1`;
 const DEMO_CATEGORY_NAME = 'デモ用';
 
+// ランキング見せ用（2026-10-07）：デモ用チームに、次の2つの条件を両方満たす選手（targets）が
+// 登録されていれば「デモ用ダミー選手」とみなし、デモで推しエントリーに使う。
+//   ・image_urlが /images/demo/players/ 配下（assets/images/demo/players/ の自前SVG）
+//   ・profile_textが「【デモ用ダミー】」で始まる
+// 選手の作成は scripts/demo/ranking-showcase-prepare.js（手動実行・既定はdry run）が担当する。
+// 後から削除するときの識別条件も同じ（docs/proposals/demo-cleanup-2026-10-07.md 付録C）。
+const SHOWCASE_IMAGE_PATH = '/images/demo/players/';
+const SHOWCASE_PROFILE_PREFIX = '【デモ用ダミー】';
+
+async function listShowcaseTargetIds(organizationId) {
+  const targets = await cheerQueries.listTargetsAdmin(organizationId);
+  return targets
+    .filter((t) => t.is_active &&
+      typeof t.image_url === 'string' && t.image_url.includes(SHOWCASE_IMAGE_PATH) &&
+      typeof t.profile_text === 'string' && t.profile_text.startsWith(SHOWCASE_PROFILE_PREFIX))
+    .map((t) => t.id);
+}
+
 function buildScreenUrl(battleId, sparkEffect) {
   // 絶対URL化（APP_BASE、環境ごとに異なるドメイン）はフロント側（common.js）に委ねる。
   // 既存の対抗戦ペア一覧のbattleScreenUrl()と同じ考え方。
@@ -115,6 +133,16 @@ exports.setup = async (req, res, next) => {
     // 決める（2026-09-29変更）。決めたチーム名をprepare.main()へ明示的に渡す。
     const { orgA: resolvedOrgA, orgB: resolvedOrgB } = await resolveDemoTeams();
 
+    // ランキング見せ用：デモ用ダミー選手がいれば、別のMAC帯（AA:00:00:03）のデバイスを使う。
+    // いなければ従来どおり（AA:00:00:02、選手の推しエントリー無し）。
+    const [targetIdsA, targetIdsB] = await Promise.all([
+      listShowcaseTargetIds(resolvedOrgA.id),
+      listShowcaseTargetIds(resolvedOrgB.id),
+    ]);
+    const showcase = (targetIdsA.length + targetIdsB.length) > 0
+      ? { macPrefix: demoModeState.SHOWCASE_MAC_PREFIX, targetIdsA, targetIdsB }
+      : null;
+
     const result = await prepare.main([
       `--api-base=${API_BASE}`,
       '--yes',
@@ -122,6 +150,7 @@ exports.setup = async (req, res, next) => {
       `--devices-per-team=${demoModeState.DEVICES_PER_TEAM}`,
       `--team-a-name=${resolvedOrgA.name}`,
       `--team-b-name=${resolvedOrgB.name}`,
+      ...(showcase ? [`--mac-prefix=${showcase.macPrefix}`] : []),
     ]);
 
     const screenUrl = buildScreenUrl(result.battle.id, sparkEffect);
@@ -131,6 +160,7 @@ exports.setup = async (req, res, next) => {
       orgBId: result.orgB.id,
       screenUrl,
       sparkEffect,
+      showcase,
     });
 
     res.status(201).json(demoModeState.getPublicStatus());
@@ -183,6 +213,15 @@ exports.start = async (req, res, next) => {
         // 9/28〜29の100 vs 100テストで使用した設定を踏襲（docs/worklog.md参照）。
         '--burst',
         '--target-range=0.35-0.65',
+        // ランキング見せ用（デモ用ダミー選手がいるとき）：別のMAC帯、チームごとの選手リストから推しエントリー、
+        // ユーザーごとの熱量差、ひらがな・カタカナの愛称。
+        ...(s.showcase ? [
+          `--mac-prefix=${s.showcase.macPrefix}`,
+          `--oshi-targets-a=${s.showcase.targetIdsA.join(',')}`,
+          `--oshi-targets-b=${s.showcase.targetIdsB.join(',')}`,
+          '--energy-spread',
+          '--nickname-style=fun',
+        ] : []),
       ],
       {
         cwd: path.join(__dirname, '../..'),

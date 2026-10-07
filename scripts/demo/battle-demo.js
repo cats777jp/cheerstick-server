@@ -10,6 +10,9 @@
 //     登録してデバイスにユーザーを紐づけるためのもの：registerを送らないと cheer_logs.user_id が
 //     NULLになり、順位確定のユーザー別集計〔INNER JOIN users〕から除外されてしまう。
 //     メールはMACから決まる固定値のため再実行しても同じユーザーを使い回す）
+//   - ランキング見せ用の拡張（2026-10-07）：チームごとの選手リスト（--oshi-targets-a/-b）から、デバイスごとに
+//     別の選手を推しに割り当てる（偏りあり）／デバイスごとの熱量係数（--energy-spread）／愛称（--nickname-style=fun）。
+//     いずれも既定は従来どおり（未指定なら挙動は変わらない）
 //   - 「目標比率追従方式」の拮抗演出ロジック（cheerstick-battle-demo-phase1-2-impl-20260927.md
 //     2-3節、KMT様承認済み）
 //   - 緊急停止（同2-5節）
@@ -91,6 +94,10 @@ function parseArgs(argv) {
     teamBStartIndex: 0x8000,
     setOshiTargetId: null,
     register: true,
+    oshiTargetsA: [], // チームAの選手ID（カンマ区切りで指定）。1つ以上あれば、デバイスごとに割り当てる
+    oshiTargetsB: [],
+    energySpread: false, // trueなら、デバイスごとの熱量係数（0.25〜1.0）をintensityに掛ける
+    nicknameStyle: 'plain', // 'plain'＝デモ応援団A-0001形式（従来）／'fun'＝ひらがな・カタカナの愛称
     reportIntervalMs: 10000,
     metricsLogPath: null,
     sentLogPath: null,
@@ -125,6 +132,13 @@ function parseArgs(argv) {
       case 'team-b-start-index': args.teamBStartIndex = parseInt(value, 10); break;
       case 'set-oshi': args.setOshiTargetId = value; break;
       case 'no-register': args.register = false; break;
+      case 'oshi-targets-a': args.oshiTargetsA = String(value || '').split(',').map((x) => x.trim()).filter(Boolean); break;
+      case 'oshi-targets-b': args.oshiTargetsB = String(value || '').split(',').map((x) => x.trim()).filter(Boolean); break;
+      case 'energy-spread': args.energySpread = true; break;
+      case 'nickname-style':
+        if (!['plain', 'fun'].includes(value)) throw new Error(`--nickname-style must be plain or fun (got ${value})`);
+        args.nicknameStyle = value;
+        break;
       case 'report-interval-ms': args.reportIntervalMs = parseInt(value, 10); break;
       case 'metrics-log-path': args.metricsLogPath = value; break;
       case 'sent-log-path': args.sentLogPath = value; break;
@@ -174,6 +188,52 @@ function randIntInRange(low, high) {
   const hi = Math.min(MAX_INTENSITY, Math.round(high));
   if (hi <= lo) return Math.min(Math.max(lo, MIN_INTENSITY), MAX_INTENSITY);
   return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+// --- ランキング見せ用のヘルパー（2026-10-07） --------------------------------------
+// 選手の推し割り当て：リストを毎回シャッフルしてから、順位に応じた重み（1/(i+1)^0.7）を付ける。
+// 実行ごとに人気の選手が入れ替わり、選手ランキングに適度な差が出る（全員同点にならない）。
+function buildOshiPlan(ids) {
+  if (!ids || ids.length === 0) return [];
+  const shuffled = [...ids];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.map((id, i) => ({ id, weight: 1 / Math.pow(i + 1, 0.7) }));
+}
+
+function pickWeighted(plan) {
+  const total = plan.reduce((sum, p) => sum + p.weight, 0);
+  let r = Math.random() * total;
+  for (const p of plan) {
+    r -= p.weight;
+    if (r <= 0) return p.id;
+  }
+  return plan[plan.length - 1].id;
+}
+
+// 愛称（--nickname-style=fun）。MACのインデックスから決定的に作る（再実行しても同じ名前）。
+// 100種（ひらがな・カタカナ、表記違いの重複や、デモ用ダミー選手の名前との重複は無い）。1チーム100台までは
+// 重複しない。チームBは開始位置を50ずらして、AとBで同じ並びにならないようにする。
+// 100台を超える場合（CLIで台数を増やしたとき）は、1周ごとに数字を付ける。
+const FUN_NICKNAMES = [
+  'ゆうた', 'さくら', 'ハルト', 'みお', 'ソウタ', 'あおい', 'レオ', 'ひなた', 'カズマ', 'まこと',
+  'ユイ', 'ミツル', 'ミユ', 'ヒロシ', 'アヤカ', 'あゆむ', 'ココナ', 'ゆうり', 'ナナミ', 'けいた',
+  'リナ', 'ゆうすけ', 'マイ', 'タケル', 'ちひろ', 'カズキ', 'のぞみ', 'ジュン', 'えみ', 'ヒロキ',
+  'まひる', 'ユウキ', 'かな', 'シンゴ', 'みなみ', 'トモヤ', 'ルカ', 'あきら', 'サキ', 'こうじ',
+  'ミク', 'リョウタ', 'なつき', 'ヨシノ', 'そうま', 'ミサキ', 'ゆうま', 'アスカ', 'たいち', 'メイ',
+  'こはる', 'ヒカリ', 'しゅん', 'リオ', 'ナツ', 'ゆいと', 'カナタ', 'あやの', 'ミズキ', 'みらい',
+  'ユズ', 'けんじ', 'レイナ', 'ともき', 'ヤマト', 'まりん', 'コウキ', 'ひより', 'ダイゴ', 'なおと',
+  'ミナト', 'さとし', 'イロハ', 'たかし', 'メグミ', 'ヒデ', 'もも', 'リョウスケ', 'あやね', 'ケイ',
+  'ふうか', 'タイガ', 'すず', 'ユキ', 'まなと', 'ノア', 'ハナ', 'ゆきな', 'ショウタ', 'ひろと',
+  'ミコト', 'ナナ', 'ユナ', 'サトル', 'えいた', 'マサキ', 'ひな', 'トウマ', 'あかり', 'ゆうせい',
+];
+function funNickname(team, index) {
+  const offset = team === 'B' ? 50 : 0;
+  const base = FUN_NICKNAMES[(index + offset) % FUN_NICKNAMES.length];
+  const cycle = Math.floor(index / FUN_NICKNAMES.length); // 周回数は、ずらす前のインデックスで数える
+  return cycle > 0 ? base + String(cycle + 1) : base;
 }
 
 // --- 拮抗演出ロジック本体 -----------------------------------------------------
@@ -433,7 +493,16 @@ class VirtualDevice {
     // 同じusers行を使い回す（サーバー側findOrCreateUserByEmailのON CONFLICT (email)）。
     // 予約済みTLD .invalid のため実在のアドレスにはならない。
     this.email = `demo-${this.mac.replace(/:/g, '').toLowerCase()}@example.invalid`;
-    this.nickname = `デモ応援団${team}-${String(index + 1).padStart(4, '0')}`;
+    this.nickname = ctx.args.nicknameStyle === 'fun'
+      ? funNickname(team, index)
+      : `デモ応援団${team}-${String(index + 1).padStart(4, '0')}`;
+    // 推し：チームごとの選手リストがあればデバイスごとに割り当てる（接続し直しても同じ選手）。
+    // 無ければ従来の--set-oshi（全デバイス共通の1人、未指定なら送らない）。
+    const oshiPlan = team === 'A' ? ctx.oshiPlanA : ctx.oshiPlanB;
+    this.oshiTargetId = (oshiPlan && oshiPlan.length > 0) ? pickWeighted(oshiPlan) : (ctx.args.setOshiTargetId || null);
+    // 熱量係数：応援ユーザーごとの差。0.25〜1.0（平均約0.56）をintensityに掛ける。1.0を超えないため
+    // DBの上限（100）を超えず、両チームに同じ分布が掛かるので、チーム間の比率は保たれる。
+    this.energy = ctx.args.energySpread ? 0.25 + 0.75 * Math.pow(Math.random(), 1.4) : 1;
     this.stage = 'idle';
     this.reconnectAttempts = 0;
     this.ws = null;
@@ -540,9 +609,9 @@ class VirtualDevice {
         this.sendSelectTeam();
         break;
       case 'select_team_sent':
-        if (this.ctx.args.setOshiTargetId) {
+        if (this.oshiTargetId) {
           this.stage = 'set_oshi_sent';
-          this.sendJson({ type: 'set_oshi', id: this.mac, target_id: this.ctx.args.setOshiTargetId });
+          this.sendJson({ type: 'set_oshi', id: this.mac, target_id: this.oshiTargetId });
         } else {
           this.stage = 'ready';
           this.scheduleNextCount(Math.random() * this.ctx.args.countIntervalMs);
@@ -574,7 +643,8 @@ class VirtualDevice {
     this.lastCountAt = now;
 
     const [low, high] = this.ctx.battle.getRange(this.team);
-    const value = randIntInRange(low, high);
+    let value = randIntInRange(low, high);
+    if (this.energy < 1) value = Math.max(MIN_INTENSITY, Math.min(MAX_INTENSITY, Math.round(value * this.energy)));
 
     const sent = this.sendJson({ type: 'count', id: this.mac, value, duration_ms: durationMs });
     if (sent) {
@@ -661,6 +731,8 @@ function main() {
 
   const stats = new Stats(args.devicesPerTeam);
   const ctx = { args, stats, stopping: false, sentLogStream: null };
+  ctx.oshiPlanA = buildOshiPlan(args.oshiTargetsA);
+  ctx.oshiPlanB = buildOshiPlan(args.oshiTargetsB);
 
   if (args.sentLogPath) {
     ctx.sentLogStream = fs.createWriteStream(args.sentLogPath, { flags: 'w' });

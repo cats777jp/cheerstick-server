@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="デモ用ダミー選手 4番">
+  <rect width="256" height="256" fill="#f7cfcf"/>
+  <path d="M28 256 C28 196 78 176 128 176 C178 176 228 196 228 256 Z" fill="#DC2626"/>
+  <path d="M28 256 C28 232 36 214 52 202 L52 256 Z" fill="#b41f1f"/>
+  <path d="M228 256 C228 232 220 214 204 202 L204 256 Z" fill="#b41f1f"/>
+  <rect x="112" y="150" width="32" height="34" rx="10" fill="#ddba90"/>
+  <path d="M104 178 Q128 208 152 178" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="80" cy="116" r="9" fill="#f5cfa0"/>
+  <circle cx="176" cy="116" r="9" fill="#f5cfa0"/>
+  <ellipse cx="128" cy="112" rx="48" ry="54" fill="#f5cfa0"/>
+  <path d="M76 126 C66 62 100 44 128 44 C156 44 190 62 180 126 L172 126 C172 92 156 76 128 76 C100 76 84 92 84 126 Z" fill="#3b2f6b"/>
+  <circle cx="110" cy="118" r="5" fill="#222222"/>
+  <circle cx="146" cy="118" r="5" fill="#222222"/>
+  <path d="M114 140 Q128 152 142 140" fill="none" stroke="#7a3b2e" stroke-width="4" stroke-linecap="round"/>
+  <text x="128" y="238" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="46" fill="#ffffff" stroke="#8f1919" stroke-width="1.5" paint-order="stroke">4</text>
+</svg>

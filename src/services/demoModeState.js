@@ -12,6 +12,9 @@
 // 設けてよい」に対応。scripts/demo/local-verify-demo-mode.jsでのみ使用する想定）。
 const DEMO_DURATION_MS = Number(process.env.DEMO_MODE_TEST_DURATION_MS_OVERRIDE) || 60000;
 const DEVICES_PER_TEAM = 100;
+// ランキング見せ用（2026-10-07）：デモ用チームに「デモ用ダミー選手」が登録されているとき、デモは
+// 別のMAC帯（従来のAA:00:00:02:*と混ぜない。後片付けを単純にするため）のデバイスを使う。
+const SHOWCASE_MAC_PREFIX = 'AA:00:00:03';
 
 const state = {
   status: 'idle', // 'idle' | 'set' | 'running'
@@ -19,6 +22,7 @@ const state = {
   orgAId: null,
   orgBId: null,
   screenUrl: null,
+  showcase: null, // ランキング見せ用の設定（{ macPrefix, targetIdsA, targetIdsB }）。ダミー選手が無ければnull（従来どおり）
   sparkEffect: true, // 火花演出の有無（2026-10-01追加、2026-10-06に既定ONへ変更）。true=火花ON（既定）、false=OFF（screenUrlに&fx=noneを付与済み）
   startedAt: null, // ms epoch（Date.now()）。runningのときのみ
   durationMs: DEMO_DURATION_MS,
@@ -47,17 +51,19 @@ function setIdle() {
   state.orgAId = null;
   state.orgBId = null;
   state.screenUrl = null;
+  state.showcase = null;
   state.sparkEffect = true;
   state.startedAt = null;
   state.childProcess = null;
 }
 
-function setSet({ battleId, orgAId, orgBId, screenUrl, sparkEffect = true }) {
+function setSet({ battleId, orgAId, orgBId, screenUrl, sparkEffect = true, showcase = null }) {
   state.status = 'set';
   state.battleId = battleId;
   state.orgAId = orgAId;
   state.orgBId = orgBId;
   state.screenUrl = screenUrl;
+  state.showcase = showcase;
   state.sparkEffect = sparkEffect !== false;
   state.startedAt = null;
   state.childProcess = null;
@@ -89,6 +95,10 @@ function getPublicStatus() {
     battleId: state.battleId,
     screenUrl: state.screenUrl,
     sparkEffect: state.sparkEffect,
+    // ランキング見せ用（選手の推しエントリー付き）か。管理画面の表示用。IDそのものは返さず件数のみ。
+    showcase: state.showcase
+      ? { targetsA: state.showcase.targetIdsA.length, targetsB: state.showcase.targetIdsB.length }
+      : null,
     elapsedMs,
     remainingMs,
   };
@@ -105,4 +115,5 @@ module.exports = {
   endTransition,
   DEMO_DURATION_MS,
   DEVICES_PER_TEAM,
+  SHOWCASE_MAC_PREFIX,
 };

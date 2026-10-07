@@ -417,6 +417,100 @@ async function main() {
   await callDemo('/demo/setup', 'POST'); // 直前のバトルをfinish-run相当で片付ける
   await verifyPool.query(`DELETE FROM organizations WHERE id = $1`, [THIRD_ORG_ID]);
 
+  // === 12. ランキング見せ用（2026-10-07）：デモ用ダミー選手があると、推しエントリー付きで実行される ====
+  // 条件：デモ用チームに、(a)image_urlが/images/demo/players/配下、(b)profile_textが【デモ用ダミー】で
+  // 始まる選手がいること。別のMAC帯（AA:00:00:03）のデバイス、選手の推しエントリー、ユーザーごとの熱量差、
+  // ひらがな・カタカナの愛称。ここまでの手順（ダミー選手なし）は従来どおりAA:00:00:02帯で動く。
+  console.log('\n[verify] === step 12: ranking showcase (dummy players -> oshi entries, separate MAC band) ===');
+  const showcaseDef = require('./showcase-players');
+  const statusBeforeShowcase = await callDemo('/demo/status', 'GET');
+  check('ダミー選手が無い間は、statusのshowcaseはnull（従来どおり）', statusBeforeShowcase.body.showcase === null,
+    JSON.stringify(statusBeforeShowcase.body));
+  const oldBandBefore = await verifyPool.query(`SELECT count(*)::int AS n FROM devices WHERE mac_address LIKE 'AA:00:00:02:%'`);
+  const newBandBefore = await verifyPool.query(`SELECT count(*)::int AS n FROM devices WHERE mac_address LIKE 'AA:00:00:03:%'`);
+  check('ダミー選手が無い間は、従来のAA:00:00:02帯のデバイスだけが使われ、AA:00:00:03帯は無い',
+    oldBandBefore.rows[0].n > 0 && newBandBefore.rows[0].n === 0, `old=${oldBandBefore.rows[0].n} new=${newBandBefore.rows[0].n}`);
+
+  const orgIdOf = { A: ORG_A_ID, B: ORG_B_ID };
+  const dummyIds = { A: [], B: [] };
+  for (const p of showcaseDef.PLAYERS) {
+    const r = await verifyPool.query(
+      `INSERT INTO targets (organization_id, name, type, image_url, number, profile_text, is_active)
+       VALUES ($1, $2, 'player', $3, $4, $5, true) RETURNING id`,
+      [orgIdOf[p.team], p.name, `https://app.example.invalid${showcaseDef.IMAGE_PATH}${p.file}`, String(p.number), showcaseDef.PROFILE_TEXT]
+    );
+    dummyIds[p.team].push(r.rows[0].id);
+  }
+  // 条件を満たさない選手（別の選手：目印なし・無効）は、ダミー選手として扱われないこと
+  const normalTarget = await verifyPool.query(
+    `INSERT INTO targets (organization_id, name, type, image_url, number, profile_text, is_active)
+     VALUES ($1, '通常の選手', 'player', 'https://example.invalid/images/real.png', '99', '通常のプロフィール', true) RETURNING id`, [ORG_A_ID]);
+  const inactiveDummy = await verifyPool.query(
+    `INSERT INTO targets (organization_id, name, type, image_url, number, profile_text, is_active)
+     VALUES ($1, '無効なダミー', 'player', $2, '98', $3, false) RETURNING id`,
+    [ORG_A_ID, `https://app.example.invalid${showcaseDef.IMAGE_PATH}a-99.svg`, showcaseDef.PROFILE_TEXT]);
+
+  const showcaseSetup = await callDemo('/demo/setup', 'POST');
+  check('ダミー選手があるとsetupは201で、statusのshowcaseに選手数（A:10・B:10）が出る（無効・目印なしの選手は数えない）',
+    showcaseSetup.status === 201 && showcaseSetup.body.showcase &&
+    showcaseSetup.body.showcase.targetsA === 10 && showcaseSetup.body.showcase.targetsB === 10,
+    JSON.stringify(showcaseSetup.body));
+  const newBandAfterSetup = await verifyPool.query(
+    `SELECT count(*)::int AS n, count(*) FILTER (WHERE is_demo)::int AS demo FROM devices WHERE mac_address LIKE 'AA:00:00:03:%'`);
+  check('setupで、AA:00:00:03帯のデバイスが200台（100×2）、すべてis_demoで作成される',
+    newBandAfterSetup.rows[0].n === 200 && newBandAfterSetup.rows[0].demo === 200, JSON.stringify(newBandAfterSetup.rows[0]));
+
+  const showcaseStart = await callDemo('/demo/start', 'POST');
+  check('ダミー選手ありのstartは200でrunning', showcaseStart.status === 200 && showcaseStart.body.status === 'running');
+  const showcaseChild = demoModeState.state.childProcess;
+  const showcaseArgs = (showcaseChild && showcaseChild.spawnargs) || [];
+  check('子プロセスの引数に、MAC帯・選手リスト・熱量差・愛称が渡っている',
+    showcaseArgs.includes('--mac-prefix=AA:00:00:03') && showcaseArgs.includes('--energy-spread') &&
+    showcaseArgs.includes('--nickname-style=fun') && showcaseArgs.some((a) => a.startsWith('--oshi-targets-a=') && a.split(',').length === 10) &&
+    showcaseArgs.some((a) => a.startsWith('--oshi-targets-b=') && a.split(',').length === 10),
+    showcaseArgs.filter((a) => a.startsWith('--')).join(' ').slice(0, 300));
+  console.log(`[verify] waiting ${TEST_DURATION_MS + 5000}ms for the showcase demo to finish...`);
+  await sleep(TEST_DURATION_MS + 5000);
+
+  const scLogs = await verifyPool.query(
+    `SELECT count(*)::int AS total, count(cl.target_id)::int AS with_target, count(DISTINCT cl.target_id)::int AS distinct_targets,
+            count(cl.user_id)::int AS with_user, min(cl.intensity)::int AS min_i, max(cl.intensity)::int AS max_i,
+            count(DISTINCT cl.intensity)::int AS distinct_i
+     FROM cheer_logs cl JOIN devices d ON d.id = cl.device_id WHERE d.mac_address LIKE 'AA:00:00:03:%'`);
+  const sc = scLogs.rows[0];
+  check('ランキング見せ用の応援ログが記録されている', sc.total > 0, JSON.stringify(sc));
+  check('全ての応援ログに target_id（推し）と user_id がある', sc.with_target === sc.total && sc.with_user === sc.total, JSON.stringify(sc));
+  check('推しが複数の選手に分散している（1人に偏らない）', sc.distinct_targets >= 5 && sc.distinct_targets <= 20, `distinct_targets=${sc.distinct_targets}`);
+  check('intensityは1〜100の範囲で、熱量差により値がばらつく', sc.min_i >= 1 && sc.max_i <= 100 && sc.distinct_i >= 10, `min=${sc.min_i} max=${sc.max_i} distinct=${sc.distinct_i}`);
+  const scTeamMatch = await verifyPool.query(
+    `SELECT count(*)::int AS mismatched FROM cheer_logs cl
+       JOIN targets t ON t.id = cl.target_id JOIN events e ON e.id = cl.event_id
+       JOIN devices d ON d.id = cl.device_id
+      WHERE d.mac_address LIKE 'AA:00:00:03:%' AND t.organization_id <> e.organization_id`);
+  check('応援ログの選手は、そのログの試合のチームの選手（チーム違いが0件）', scTeamMatch.rows[0].mismatched === 0, JSON.stringify(scTeamMatch.rows[0]));
+  const scNoise = await verifyPool.query(
+    `SELECT count(*)::int AS n FROM cheer_logs WHERE target_id = ANY($1::uuid[])`, [[normalTarget.rows[0].id, inactiveDummy.rows[0].id]]);
+  check('目印なしの選手・無効なダミー選手は、推しに使われない', scNoise.rows[0].n === 0, JSON.stringify(scNoise.rows[0]));
+  // 愛称の判定はJS側で行う（pg-memのLIKEは日本語の接頭辞指定を正しく扱えないため）。
+  const scUserRows = (await verifyPool.query(
+    `SELECT u.email, u.display_name FROM users u WHERE u.email LIKE 'demo-aa000003%@example.invalid' ORDER BY u.email`)).rows;
+  const scPlainNames = scUserRows.filter((r) => String(r.display_name).startsWith('デモ応援団')).length;
+  const scDistinctEmails = new Set(scUserRows.map((r) => r.email)).size;
+  console.log('[verify] sample users:', JSON.stringify(scUserRows.slice(0, 3)));
+  check('AA:00:00:03帯のデモ用ユーザーが200名（メール一意）で、愛称は「デモ応援団」形式ではない',
+    scUserRows.length === 200 && scDistinctEmails === 200 && scPlainNames === 0,
+    `users=${scUserRows.length} distinct_email=${scDistinctEmails} plain_names=${scPlainNames}`);
+  // 愛称は100種で、1チーム100台までは重複せず、数字も付かない（A・Bの境目はMAC帯：チームBは80xx）。
+  const scNamesA = scUserRows.filter((r) => /^demo-aa0000030[0-9a-f]{3}@/.test(r.email)).map((r) => r.display_name);
+  const scNamesB = scUserRows.filter((r) => /^demo-aa0000038[0-9a-f]{3}@/.test(r.email)).map((r) => r.display_name);
+  check('愛称はチームごとに重複せず（A・Bとも100種）、数字が付かない',
+    scNamesA.length === 100 && scNamesB.length === 100 && new Set(scNamesA).size === 100 && new Set(scNamesB).size === 100 &&
+    [...scNamesA, ...scNamesB].every((n) => !/[0-9]/.test(n)),
+    `A=${new Set(scNamesA).size}/${scNamesA.length} B=${new Set(scNamesB).size}/${scNamesB.length}`);
+  const oldBandOshi = await verifyPool.query(`SELECT count(*)::int AS n FROM devices WHERE mac_address LIKE 'AA:00:00:02:%' AND current_target_id IS NOT NULL`);
+  check('従来のAA:00:00:02帯のデバイスには、推し（current_target_id）が設定されない（帯が混ざらない）', oldBandOshi.rows[0].n === 0, JSON.stringify(oldBandOshi.rows[0]));
+  await callDemo('/demo/setup', 'POST'); // 直前のバトルをfinish-run相当で片付ける
+
   console.log(`\n[verify] ================ RESULT: PASS=${PASS} FAIL=${FAIL} ================`);
   await verifyPool.end();
   server.close();

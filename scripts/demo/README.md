@@ -23,6 +23,8 @@
 - デバイスは事前登録が必須（未登録MACで`connect`すると`category_id`未設定の行が自動作成され、`NO_CATEGORY`で応援できない）。`battle-demo-prepare.js`が担当する
 - 送信シーケンスは `connect → register → select_team → count`（`set_oshi`は送らない。`--set-oshi`指定時のみ`set_oshi`を追加）
   - **`register`（2026-10-07追加、既定で送る。`--no-register`で従来どおり省略）：** メールは`demo-<MAC小文字・コロン無し>@example.invalid`、ニックネームは`デモ応援団A-0001`形式。メールがMACから決まる固定値のため、再実行しても同じ`users`行を使い回す（サーバー側の`ON CONFLICT (email)`）。これを送らないと`cheer_logs.user_id`がNULLになり、順位確定のユーザー別集計（`INNER JOIN users`）から全件除外されて`ranking-battle.html`が空になる。登録に失敗してもデモは続行する（そのデバイスの応援は匿名で記録される）
+  - **ランキング見せ用の拡張（2026-10-07追加。いずれも未指定なら従来どおりの動作）：** `--oshi-targets-a=<id,id,…>`／`--oshi-targets-b=<id,id,…>`（チームごとの選手ID。実行ごとにシャッフルして重み付きで、デバイスごとに別の選手を推しに割り当てる。`--set-oshi`より優先）、`--energy-spread`（ユーザーごとの熱量係数0.25〜1.0をintensityに掛ける。1.0を超えないのでDBの上限100を超えず、両チームに同じ分布が掛かるので比率は保たれる）、`--nickname-style=fun`（愛称をひらがな・カタカナの100種にする。既定は`plain`＝`デモ応援団A-0001`形式）。管理画面のデモモードは、デモ用チームに「デモ用ダミー選手」がいると、これらと`--mac-prefix=AA:00:00:03`（従来の`AA:00:00:02`と別の帯）を自動で付けて起動する（`src/controllers/adminDemoController.js`）。
+  - **デモ用ダミー選手：** 定義は`showcase-players.js`、顔写真（自前のSVG）は`generate-demo-avatars.js`で`assets/images/demo/players/`に生成、登録は`ranking-showcase-prepare.js`（既定はdry run、`--yes`で実行、冪等）。手順は`docs/runbook.md`「デモ用ダミー選手・画像の投入とランキング見せ用デモ」、後片付けは`docs/proposals/demo-cleanup-2026-10-07.md`第7章・付録C・D。
 - 遅延計測（本番DBとの突合）は今回未実装。`--sent-log-path`で送信時刻ログのみ出力可能（互換のため残してある）
 
 ## 管理API・公開APIのレート制限（500リクエスト/15分、2026-09-28追記）
@@ -111,7 +113,7 @@ node scripts/demo/battle-demo.js --battle-id=<uuid> --org-a=<uuid> --org-b=<uuid
 `--devices-per-team`（既定500）、`--duration-ms`（既定180000）、`--count-interval-ms`（既定5000）、
 `--ramp-up-ms`（既定自動）、`--finish`（`close`/`A`/`B`/`none`、既定`close`）、`--url`
 （既定`wss://ws.cheerstick.com/cheer`）、`--mac-prefix`（既定`AA:00:00:02`）、
-`--team-b-start-index`（既定32768）、`--set-oshi=<target_id>`（既定送らない）、`--no-register`（既定は`register`を送る）、
+`--team-b-start-index`（既定32768）、`--set-oshi=<target_id>`（既定送らない）、`--no-register`（既定は`register`を送る）、`--oshi-targets-a/-b`・`--energy-spread`・`--nickname-style`（ランキング見せ用、上記「前提」参照）、
 `--report-interval-ms`（既定10000）、`--metrics-log-path`（既定自動）、`--sent-log-path`、
 `--stop-threshold`（既定0.05）、`--target-range=<low>-<high>`（既定`0.45-0.55`、
 下記「拮抗演出ロジック」参照）、`--burst`（既定無効、下記「猛攻演出」参照）、
