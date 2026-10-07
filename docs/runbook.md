@@ -957,6 +957,42 @@ SELECT ... FROM cheer_logs cl JOIN devices d ON d.id = cl.device_id WHERE d.is_d
 削除するとデモの応援ログの`user_id`が再びNULLになり、順位確定のユーザー別集計から外れて`ranking-battle.html`が空になる
 （本件の再発）。デモ用ユーザーは残したまま、上記のように**集計側で除外**する。
 
+### デモ用ダミー選手・画像の投入とランキング見せ用デモ（2026-10-07追加）
+
+理由：お客様デモで順位発表画面（`ranking-battle.html`）を実データで見せるため、デモモードを「ランキング見せ用」
+（デモ用チームに選手10名ずつ、応援ユーザー100名ずつ）に拡張した（`docs/spec.md` 9.12章の2026-10-07追記）。
+**コードは実装済みだが、選手・画像の本番への投入は未実施**（岩村様の指示待ち）。投入するときの手順：
+
+**前提：** 実イベント・実際の応援が無い時間帯に行う（`pm2 restart`でWebSocketが一度切れるため）。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+
+# 1. 顔写真（自前のSVG20枚）を配信先へ。assets/images/ が正本（上の「画像・素材の反映」と同じ方式）
+sudo cp -r assets/images/. /var/www/cheerstick-app/images/
+# 新規ファイル・新規ディレクトリはroot:rootになるため、所有者・権限を既存に合わせる（上の「新規ファイルをコピーした場合は所有者も確認する」）
+sudo chown -R ubuntu:ubuntu /var/www/cheerstick-app/images/demo
+sudo find /var/www/cheerstick-app/images/demo -type f -exec chmod 664 {} \;
+sudo find /var/www/cheerstick-app/images/demo -type d -exec chmod 755 {} \;
+ls -la /var/www/cheerstick-app/images/demo/players | head -5
+curl -sI https://app.cheerstick.com/images/demo/players/a-01.svg | head -5   # 200 と Content-Type: image/svg+xml を確認
+
+# 2. サーバーの反映（デモモードの改修を読み込む。battle-demo.jsは子プロセスとして起動時に読まれるため再起動は不要だが、
+#    adminDemoController・demoModeStateはサーバー本体なので必要）
+pm2 restart cheerstick-server
+
+# 3. ダミー選手の登録：まずdry runで内容を確認 → 問題なければ --yes
+node scripts/demo/ranking-showcase-prepare.js
+node scripts/demo/ranking-showcase-prepare.js --yes
+```
+
+- dry runの表示（A・Bの各10名、`image_url`が`https://app.cheerstick.com/images/demo/players/…`）と、`CONFLICT`（同名で目印の無い選手があれば触らずに表示される）が無いことを確認する。2回目の実行は「skip（already exists）」になる（冪等）。
+- **デモの実行：** 管理画面（`events.html`）のデモモード欄で「デモをセット」→「デモを開始」（60秒）。デモ用チームにダミー選手がいると、状態表示に「ランキング見せ用（選手 A:10名／B:10名）」と出る。初回のセットアップは、`AA:00:00:03:*`のデバイス200台を新規作成するため、従来より少し時間がかかる（管理APIのレート制限で429になった場合は自動で待って再試行する）。デモ終了後に`ranking-control.html`の「対抗戦用」で「両チーム順位確定」を押し、「推し選手ランキング」「応援ユーザーランキング」のURL（`view=target`／`view=user`）を開く。
+- **ランキング見せ用を一時的に止めたい（削除はしない）：** 管理画面の選手管理（`targets.html`）で、ダミー選手を無効（`is_active=false`）にする。デモモードは有効な選手だけを検出するため、従来の動き（`AA:00:00:02:*`、推しエントリー無し）に戻る。
+- **後片付け（削除）：** `docs/proposals/demo-cleanup-2026-10-07.md`の第7章・付録C（棚卸し）・付録D（削除）。先に、そのデモの試合を付録A・Bの手順で削除する。
+- 画像ファイルの再生成が必要なとき（選手の定義を変えたとき）：`node scripts/demo/generate-demo-avatars.js`（ローカル）。同じ入力から同じ画像ができる。
+
 ---
 
 ## 未確認・保留中のファイル

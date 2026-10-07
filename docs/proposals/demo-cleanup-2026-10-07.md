@@ -329,3 +329,164 @@ SELECT (SELECT count(*) FROM events WHERE id IN (SELECT id FROM del_events))    
 
 \echo '*** ここまで成功。上の件数が想定どおりなら COMMIT; 、違えば ROLLBACK; を入力してください（トランザクションは開いたままです） ***'
 ```
+
+## 7. 追記（2026-10-07）：ランキング見せ用データ（デモ用ダミー選手・AA:00:00:03帯）の識別と削除
+
+デモモードを「ランキング見せ用」（デモ用チームに選手10名ずつ、応援ユーザー100名ずつ）に拡張した（`docs/spec.md` 9.12章の2026-10-07追記）。
+この拡張で本番に増えるデータは、**前回の削除（付録A・B）の対象に加えて、次の3つ**。後片付けが単純になるよう、既存のデモ用デバイス（`AA:00:00:02:*`）とは**別のMAC帯**にした。
+
+| 対象 | 識別条件（確実に棚卸し・削除できる目印） |
+|---|---|
+| **デモ用ダミー選手（`targets`）20名** | カテゴリー「デモ用」のチームに所属し、`image_url`が`/images/demo/players/`配下、`profile_text`が`【デモ用ダミー】`で始まる。**名前には目印を付けていない**（ランキング画面にそのまま表示されるため）。名前はカタカナの下の名前のみ（ハヤテ、ヒカル等）、`type='player'`、背番号1〜10 |
+| **顔写真（ファイル）20枚** | `/var/www/cheerstick-app/images/demo/players/{a,b}-01〜10.svg`（リポジトリの正本は`assets/images/demo/players/`）。ディレクトリごと削除できる |
+| **デモ用デバイス200台・ユーザー200名** | デバイスはMACが`AA:00:00:03:*`（`is_demo=true`）、ユーザーはメールが`demo-aa000003*@example.invalid`（愛称はひらがな・カタカナで、「デモ応援団」の表記ではない。メールのドメイン`.invalid`でも識別できる）。前回の帯（`AA:00:00:02:*`、`demo-aa000002*`）とは混ざらない |
+| 応援ログ・試合・スナップショット | 前回と同じ（試合タイトル`デモ対抗戦 …`）。ただし応援ログの`target_id`・`user_id`にはこのデータへの参照が入る |
+
+**削除の順序（前回の手順に足す）：**
+
+1. まず、前回どおり（付録A・B）に、このデータの応援ログが付いている試合を、`cheer_logs`→スナップショット→ペア→試合の順に削除する（ランキング見せ用のデモを実行した試合は、タイトルが`デモ対抗戦 …`）。
+2. 付録Cの棚卸し（読み取り専用）で、件数と、「応援ログの参照が0になっていること」「帯の混在が無いこと」を確認する。
+3. 付録Dの削除（`psql`対話モード、アサート付き）で、`devices.current_target_id`の参照を外し、ダミー選手→デバイス→ユーザーの順に削除し、確認して`COMMIT`する。応援ログが残っている場合は、削除せずに中断する設計（応援ログごと消すのではなく、試合側で先に消す）。
+4. 画像ファイルを削除する（`sudo rm -r /var/www/cheerstick-app/images/demo/players/`）。リポジトリの`assets/images/demo/`を残すか削除するかは別途判断（残しておけば、次回のデモで`ranking-showcase-prepare.js`から再利用できる）。
+
+**ポイント：**
+- 名前に目印が無いため、**所属（デモ用カテゴリーのチーム）＋画像URL＋プロフィールの冒頭、の3条件がそろったものだけ**を対象にする（付録Cの「目印なし＝要確認」は、デモ用チームの選手でも削除対象にしない）。
+- `devices`は`cheer_logs.device_id`が`RESTRICT`のため、応援ログが残る限り消せない（アサートで検出）。`targets`は`cheer_logs.target_id`・`devices.current_target_id`が`SET NULL`のため、先に応援ログを消さずにダミー選手を消すと、応援ログの`target_id`が孤児化する（これも応援ログのアサートで防ぐ）。
+- ランキングのスナップショット（`ranking_snapshot_entries.entity_id`）は外部キー無しで、`display_name`を保持しているため、選手を消しても確定済みの結果は壊れない（試合の削除で一緒に消える）。
+- 前回の帯（`AA:00:00:02:*`）のデバイス・ユーザーは**触らない**（付録Dはアサートで、対象が`AA:00:00:03:*`だけであることを確認する）。
+
+**検証（2026-10-07）：** 付録C・Dを、stagingの実PostgreSQLで、トランザクション内に仕込んで最後にROLLBACKする形で13項目検証した。
+棚卸しの件数（目印あり／なし、参照、帯別）、安全装置（応援ログが残っている／想定の件数違い／対象ユーザーが実デバイスの所有者／`device_event_sessions`が残っている、のいずれでも中断して何も消えない）、
+成功時に、ダミー選手・`AA:00:00:03:*`のデバイスとユーザーだけが消え、目印なしの選手・`AA:00:00:02:*`帯・実デバイスが残ること、を確認した。本番では未実行。
+
+## 付録C. ランキング見せ用データの棚卸しSQL（読み取り専用）
+
+> 参考資料。条件（デモ用カテゴリー・目印・MAC帯）は2026-10-07時点の仕様。
+
+```sql
+-- ランキング見せ用データ（デモ用ダミー選手・AA:00:00:03帯のデバイスとユーザー）の棚卸し（読み取り専用）。
+-- 対象の識別条件：
+--   選手 ＝ カテゴリー「デモ用」のチームに所属し、image_url が /images/demo/players/ 配下で、
+--           profile_text が「【デモ用ダミー】」で始まるもの
+--   デバイス ＝ MACが AA:00:00:03:* ・ユーザー ＝ メールが demo-aa000003*@example.invalid
+-- ※従来のデモ用デバイス（AA:00:00:02:*）とは別の帯。混ざらない。
+SET default_transaction_read_only = on;
+\pset pager off
+\pset null '-'
+
+\echo '=== C0. 接続先 ==='
+SELECT current_database() AS db, current_user AS usr, now()::timestamp(0) AS now;
+
+\echo '=== C1. デモ用チームの選手（targets）。tag=目印あり／要確認＝目印なし（削除対象にしない） ==='
+SELECT t.created_at::timestamp(0) AS created, o.name AS org, t.number, t.name, t.is_active,
+       CASE WHEN COALESCE(t.image_url, '') LIKE '%/images/demo/players/%' AND COALESCE(t.profile_text, '') LIKE '【デモ用ダミー】%'
+            THEN 'tag' ELSE '要確認（目印なし）' END AS kind,
+       left(COALESCE(t.image_url, '-'), 60) AS image_url, left(t.id::text, 8) AS id8
+FROM targets t
+JOIN organizations o ON o.id = t.organization_id
+JOIN categories c ON c.id = o.category_id
+WHERE c.name = 'デモ用'
+ORDER BY o.name, length(t.number), t.number;
+
+\echo '=== C2. 目印あり／目印なしの件数（デモ用チームの選手） ==='
+SELECT count(*) FILTER (WHERE COALESCE(t.image_url, '') LIKE '%/images/demo/players/%' AND COALESCE(t.profile_text, '') LIKE '【デモ用ダミー】%') AS tagged_targets,
+       count(*) FILTER (WHERE NOT (COALESCE(t.image_url, '') LIKE '%/images/demo/players/%' AND COALESCE(t.profile_text, '') LIKE '【デモ用ダミー】%')) AS untagged_targets__review,
+       count(*) AS total_targets_in_demo_orgs
+FROM targets t JOIN organizations o ON o.id = t.organization_id JOIN categories c ON c.id = o.category_id
+WHERE c.name = 'デモ用';
+
+\echo '=== C3. デモ用ダミー選手を参照しているもの（削除前に、応援ログ側が0になっている必要がある） ==='
+WITH dt AS (
+  SELECT t.id FROM targets t JOIN organizations o ON o.id = t.organization_id JOIN categories c ON c.id = o.category_id
+  WHERE c.name = 'デモ用' AND COALESCE(t.image_url, '') LIKE '%/images/demo/players/%' AND COALESCE(t.profile_text, '') LIKE '【デモ用ダミー】%'
+)
+SELECT (SELECT count(*) FROM dt)                                                                        AS demo_targets,
+       (SELECT count(*) FROM cheer_logs WHERE target_id IN (SELECT id FROM dt))                         AS cheer_logs_ref__must_be_0_before_delete,
+       (SELECT count(*) FROM devices WHERE current_target_id IN (SELECT id FROM dt))                    AS devices_current_target,
+       (SELECT count(*) FROM ranking_snapshot_entries WHERE ranking_type = 'target' AND entity_id IN (SELECT id FROM dt)) AS snapshot_entries_ref,
+       (SELECT count(*) FROM user_target_follows WHERE target_id IN (SELECT id FROM dt))                AS follows_ref;
+
+\echo '=== C4. AA:00:00:03帯（ランキング見せ用）のデバイス・ユーザー・応援ログ ==='
+SELECT (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:03:%')                                      AS devices_band03,
+       (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:03:%' AND is_demo)                          AS devices_band03_is_demo,
+       (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:03:%' AND owner_user_id IS NOT NULL)        AS devices_band03_with_owner,
+       (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:03:%' AND current_target_id IS NOT NULL)    AS devices_band03_with_oshi,
+       (SELECT count(*) FROM users WHERE email LIKE 'demo-aa000003%@example.invalid')                              AS users_band03,
+       (SELECT count(*) FROM cheer_logs c JOIN devices d ON d.id = c.device_id WHERE d.mac_address LIKE 'AA:00:00:03:%') AS cheer_logs_band03,
+       (SELECT count(DISTINCT c.event_id) FROM cheer_logs c JOIN devices d ON d.id = c.device_id WHERE d.mac_address LIKE 'AA:00:00:03:%') AS events_band03;
+
+\echo '=== C5. 帯の混在チェック（すべて期待どおりに 0 であること） ==='
+SELECT (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:03:%' AND NOT is_demo)                      AS band03_not_demo__expect_0,
+       (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:02:%' AND current_target_id IS NOT NULL)    AS band02_with_oshi__expect_0,
+       (SELECT count(*) FROM users WHERE email LIKE 'demo-aa000003%@example.invalid' AND email NOT LIKE '%@example.invalid') AS band03_users_wrong_domain__expect_0;
+
+\echo '=== C6. 参考：AA:00:00:03帯の応援ログがある試合（これらの試合の削除は付録A・Bの手順。先に済ませること） ==='
+SELECT e.created_at::timestamp(0) AS created, e.status, left(e.title, 44) AS title, count(*) AS cheer_logs, left(e.id::text, 8) AS id8
+FROM cheer_logs c JOIN devices d ON d.id = c.device_id JOIN events e ON e.id = c.event_id
+WHERE d.mac_address LIKE 'AA:00:00:03:%'
+GROUP BY e.id, e.created_at, e.status, e.title
+ORDER BY e.created_at;
+```
+
+## 付録D. ランキング見せ用データの削除SQL（書き込みあり）
+
+> 参考資料。**そのまま実行しない。** 付録Cの結果から`expect_*`を決め、付録A・Bで試合側の削除を済ませてから、`psql`対話モードで`\set`→`\i`→確認→`COMMIT`／`ROLLBACK`する設計。
+
+```sql
+-- ランキング見せ用データ（デモ用ダミー選手・AA:00:00:03帯のデバイスとユーザー）の削除：実行用（★書き込みあり）。
+-- 前提：このデータの応援ログが付いている試合は、先に付録A・Bの手順（cheer_logs→スナップショット→ペア→試合）で削除済みであること。
+--       （本SQLは、デモ用デバイス・ユーザーの応援ログが残っていると中断する。応援ログごと消すのではなく、先に試合側で消す設計）
+-- 使い方：psqlを対話モードで開き（sudo -u postgres psql -d cheerstick_production）、棚卸し（C2・C4）の件数を設定する。
+--   \set expect_targets 20
+--   \set expect_devices 200
+--   \set expect_users 200
+--   \i showcase-delete-exec.sql
+-- トランザクションは開いたまま終わる。出力を確認し、問題なければ COMMIT; 、想定外なら ROLLBACK;
+-- （件数が想定と違う・応援ログが残っている等は、途中で 1/0 のエラーになり以降は実行されない。その場合は ROLLBACK;）
+\set ON_ERROR_STOP on
+\pset pager off
+
+BEGIN;
+
+CREATE TEMP TABLE del_targets AS
+SELECT t.id FROM targets t JOIN organizations o ON o.id = t.organization_id JOIN categories c ON c.id = o.category_id
+WHERE c.name = 'デモ用' AND COALESCE(t.image_url, '') LIKE '%/images/demo/players/%' AND COALESCE(t.profile_text, '') LIKE '【デモ用ダミー】%';
+
+CREATE TEMP TABLE del_devices AS
+SELECT id FROM devices WHERE mac_address LIKE 'AA:00:00:03:%' AND is_demo = true;
+
+CREATE TEMP TABLE del_users AS
+SELECT id FROM users WHERE email LIKE 'demo-aa000003%@example.invalid';
+
+-- 0. 事前アサート（想定と違えば 1/0 でエラー → ROLLBACK）
+SELECT 1 / (CASE WHEN (SELECT count(*) FROM del_targets) = :expect_targets THEN 1 ELSE 0 END) AS assert_targets;
+SELECT 1 / (CASE WHEN (SELECT count(*) FROM del_devices) = :expect_devices THEN 1 ELSE 0 END) AS assert_devices;
+SELECT 1 / (CASE WHEN (SELECT count(*) FROM del_users) = :expect_users THEN 1 ELSE 0 END) AS assert_users;
+-- デモ用選手・デバイスの応援ログが残っていないこと（残っていれば、先に試合側の削除を行う）
+SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM cheer_logs WHERE target_id IN (SELECT id FROM del_targets) OR device_id IN (SELECT id FROM del_devices)) THEN 1 ELSE 0 END) AS assert_no_cheer_logs;
+-- デバイスをRESTRICTで参照する表（device_event_sessions）にも残っていないこと
+SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM device_event_sessions WHERE device_id IN (SELECT id FROM del_devices)) THEN 1 ELSE 0 END) AS assert_no_sessions;
+-- 従来のデモ用デバイス（AA:00:00:02帯）や実デバイスが、対象に混ざっていないこと
+SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM devices WHERE id IN (SELECT id FROM del_devices) AND mac_address NOT LIKE 'AA:00:00:03:%') THEN 1 ELSE 0 END) AS assert_devices_only_band03;
+-- 削除対象のユーザーが、対象外のデバイス（実デバイス等）の所有者になっていないこと
+SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM devices WHERE owner_user_id IN (SELECT id FROM del_users) AND id NOT IN (SELECT id FROM del_devices)) THEN 1 ELSE 0 END) AS assert_users_owned_only_by_target_devices;
+
+-- 1. デモ用選手への推しの参照を外す（管理APIの削除はTARGET_IN_USEで止まるため、SQLで先に外す）
+UPDATE devices SET current_target_id = NULL WHERE current_target_id IN (SELECT id FROM del_targets);
+-- 2. デモ用ダミー選手を削除
+DELETE FROM targets WHERE id IN (SELECT id FROM del_targets);
+-- 3. AA:00:00:03帯のデバイスを削除（応援ログが残っていないことは上でアサート済み。cheer_logs.device_idはRESTRICT）
+DELETE FROM devices WHERE id IN (SELECT id FROM del_devices);
+-- 4. AA:00:00:03帯のデモ用ユーザーを削除
+DELETE FROM users WHERE id IN (SELECT id FROM del_users);
+
+-- 5. 事後確認
+SELECT (SELECT count(*) FROM targets WHERE id IN (SELECT id FROM del_targets))   AS remaining_targets__expect_0,
+       (SELECT count(*) FROM devices WHERE id IN (SELECT id FROM del_devices))   AS remaining_devices__expect_0,
+       (SELECT count(*) FROM users WHERE id IN (SELECT id FROM del_users))       AS remaining_users__expect_0,
+       (SELECT count(*) FROM devices WHERE mac_address LIKE 'AA:00:00:02:%')     AS band02_devices_untouched,
+       (SELECT count(*) FROM cheer_logs WHERE event_id IS NULL)                  AS cheer_logs_event_null;
+
+\echo '*** ここまで成功。上の件数が想定どおりなら COMMIT; 、違えば ROLLBACK; を入力してください（トランザクションは開いたままです） ***'
+\echo '*** COMMIT後：画像ファイルも削除する → sudo rm -r /var/www/cheerstick-app/images/demo/players/ （リポジトリ側の assets/images/demo/ は別途判断） ***'
+```

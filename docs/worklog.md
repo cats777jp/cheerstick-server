@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-10-07（続き7） ランキング見せ用デモ（デモ用ダミー選手・応援ユーザー200名）の実装、削除SQLの追記（ローカル確認まで・本番未反映・選手と画像は未投入・未コミット）
+
+### 実施したこと
+- **調査（読み取りのみ）：** 既存のデモ機能は、選手の推しエントリー（`--set-oshi`）が全デバイス共通の1人だけで、選手の作成も未対応だった。デモモードの`DEVICES_PER_TEAM`は既に100（＝100×2チーム）。顔写真は、アップロードAPIがjpg/pngのみ・保存名がランダムUUIDのため使わず、自前SVGを`assets/images/`の正本方式で配信する方針
+- **岩村様の承認済み方針で実装：** 選手名はカタカナの下の名前のみ／顔写真は自前のSVGイラスト／ユーザーは既存の`AA:00:00:02`帯を再利用せず**別のMAC帯`AA:00:00:03:*`で200名を新規作成**（後片付けを単純にするため）／起動はデモモードに統合
+  - `battle-demo.js`：`--oshi-targets-a/-b`（チームごとの選手リストから、実行ごとのシャッフル＋重み付きでデバイスごとに別の選手を推しに割り当て）、`--energy-spread`（ユーザーごとの熱量係数0.25〜1.0）、`--nickname-style=fun`（重複しないひらがな・カタカナ100種）。未指定なら従来どおり
+  - デモモード（`adminDemoController.js`・`demoModeState.js`）：デモ用チームにダミー選手（所属・`image_url`・`profile_text`の3条件）がいれば「ランキング見せ用」になり、`AA:00:00:03`帯のデバイスと推しエントリー付きで実行。いなければ従来どおり。statusに`showcase`（選手数）が加わり、管理画面のデモ欄（`events.html`）に表示
+  - 新規：`scripts/demo/showcase-players.js`（定義）、`generate-demo-avatars.js`（SVG20枚を生成、`assets/images/demo/players/`）、`ranking-showcase-prepare.js`（選手の登録。既定はdry run、冪等）
+- **削除用SQLへの追記：** `docs/proposals/demo-cleanup-2026-10-07.md`に第7章・付録C（棚卸し、読み取り専用）・付録D（削除、アサート付き）。識別条件、削除の順序（試合側を先に→推しの参照を外す→ダミー選手→デバイス→ユーザー）、画像ファイルの削除
+- 記録：`docs/spec.md` 9.12に追記・変更履歴、`docs/runbook.md`に投入手順、`scripts/demo/README.md`にオプション
+
+### 変更したファイル
+- コード：`scripts/demo/battle-demo.js`、`scripts/demo/local-verify-demo-mode.js`、`scripts/demo/README.md`、`src/controllers/adminDemoController.js`、`src/services/demoModeState.js`、`public/admin/events.html`、新規＝`scripts/demo/showcase-players.js`・`generate-demo-avatars.js`・`ranking-showcase-prepare.js`、`assets/images/demo/players/*.svg`（20枚）
+- docs：`docs/spec.md`、`docs/runbook.md`、`docs/proposals/demo-cleanup-2026-10-07.md`（追記のみ）、`docs/worklog.md`（本エントリ）
+- 触っていないもの：順位確定の集計・`ranking-battle.html`・`ranking-user/target.html`、本番の応援フロー、DB（マイグレーションなし）、`src/`のAPI・クエリ
+
+### 判明した事実 / 想定と違ったこと
+- 確認：`local-verify-demo-mode.js`が56項目PASS（従来41＋今回15）。ダミー選手なしで従来どおり、あると別のMAC帯（200台）・全応援ログに`target_id`と`user_id`・推しが複数の選手に分散・intensityが1〜100でばらつく・目印なし／無効な選手は使われない・`AA:00:00:02`帯に推しが付かない・愛称が重複せず数字が付かない、など。選手の投入（dry run→20件作成→2回目は全てskip）→デモ→両チーム順位確定→`ranking-battle.html`を、ローカルのブラウザで目視（スクリーンショット`C:\Projects\screenshots\showcase-*-20261007.jpg`、コンソールエラーなし）。付録C・Dをstagingの実PostgreSQLで13項目検証（トランザクション内に仕込んでROLLBACK、残存0）
+- **愛称：** 初めは50種に数字を付けて100人を作ったが、画面で「リナ2」「ユイ3」のように同名が並び不自然だったため、重複しない100種に変更（選手名と同じ名前は避けた）。チームBの後半に数字が付く不具合（周回数をずらした値で数えていた）も、確認で見つけて修正
+- **文字・数値：** 熱量係数は0.25〜1.0（1.0を超えない）。超えるとDBの上限100を超える／両チームに同じ分布なのでチーム間の比率は保たれる
+- pg-memの`LIKE`は日本語の接頭辞指定を正しく扱えないため、愛称の判定は検証ハーネス側でJSで行った
+- 会場の実機・実写真の見え方（1080p・4K）は今回も未確認。実際に本番で、デモ用デバイス200台の新規作成・`register`・応援が動くことは、本番反映後に確認する
+
+### 次回への申し送り
+1. 未コミット（コード・docsとも）。コードと`docs:`は別コミット。`git diff --stat docs/`の確認後、岩村様の承認でコミット・push
+2. **本番反映・投入は岩村様の指示待ち。** 手順は`docs/runbook.md`「デモ用ダミー選手・画像の投入とランキング見せ用デモ」：`git pull`→`assets/images/`の`cp`（新規ディレクトリなので`chown`・`chmod`が必要）→画像のURLが200・`image/svg+xml`で返ることを確認→`pm2 restart`（実イベントの無い時間帯）→`ranking-showcase-prepare.js`をdry run→`--yes`。その後、デモをセット・開始→「両チーム順位確定」
+3. 反映後に確認すること：ダミー選手20名が`targets`に入り、画像が表示される／デモが`AA:00:00:03`帯のデバイス200台で動く／推し選手・応援ユーザーのランキングが出る
+4. 後片付けは`docs/proposals/demo-cleanup-2026-10-07.md`第7章・付録C・D（試合側の削除を先に）
+
+### 未解決のまま残した課題
+- 上記の本番反映と投入。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-07（続き6） 対抗戦順位発表画面を推し選手／応援ユーザーの2URLに分割、`ranking-control.html`の見出し整理、旧2画面の要否調査（ローカル確認まで・本番未反映・未コミット）
 
 ### 実施したこと
