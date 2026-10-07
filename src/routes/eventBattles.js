@@ -4,6 +4,7 @@
 
 const { Router } = require('express');
 const eventBattleController = require('../controllers/eventBattleController');
+const eventBattleRankingController = require('../controllers/eventBattleRankingController');
 const { scoreIpLimiter, config } = require('../middleware/rateLimit');
 const { createScoreCacheMiddleware } = require('../middleware/scoreCache');
 
@@ -14,5 +15,7 @@ const router = Router();
 router.use(scoreIpLimiter, createScoreCacheMiddleware(config.scoreCacheTtlMs));
 
 router.get('/:id/score', eventBattleController.getScore);
+// 対抗戦向け順位発表画面（public/ranking-battle.html）用。確定済みスナップショットの閲覧のみ。
+router.get('/:id/ranking-snapshots/latest', eventBattleRankingController.getLatest);
 
 module.exports = router;

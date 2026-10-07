@@ -442,6 +442,19 @@ async function createEvent({ title, organizationId, startsAt, endsAt }) {
   return rows[0];
 }
 
+// PATCH /admin/events/:id が受け付ける、events.metadata内のURL系キーの定義
+// （API body のキー → metadata内のキー）。装飾枠を増やすときはここへ1行足し、
+// 画面側（ranking-battle.html等）で読むだけで済む（DB変更不要）。
+//   theme_image_url        対抗戦テーマ画像（2026-09-25、battle.html・ranking-battle.html）
+//   ranking_background_url 順位発表画面（ranking-battle.html）のチームパネル背景画像
+//   sponsor_logo_url       順位発表画面（ranking-battle.html）のチームパネル下部スポンサー枠
+const EVENT_METADATA_URL_FIELDS = {
+  theme_image_url: 'themeImageUrl',
+  ranking_background_url: 'rankingBackgroundUrl',
+  sponsor_logo_url: 'sponsorLogoUrl',
+};
+const EVENT_METADATA_URL_KEYS = Object.values(EVENT_METADATA_URL_FIELDS);
+
 /**
  * 管理画面：渡されたフィールドのみを部分更新する。
  * fieldsに無いキーは更新しない。organizationIdが含まれる場合は実在確認する。
@@ -478,14 +491,28 @@ async function updateEvent(eventId, fields) {
     }
   }
 
-  if (Object.prototype.hasOwnProperty.call(fields, 'themeImageUrl')) {
-    if (fields.themeImageUrl) {
-      setClauses.push(`metadata = metadata || $${i}::jsonb`);
-      values.push(JSON.stringify({ themeImageUrl: fields.themeImageUrl }));
+  // events.metadataのURL系キー。値あり→`||`でそのキーのみマージ、falsy→`-`でキー削除。
+  // 複数キーが同時に指定されても、metadataへの代入は1つのSET句にまとめる
+  // （同一列を複数回SETするとSQLエラーになるため）。キー名は定数のみ（SQLへ直接埋め込むため）。
+  // 値ありのキーは1つのJSONにまとめて`||`を1回だけ使い、その後に解除するキーを`-`で順に消す。
+  const metadataToSet = {};
+  const metadataToClear = [];
+  for (const key of EVENT_METADATA_URL_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+    if (fields[key]) metadataToSet[key] = fields[key];
+    else metadataToClear.push(key);
+  }
+  if (Object.keys(metadataToSet).length > 0 || metadataToClear.length > 0) {
+    let metadataExpr = 'metadata';
+    if (Object.keys(metadataToSet).length > 0) {
+      metadataExpr = `(metadata || $${i}::jsonb)`;
+      values.push(JSON.stringify(metadataToSet));
       i += 1;
-    } else {
-      setClauses.push(`metadata = metadata - 'themeImageUrl'`);
     }
+    for (const key of metadataToClear) {
+      metadataExpr = `${metadataExpr} - '${key}'`;
+    }
+    setClauses.push(`metadata = ${metadataExpr}`);
   }
 
   if (setClauses.length === 0) {
@@ -1395,7 +1422,55 @@ async function getLatestRankingSnapshot(eventId, rankingType) {
   };
 }
 
+/**
+ * 対抗戦の順位発表画面（ranking-battle.html）向け：指定イベントの最新スナップショット1件を、
+ * ユーザー別・選手別の両方まとめて返す。まだ確定されていなければnull。
+ * 選手別の明細には、確定時点のdisplay_nameに加えて現在のtargets.image_url・numberを
+ * LEFT JOINで補う（スナップショット自体は画像を保持しないため。targetsの行が既に
+ * 無い場合はimageUrl/numberがnullになるだけで、順位・名前・応援量は確定時点のまま）。
+ * 既存のgetLatestRankingSnapshot（ranking-user/target.html用）は変更しない。
+ */
+async function getLatestBattleRankingSnapshot(eventId) {
+  const { rows: snapshotRows } = await db.query(
+    `SELECT id, triggered_at FROM ranking_snapshots
+     WHERE event_id = $1
+     ORDER BY triggered_at DESC
+     LIMIT 1`,
+    [eventId]
+  );
+  const snapshot = snapshotRows[0];
+  if (!snapshot) return null;
+
+  const { rows } = await db.query(
+    `SELECT e.ranking_type, e.rank, e.display_name, e.cheer_value, t.image_url, t.number
+     FROM ranking_snapshot_entries e
+     LEFT JOIN targets t ON e.ranking_type = 'target' AND t.id = e.entity_id
+     WHERE e.snapshot_id = $1
+     ORDER BY e.rank ASC, e.display_name ASC`,
+    [snapshot.id]
+  );
+
+  const user = [];
+  const target = [];
+  for (const r of rows) {
+    const base = {
+      rank: r.rank,
+      displayName: r.display_name,
+      cheerValue: parseInt(r.cheer_value, 10),
+    };
+    if (r.ranking_type === 'target') {
+      target.push({ ...base, imageUrl: r.image_url || null, number: r.number == null ? null : r.number });
+    } else {
+      user.push(base);
+    }
+  }
+
+  return { snapshotId: snapshot.id, triggeredAt: snapshot.triggered_at, user, target };
+}
+
 module.exports = {
+  EVENT_METADATA_URL_FIELDS,
+  getLatestBattleRankingSnapshot,
   findDeviceWithProfile,
   ensureDevice,
   findOrCreateUserByEmail,

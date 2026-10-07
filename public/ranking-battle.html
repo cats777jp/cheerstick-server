@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>順位発表（対抗戦） | 推しフル</title>
+<style>
+  /* 対抗戦（2チーム）向け順位発表画面。会場スクリーン用の「確定結果」表示。
+     トーンはbattle.html・ranking-user.htmlに合わせる。ライブ更新ではなく、
+     確定ボタンが押されて新しいスナップショットが出来たときだけ描画し直す。 */
+  :root {
+    --bg: #0b0f14;
+    --text: #f4f6f8;
+    --text-muted: #9aa4af;
+    --team-a-color: #e63946;
+    --team-b-color: #3a86ff;
+    --rows: 10;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; padding: 12px 16px; gap: 10px; }
+  #connErrorBanner {
+    display: none; text-align: center; background: #b3261e; color: #fff;
+    padding: 6px; border-radius: 8px; font-size: 14px;
+  }
+  #connErrorBanner.visible { display: block; }
+
+  #header { flex: 0 0 auto; text-align: center; }
+  .theme-image {
+    display: block; width: auto; height: auto; max-width: 100%; max-height: 20vh;
+    margin: 0 auto; border-radius: 12px;
+  }
+  #headerLogos { display: flex; align-items: center; justify-content: center; gap: 24px; }
+  #headerLogos .vs { font-size: clamp(18px, 3vh, 34px); font-weight: bold; color: var(--text-muted); }
+  .head-logo { width: clamp(40px, 9vh, 96px); height: clamp(40px, 9vh, 96px); border-radius: 50%; object-fit: cover; background: #1f2733; }
+  .head-logo-fallback {
+    width: clamp(40px, 9vh, 96px); height: clamp(40px, 9vh, 96px); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: clamp(18px, 4vh, 40px); font-weight: bold; color: #fff;
+  }
+  #label { font-size: clamp(14px, 2.4vh, 26px); color: var(--text-muted); margin-top: 4px; min-height: 1.2em; }
+
+  #battleGrid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-height: 0; }
+
+  /* --- チームパネル：背景はチームカラーのグラデーション＋任意の背景画像 --- */
+  .team-panel {
+    position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+    border-radius: 14px; padding: 10px 12px; overflow: hidden;
+  }
+  #panelA { background: linear-gradient(160deg, color-mix(in srgb, var(--team-a-color) 45%, #0b0f14), #0b0f14 85%); }
+  #panelB { background: linear-gradient(200deg, color-mix(in srgb, var(--team-b-color) 45%, #0b0f14), #0b0f14 85%); }
+  .panel-bg {
+    position: absolute; inset: 0; background-size: cover; background-position: center;
+    opacity: 0.35; pointer-events: none;
+  }
+  .panel-bg[hidden] { display: none; }
+  .panel-inner { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 8px; }
+
+  .team-head { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 0 0 auto; }
+  .team-head .head-logo, .team-head .head-logo-fallback { width: clamp(28px, 5vh, 52px); height: clamp(28px, 5vh, 52px); font-size: clamp(14px, 2.4vh, 24px); }
+  .team-name { font-size: clamp(16px, 3.2vh, 34px); font-weight: bold; text-align: center; word-break: break-word; }
+  .confirmed-at { text-align: center; font-size: clamp(10px, 1.5vh, 14px); color: var(--text-muted); flex: 0 0 auto; }
+
+  .sections { flex: 1; display: grid; gap: 12px; min-height: 0; }
+  .sections.two { grid-template-columns: 1.15fr 1fr; }
+  .sections.one { grid-template-columns: 1fr; }
+  .section { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .section-title {
+    flex: 0 0 auto; font-size: clamp(11px, 1.9vh, 20px); font-weight: bold; color: var(--text-muted);
+    border-bottom: 2px solid var(--panel-color); padding-bottom: 3px; margin-bottom: 4px;
+  }
+  .rank-list { flex: 1; min-height: 0; display: grid; grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 3px; }
+
+  .rank-row {
+    display: flex; align-items: center; gap: clamp(4px, 0.9vh, 10px); min-height: 0; min-width: 0;
+    background: rgba(11, 15, 20, 0.62); border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 8px; padding: 2px clamp(4px, 1vh, 10px);
+    /* 文字は「画面高さ」と「表示件数あたりの行の高さ」の小さい方に合わせる（top=20でも行からはみ出さない） */
+    font-size: clamp(9px, min(2.3vh, calc(40vh / var(--rows))), 26px);
+  }
+  .rank-row.top1 { border-color: #f5c518; background: linear-gradient(90deg, rgba(245, 197, 24, 0.22), rgba(11, 15, 20, 0.62)); }
+  .rank-row.top2 { border-color: #cfd6de; background: linear-gradient(90deg, rgba(207, 214, 222, 0.16), rgba(11, 15, 20, 0.62)); }
+  .rank-row.top3 { border-color: #cd7f32; background: linear-gradient(90deg, rgba(205, 127, 50, 0.20), rgba(11, 15, 20, 0.62)); }
+
+  .rank-badge { display: flex; align-items: center; flex: 0 0 auto; gap: 2px; }
+  .crown { width: 1.35em; height: 1.35em; flex: 0 0 auto; }
+  .crown-spacer { width: 1.35em; height: 1.35em; flex: 0 0 auto; }
+  .rank-number { min-width: 1.4em; text-align: right; font-weight: bold; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+  .top1 .rank-number { color: #f5c518; }
+  .top2 .rank-number { color: #cfd6de; }
+  .top3 .rank-number { color: #e6975a; }
+
+  .photo { height: 88%; aspect-ratio: 1 / 1; border-radius: 50%; object-fit: cover; flex: 0 0 auto; background: #1f2733; }
+  .photo-fallback {
+    height: 88%; aspect-ratio: 1 / 1; border-radius: 50%; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.8em; font-weight: bold; color: #fff;
+  }
+  .rank-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-value { flex: 0 0 auto; font-weight: bold; font-variant-numeric: tabular-nums; }
+  .rank-value small { font-size: 0.55em; color: var(--text-muted); margin-left: 3px; font-weight: normal; }
+
+  .waiting, .empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted); font-size: clamp(14px, 2.4vh, 24px); text-align: center; padding: 10px;
+  }
+  .empty { font-size: clamp(11px, 1.8vh, 18px); }
+
+  /* スポンサー枠：未設定ならスロットごと出さない（レイアウトを崩さない） */
+  .sponsor-slot {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    height: clamp(28px, 7vh, 72px);
+  }
+  .sponsor-slot[hidden] { display: none; }
+  .sponsor-slot img { max-height: 100%; max-width: 70%; object-fit: contain; }
+
+  #loadingState, #errorState {
+    display: flex; flex: 1; align-items: center; justify-content: center;
+    font-size: 18px; color: var(--text-muted); text-align: center; padding: 20px; white-space: pre-line;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="connErrorBanner"></div>
+  <div id="loadingState">読み込み中...</div>
+  <div id="errorState" hidden></div>
+
+  <div id="content" hidden style="display: contents;">
+    <div id="header">
+      <img id="themeImage" class="theme-image" alt="" hidden>
+      <div id="headerLogos" hidden></div>
+      <div id="label"></div>
+    </div>
+    <div id="battleGrid">
+      <div id="panelA" class="team-panel"></div>
+      <div id="panelB" class="team-panel"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? '/api/v1'
+    : 'https://api.cheerstick.com/api/v1';
+
+  // 既存の順位発表画面（ranking-user/target.html）と同じ間隔。スナップショットが変わらない間は再描画しない。
+  const POLL_INTERVAL_MS = 3000;
+  const FALLBACK_COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#8338ec', '#3a86ff', '#ff6b6b'];
+
+  const params = new URLSearchParams(location.search);
+  const battleId = params.get('battle_id');
+  // 表示件数：既定10件、&top=20で最大20件（スナップショット自体が上位20件まで）。
+  const topParam = parseInt(params.get('top'), 10);
+  const TOP_N = Number.isFinite(topParam) ? Math.min(20, Math.max(1, topParam)) : 10;
+  document.documentElement.style.setProperty('--rows', String(TOP_N));
+
+  const loadingState = document.getElementById('loadingState');
+  const errorState = document.getElementById('errorState');
+  const content = document.getElementById('content');
+  const connErrorBanner = document.getElementById('connErrorBanner');
+
+  function showFatalError(message) {
+    loadingState.hidden = true;
+    content.hidden = true;
+    errorState.hidden = false;
+    errorState.textContent = message;
+  }
+  function showConnError(message) {
+    connErrorBanner.textContent = message;
+    connErrorBanner.classList.add('visible');
+  }
+  function clearConnError() { connErrorBanner.classList.remove('visible'); }
+
+  if (!battleId) {
+    showFatalError('URLに battle_id パラメータがありません。\n管理画面の「順位確定」からURLを確認してください。');
+    return;
+  }
+
+  function formatNumber(n) { return Number(n || 0).toLocaleString('ja-JP'); }
+
+  function colorFor(id) {
+    let h = 0;
+    const s = String(id || '');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return FALLBACK_COLORS[h % FALLBACK_COLORS.length];
+  }
+
+  // 外部から来るURL（metadata・画像）はhttp(s)または同一オリジンの相対パスのみ許可する。
+  function safeUrl(url) {
+    if (typeof url !== 'string') return null;
+    const u = url.trim();
+    return /^(https?:\/\/|\/)/i.test(u) ? u : null;
+  }
+
+  // --- 冠アイコン（1位=金、2位=銀、3位=銅）。同順位は同じ冠。4位以下は冠なし。 ---
+  const CROWN_COLORS = { 1: ['#f5c518', '#b8860b'], 2: ['#dfe5ec', '#8a95a3'], 3: ['#cd7f32', '#7a4a1a'] };
+  function crownEl(rank) {
+    const colors = CROWN_COLORS[rank];
+    if (!colors) {
+      const sp = document.createElement('span');
+      sp.className = 'crown-spacer';
+      return sp;
+    }
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', 'crown');
+    svg.setAttribute('aria-label', rank === 1 ? '金' : rank === 2 ? '銀' : '銅');
+    const crown = document.createElementNS(ns, 'path');
+    crown.setAttribute('d', 'M3 18 L2 7 L7.5 11.5 L12 4 L16.5 11.5 L22 7 L21 18 Z');
+    crown.setAttribute('fill', colors[0]);
+    crown.setAttribute('stroke', colors[1]);
+    crown.setAttribute('stroke-width', '1.2');
+    crown.setAttribute('stroke-linejoin', 'round');
+    const base = document.createElementNS(ns, 'path');
+    base.setAttribute('d', 'M3.5 19.6h17v2.4h-17z');
+    base.setAttribute('fill', colors[0]);
+    base.setAttribute('stroke', colors[1]);
+    base.setAttribute('stroke-width', '0.8');
+    svg.appendChild(crown);
+    svg.appendChild(base);
+    return svg;
+  }
+
+  function initialAvatar(text, color, className, full) {
+    const d = document.createElement('div');
+    d.className = className;
+    d.style.background = color;
+    const t = (text || '?').toString().trim();
+    d.textContent = full ? t : t.charAt(0).toUpperCase();
+    return d;
+  }
+
+  function buildRow(entry, { withPhoto, color }) {
+    const row = document.createElement('div');
+    row.className = 'rank-row' + (entry.rank >= 1 && entry.rank <= 3 ? ' top' + entry.rank : '');
+
+    const badge = document.createElement('div');
+    badge.className = 'rank-badge';
+    badge.appendChild(crownEl(entry.rank));
+    const num = document.createElement('span');
+    num.className = 'rank-number';
+    num.textContent = entry.rank;
+    badge.appendChild(num);
+    row.appendChild(badge);
+
+    if (withPhoto) {
+      const url = safeUrl(entry.imageUrl);
+      // 写真なし／読み込み失敗時は、背番号（無ければ頭文字）入りの円にする。
+      const fallbackText = entry.number != null ? String(entry.number) : entry.displayName;
+      if (url) {
+        const img = document.createElement('img');
+        img.className = 'photo';
+        img.alt = '';
+        img.src = url;
+        img.onerror = () => img.replaceWith(initialAvatar(fallbackText, color, 'photo-fallback', entry.number != null));
+        row.appendChild(img);
+      } else {
+        row.appendChild(initialAvatar(fallbackText, color, 'photo-fallback', entry.number != null));
+      }
+    }
+
+    const name = document.createElement('div');
+    name.className = 'rank-name';
+    name.textContent = entry.displayName;
+    name.title = entry.displayName;
+    row.appendChild(name);
+
+    const value = document.createElement('div');
+    value.className = 'rank-value';
+    value.textContent = formatNumber(entry.cheerValue);
+    const unit = document.createElement('small');
+    unit.textContent = 'pt';
+    value.appendChild(unit);
+    row.appendChild(value);
+    return row;
+  }
+
+  function buildSection(title, entries, opts) {
+    const sec = document.createElement('div');
+    sec.className = 'section';
+    const t = document.createElement('div');
+    t.className = 'section-title';
+    t.textContent = title;
+    sec.appendChild(t);
+    if (entries.length === 0) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = '応援データがありません';
+      sec.appendChild(e);
+      return sec;
+    }
+    const list = document.createElement('div');
+    list.className = 'rank-list';
+    entries.slice(0, TOP_N).forEach((entry) => list.appendChild(buildRow(entry, opts)));
+    sec.appendChild(list);
+    return sec;
+  }
+
+  function buildLogo(team, color, className, fallbackClass) {
+    const org = team.organization;
+    const name = org ? org.name : (team.event_title || '');
+    const url = org && safeUrl(org.logo_url);
+    if (url) {
+      const img = document.createElement('img');
+      img.className = className;
+      img.alt = name;
+      img.src = url;
+      img.onerror = () => img.replaceWith(initialAvatar(name, color, fallbackClass));
+      return img;
+    }
+    return initialAvatar(name, color, fallbackClass);
+  }
+
+  function renderPanel(panelEl, team, color, hasThemeImage) {
+    panelEl.innerHTML = '';
+    panelEl.style.setProperty('--panel-color', color);
+
+    const bgUrl = safeUrl(team.decor && team.decor.background_url);
+    const bg = document.createElement('div');
+    bg.className = 'panel-bg';
+    if (bgUrl) bg.style.backgroundImage = 'url(' + JSON.stringify(bgUrl) + ')';
+    else bg.hidden = true;
+    panelEl.appendChild(bg);
+
+    const inner = document.createElement('div');
+    inner.className = 'panel-inner';
+
+    const org = team.organization;
+    const head = document.createElement('div');
+    head.className = 'team-head';
+    // テーマ画像があるときは、画像内にロゴが含まれる前提でパネル見出しはチーム名のみ。
+    if (!hasThemeImage) head.appendChild(buildLogo(team, color, 'head-logo', 'head-logo-fallback'));
+    const nameEl = document.createElement('div');
+    nameEl.className = 'team-name';
+    nameEl.textContent = org ? org.name : (team.event_title || '(チーム未設定)');
+    head.appendChild(nameEl);
+    inner.appendChild(head);
+
+    const snap = team.snapshot;
+    if (snap.snapshotId === null) {
+      const w = document.createElement('div');
+      w.className = 'waiting';
+      w.textContent = 'まだ順位が確定していません';
+      inner.appendChild(w);
+    } else {
+      const at = document.createElement('div');
+      at.className = 'confirmed-at';
+      at.textContent = '確定日時: ' + new Date(snap.triggeredAt).toLocaleString('ja-JP');
+      inner.appendChild(at);
+
+      // 選手が存在しないチーム（スポンサー対抗戦等、target_idがNULL）は、選手セクションを
+      // 出さずユーザーランキングのみ全幅で表示する。
+      const hasTargets = snap.target.length > 0;
+      const sections = document.createElement('div');
+      sections.className = 'sections ' + (hasTargets ? 'two' : 'one');
+      if (hasTargets) sections.appendChild(buildSection('選手ランキング', snap.target, { withPhoto: true, color }));
+      sections.appendChild(buildSection('応援ユーザーランキング', snap.user, { withPhoto: false, color }));
+      inner.appendChild(sections);
+    }
+
+    // スポンサー枠（events.metadata.sponsorLogoUrl）：未設定なら出さない。
+    const sponsorUrl = safeUrl(team.decor && team.decor.sponsor_logo_url);
+    if (sponsorUrl) {
+      const slot = document.createElement('div');
+      slot.className = 'sponsor-slot';
+      const img = document.createElement('img');
+      img.alt = '';
+      img.src = sponsorUrl;
+      img.onerror = () => slot.remove();
+      slot.appendChild(img);
+      inner.appendChild(slot);
+    }
+
+    panelEl.appendChild(inner);
+  }
+
+  function render(data) {
+    const colorA = (data.team_a.organization && data.team_a.organization.color) || colorFor(data.team_a.event_id);
+    const colorB = (data.team_b.organization && data.team_b.organization.color) || colorFor(data.team_b.event_id);
+    document.documentElement.style.setProperty('--team-a-color', colorA);
+    document.documentElement.style.setProperty('--team-b-color', colorB);
+
+    document.getElementById('label').textContent = data.label || '';
+
+    // ヘッダー：テーマ画像があれば画像、無ければ両チームのロゴ（VS）
+    const themeEl = document.getElementById('themeImage');
+    const logosEl = document.getElementById('headerLogos');
+    const themeUrl = safeUrl(data.theme_image_url);
+    if (themeUrl) {
+      themeEl.src = themeUrl;
+      themeEl.hidden = false;
+      logosEl.hidden = true;
+    } else {
+      themeEl.hidden = true;
+      themeEl.removeAttribute('src');
+      logosEl.innerHTML = '';
+      logosEl.appendChild(buildLogo(data.team_a, colorA, 'head-logo', 'head-logo-fallback'));
+      const vs = document.createElement('span');
+      vs.className = 'vs';
+      vs.textContent = 'VS';
+      logosEl.appendChild(vs);
+      logosEl.appendChild(buildLogo(data.team_b, colorB, 'head-logo', 'head-logo-fallback'));
+      logosEl.hidden = false;
+    }
+
+    renderPanel(document.getElementById('panelA'), data.team_a, colorA, !!themeUrl);
+    renderPanel(document.getElementById('panelB'), data.team_b, colorB, !!themeUrl);
+
+    loadingState.hidden = true;
+    errorState.hidden = true;
+    content.hidden = false;
+  }
+
+  let stopped = false;
+  let lastSignature = null;
+
+  async function poll() {
+    if (stopped) return;
+    try {
+      const res = await fetch(`${API_BASE}/event-battles/${battleId}/ranking-snapshots/latest`);
+      if (res.status === 404 || res.status === 400) {
+        showFatalError('指定された対抗戦が見つかりません。URLを確認してください。');
+        stopped = true;
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      clearConnError();
+      // 確定結果・装飾に変化が無い間は再描画しない（画像のちらつき防止）。
+      if (text !== lastSignature) {
+        render(JSON.parse(text));
+        lastSignature = text;
+      }
+    } catch (e) {
+      // 一時的な通信断は、直前の表示を保持したまま次回ポーリングへ続ける。
+      if (!content.hidden) {
+        showConnError('サーバーに接続できません。再試行しています…');
+      } else {
+        showFatalError('サーバーに接続できませんでした: ' + e.message);
+        stopped = true;
+      }
+    } finally {
+      if (!stopped) setTimeout(poll, POLL_INTERVAL_MS);
+    }
+  }
+
+  poll();
+})();
+</script>
+</body>
+</html>

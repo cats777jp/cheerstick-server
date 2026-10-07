@@ -64,7 +64,6 @@ exports.update = async (req, res, next) => {
     organization_id: organizationId,
     starts_at: startsAt,
     ends_at: endsAt,
-    theme_image_url: themeImageUrl,
   } = req.body;
 
   const fields = {};
@@ -72,9 +71,18 @@ exports.update = async (req, res, next) => {
   if (organizationId !== undefined) fields.organizationId = organizationId;
   if (startsAt !== undefined) fields.startsAt = startsAt;
   if (endsAt !== undefined) fields.endsAt = endsAt;
-  // 対抗戦テーマ画像（2026-09-25追加）：events.metadata.themeImageUrlへ格納する。
+  // events.metadataのURL系キー（theme_image_url＝2026-09-25追加、ranking_background_url・
+  // sponsor_logo_url＝対抗戦順位発表画面用）。定義はcheerQueries.EVENT_METADATA_URL_FIELDS。
   // 空文字/nullは「解除」として扱う（cheerstickQueries.updateEvent側でキー削除）。
-  if (themeImageUrl !== undefined) fields.themeImageUrl = themeImageUrl;
+  // 文字列・null以外（オブジェクト等）はmetadataへ入れない。
+  for (const [bodyKey, metadataKey] of Object.entries(cheerQueries.EVENT_METADATA_URL_FIELDS)) {
+    const value = req.body[bodyKey];
+    if (value === undefined) continue;
+    if (value !== null && typeof value !== 'string') {
+      return res.status(400).json({ error: 'INVALID_METADATA_VALUE', field: bodyKey });
+    }
+    fields[metadataKey] = value;
+  }
 
   try {
     const updated = await cheerQueries.updateEvent(id, fields);

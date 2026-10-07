@@ -54,6 +54,31 @@
     </div>
   </div>
 
+  <!-- 対抗戦（2チーム）向け：両チーム一括の順位確定と、順位発表画面（ranking-battle.html）のURL。
+       既存の「試合を選んで順位確定」とは独立。確定自体は既存のPOST /events/:id/ranking-snapshotを
+       A・Bに対して続けて呼ぶだけ（新しいAPIは使わない）。 -->
+  <div id="battleCard" class="card">
+    <h2>対抗戦（2チーム）</h2>
+    <label for="battleSelect">対抗戦</label>
+    <select id="battleSelect"></select>
+
+    <div style="margin-top: 16px;">
+      <button id="battleConfirmBtn" class="primary hidden">両チーム順位確定</button>
+    </div>
+    <div id="battleConfirmNote" class="triggered-at-note" style="margin-top: 10px;"></div>
+
+    <label for="battleTopSelect" style="margin-top: 14px;">順位発表画面の表示件数</label>
+    <select id="battleTopSelect">
+      <option value="10">上位10件（既定）</option>
+      <option value="20">上位20件（&amp;top=20）</option>
+    </select>
+    <label>順位発表画面URL（対抗戦用）</label>
+    <div class="screen-url-row">
+      <input id="battleScreenUrlInput" type="text" readonly>
+      <button type="button" id="battleScreenCopyBtn">コピー</button>
+    </div>
+  </div>
+
   <div id="resultCard" class="card hidden">
     <h2>確定結果</h2>
     <div id="triggeredAtNote" class="triggered-at-note"></div>
@@ -233,11 +258,119 @@
     }
   }
 
+  // --- 対抗戦（2チーム）：両チーム順位確定＋順位発表画面URL ------------------------
+  const battleSelect = document.getElementById('battleSelect');
+  const battleConfirmBtn = document.getElementById('battleConfirmBtn');
+  const battleConfirmNote = document.getElementById('battleConfirmNote');
+  const battleTopSelect = document.getElementById('battleTopSelect');
+  const battleScreenUrlInput = document.getElementById('battleScreenUrlInput');
+
+  let lastBattles = [];
+
+  function selectedBattle() {
+    return lastBattles.find((b) => b.id === battleSelect.value) || null;
+  }
+
+  function updateBattleControls() {
+    const battle = selectedBattle();
+    if (!battle) {
+      battleConfirmBtn.classList.add('hidden');
+      battleScreenUrlInput.value = '';
+      return;
+    }
+    // 片方の試合がscheduled/cancelledでも、もう片方は確定できる（結果は下の通知で個別に表示する）。
+    const eligible = RANKING_ELIGIBLE_STATUSES.includes(battle.event_a_status) ||
+      RANKING_ELIGIBLE_STATUSES.includes(battle.event_b_status);
+    battleConfirmBtn.classList.toggle('hidden', !eligible);
+    // 既定（10件）は&topを付けない（画面側の既定と一致）。
+    const topSuffix = battleTopSelect.value === '20' ? '&top=20' : '';
+    battleScreenUrlInput.value = `${APP_BASE}/ranking-battle.html?battle_id=${battle.id}${topSuffix}`;
+  }
+
+  function populateBattleSelect(battles) {
+    const prevValue = battleSelect.value;
+    battleSelect.innerHTML = '';
+    if (battles.length === 0) {
+      battleSelect.innerHTML = '<option value="">(登録されている対抗戦はありません)</option>';
+      updateBattleControls();
+      return;
+    }
+    battles.forEach((b) => {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      const orgA = b.event_a_organization_name || b.event_a_title;
+      const orgB = b.event_b_organization_name || b.event_b_title;
+      opt.textContent = `${b.label ? b.label + '：' : ''}${orgA} vs ${orgB}`;
+      battleSelect.appendChild(opt);
+    });
+    if (battles.some((b) => b.id === prevValue)) {
+      battleSelect.value = prevValue;
+    }
+    updateBattleControls();
+  }
+
+  async function loadBattles() {
+    try {
+      lastBattles = await apiFetch('/event-battles');
+      populateBattleSelect(lastBattles);
+    } catch (e) {
+      showError('対抗戦一覧の取得に失敗しました: ' + e.message);
+    }
+  }
+
+  battleSelect.addEventListener('change', updateBattleControls);
+  battleTopSelect.addEventListener('change', updateBattleControls);
+  document.getElementById('battleScreenCopyBtn').addEventListener('click', (e) => {
+    copyToClipboard(battleScreenUrlInput.value, e.target);
+  });
+
+  function describeBattleConfirmError(e) {
+    if (e.status === 400 && e.body && e.body.error === 'INVALID_EVENT_STATUS') {
+      return '現在の状態では確定できません（live/paused/finishedのときのみ）';
+    }
+    if (e.status === 404) return '試合が見つかりません';
+    return '失敗: ' + e.message;
+  }
+
+  battleConfirmBtn.addEventListener('click', async () => {
+    const battle = selectedBattle();
+    if (!battle) return;
+
+    battleConfirmBtn.disabled = true;
+    battleConfirmNote.textContent = '確定中…';
+    try {
+      // A・Bを同時に呼び、2チームの確定時刻のずれを最小にする（それぞれ独立したスナップショット）。
+      const targets = [
+        { label: `チームA（${battle.event_a_organization_name || battle.event_a_title}）`, eventId: battle.event_a_id },
+        { label: `チームB（${battle.event_b_organization_name || battle.event_b_title}）`, eventId: battle.event_b_id },
+      ];
+      const results = await Promise.allSettled(
+        targets.map((t) => apiFetch(`/events/${t.eventId}/ranking-snapshot`, { method: 'POST' }))
+      );
+      const lines = results.map((r, idx) => {
+        if (r.status === 'fulfilled') {
+          return `${targets[idx].label}: 確定しました（${new Date(r.value.triggeredAt).toLocaleString('ja-JP')}）`;
+        }
+        return `${targets[idx].label}: ${describeBattleConfirmError(r.reason)}`;
+      });
+      battleConfirmNote.textContent = lines.join(' ／ ');
+      if (results.some((r) => r.status === 'rejected')) {
+        showError('一部のチームで順位確定に失敗しました。詳細は「対抗戦（2チーム）」欄の表示を確認してください。');
+      } else {
+        clearError();
+      }
+    } finally {
+      battleConfirmBtn.disabled = false;
+    }
+  });
+
   loadEvents();
+  loadBattles();
 
   // events.html同様、bfcache復元時にも試合一覧を最新化する（pageshow対応）。
   window.addEventListener('pageshow', () => {
     loadEvents();
+    loadBattles();
   });
 })();
 </script>
