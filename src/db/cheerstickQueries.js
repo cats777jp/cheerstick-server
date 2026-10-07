@@ -448,10 +448,13 @@ async function createEvent({ title, organizationId, startsAt, endsAt }) {
 //   theme_image_url        対抗戦テーマ画像（2026-09-25、battle.html・ranking-battle.html）
 //   ranking_background_url 順位発表画面（ranking-battle.html）のチームパネル背景画像
 //   sponsor_logo_url       順位発表画面（ranking-battle.html）のチームパネル下部スポンサー枠
+//   stage_background_url   順位発表画面（ranking-battle.html）の画面全体の背景（スタジアム風の写真・イラスト）。
+//                          対抗戦全体で1枚（テーマ画像と同じ採用ルール：試合A優先、無ければ試合B）
 const EVENT_METADATA_URL_FIELDS = {
   theme_image_url: 'themeImageUrl',
   ranking_background_url: 'rankingBackgroundUrl',
   sponsor_logo_url: 'sponsorLogoUrl',
+  stage_background_url: 'stageBackgroundUrl',
 };
 const EVENT_METADATA_URL_KEYS = Object.values(EVENT_METADATA_URL_FIELDS);
 

@@ -283,6 +283,7 @@ async function main() {
     before.body.team_b.organization.name === 'チームB（スポンサー）');
   check('decorは未設定でnull', before.body.team_a.decor.background_url === null && before.body.team_a.decor.sponsor_logo_url === null);
   check('theme_image_urlは未設定でnull', before.body.theme_image_url === null);
+  check('stage_background_urlは未設定でnull', before.body.stage_background_url === null);
 
   const bad = await call('GET', `/event-battles/not-a-uuid/ranking-snapshots/latest`);
   check('不正IDは400 INVALID_ID', bad.status === 400 && bad.body.error === 'INVALID_ID');
@@ -348,6 +349,24 @@ async function main() {
   const p5 = await call('PATCH', `/admin/events/${fx.evA}`, { theme_image_url: '' });
   check('theme_image_url空文字で解除（既存挙動の維持）', p5.status === 200 && !('themeImageUrl' in p5.body.metadata));
   await call('PATCH', `/admin/events/${fx.evA}`, { theme_image_url: '/images/teams/1.png', sponsor_logo_url: '/images/teams/1.png' });
+
+  // 画面全体の背景（stage_background_url、2026-10-07追加）：テーマ画像と同じ採用ルール（試合A優先、無ければB）
+  const sb = await call('PATCH', `/admin/events/${fx.evB}`, { stage_background_url: '/images/stage-b.png' });
+  check('stage_background_url をPATCHで設定できる（試合B）', sb.status === 200 && sb.body.metadata.stageBackgroundUrl === '/images/stage-b.png', JSON.stringify(sb.body && sb.body.metadata));
+  const gs1 = (await call('GET', `/event-battles/${battleId}/ranking-snapshots/latest`)).body;
+  check('試合Aに無ければ試合Bの背景が採用される', gs1.stage_background_url === '/images/stage-b.png', gs1.stage_background_url);
+  await call('PATCH', `/admin/events/${fx.evA}`, { stage_background_url: '/images/stage-a.png' });
+  const gs2 = (await call('GET', `/event-battles/${battleId}/ranking-snapshots/latest`)).body;
+  check('両方にあれば試合Aの背景が優先される', gs2.stage_background_url === '/images/stage-a.png', gs2.stage_background_url);
+  const sbBad = await call('PATCH', `/admin/events/${fx.evA}`, { stage_background_url: { x: 1 } });
+  check('stage_background_url が文字列以外なら400 INVALID_METADATA_VALUE', sbBad.status === 400 && sbBad.body.error === 'INVALID_METADATA_VALUE');
+  const sbClearA = await call('PATCH', `/admin/events/${fx.evA}`, { stage_background_url: '' });
+  check('解除（空文字）してもA側の他のキーは維持される', sbClearA.status === 200 && !('stageBackgroundUrl' in sbClearA.body.metadata) && sbClearA.body.metadata.sponsorLogoUrl === '/images/teams/1.png', JSON.stringify(sbClearA.body && sbClearA.body.metadata));
+  const gs3 = (await call('GET', `/event-battles/${battleId}/ranking-snapshots/latest`)).body;
+  check('Aを解除するとBにフォールバックする', gs3.stage_background_url === '/images/stage-b.png', gs3.stage_background_url);
+  await call('PATCH', `/admin/events/${fx.evB}`, { stage_background_url: null });
+  const gs4 = (await call('GET', `/event-battles/${battleId}/ranking-snapshots/latest`)).body;
+  check('両方解除するとnullに戻る', gs4.stage_background_url === null, String(gs4.stage_background_url));
 
   // === 4. 再確定で最新に切り替わる ===================================================
   console.log('\n[verify] === step 4: re-confirm picks up the newest snapshot ===');

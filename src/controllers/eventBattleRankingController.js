@@ -63,10 +63,18 @@ exports.getLatest = async (req, res, next) => {
       (battle.event_b_metadata && battle.event_b_metadata.themeImageUrl) ||
       null;
 
+    // 画面全体の背景（スタジアム風の写真・イラスト、2026-10-07追加）。テーマ画像と同じ採用ルール
+    // （試合A優先、無ければ試合B）。未設定ならnull（画面側はCSSで描いた既定の背景を使う）。
+    const stageBackgroundUrl =
+      (battle.event_a_metadata && battle.event_a_metadata.stageBackgroundUrl) ||
+      (battle.event_b_metadata && battle.event_b_metadata.stageBackgroundUrl) ||
+      null;
+
     res.json({
       battle_id: battle.id,
       label: battle.label,
       theme_image_url: themeImageUrl,
+      stage_background_url: stageBackgroundUrl,
       team_a: buildTeam(
         battle.event_a_id, battle.event_a_title,
         { id: battle.org_a_id, name: battle.org_a_name, logo_url: battle.org_a_logo_url, color: battle.org_a_color },

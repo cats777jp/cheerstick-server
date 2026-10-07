@@ -6,133 +6,213 @@
 <title>順位発表（対抗戦） | 推しフル</title>
 <style>
   /* 対抗戦（2チーム）向け順位発表画面。会場スクリーン用の「確定結果」表示。
-     トーンはbattle.html・ranking-user.htmlに合わせる。ライブ更新ではなく、
-     確定ボタンが押されて新しいスナップショットが出来たときだけ描画し直す。
+     ライブ更新ではなく、確定ボタンが押されて新しいスナップショットが出来たときだけ描画し直す。
+
      表示は view で2種類に分ける（画面スペースの都合）：view=target＝推し選手ランキング、
-     view=user＝応援ユーザーランキング。左右2チームそれぞれ、1つのランキングを大きく表示する。 */
+     view=user＝応援ユーザーランキング。左右2チームそれぞれ、1つのランキングを表示する。
+
+     見た目（2026-10-07、テレビ番組・会場演出に近づけるための刷新）：
+       ・背景：events.metadata.stageBackgroundUrlの写真・イラスト。無ければCSSで描いた「夜のスタジアム」
+       ・各行：白いカード（影つき）。1〜3位は金・銀・銅の帯と大きな冠
+       ・チーム名の帯：チームカラーのグラデーション＋斜めの縞＋光沢（ちょっと斜めに切った形）
+       ・1画面に大きく見せるのは上位rows名（既定5）。6位以降は自動スクロール（scroll=offで固定）
+     サイズはすべて「1行の高さ（--row-h）」を基準にし、画面の高さとrowsから求める。 */
   :root {
-    --bg: #0b0f14;
     --text: #f4f6f8;
-    --text-muted: #9aa4af;
+    --text-muted: #b6c0cc;
     --team-a-color: #e63946;
     --team-b-color: #3a86ff;
-    --rows: 10;
+    --row-h: 110px;   /* 1行（カード）の高さ。JSが画面の高さとrowsから決める */
+    --unit: var(--row-h); /* カード内の文字・写真・余白の基準。行の高さとカードの幅の小さい方（JSが決める） */
+    --gap: 14px;      /* カード間の余白 */
+    --pad-top: 24px;  /* 先頭カードの冠がはみ出す分の余白 */
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
     height: 100%;
-    background: var(--bg);
+    background: #081226;
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
     overflow: hidden;
   }
-  #app { display: flex; flex-direction: column; height: 100vh; padding: 12px 16px; gap: 10px; }
+
+  /* --- 背景（スタジアム） --- */
+  #stage {
+    position: fixed; inset: 0; z-index: 0;
+    background:
+      radial-gradient(ellipse 55% 45% at 12% -5%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 70%),
+      radial-gradient(ellipse 55% 45% at 88% -5%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 70%),
+      radial-gradient(ellipse 90% 50% at 50% 118%, rgba(34, 139, 84, 0.55), rgba(34, 139, 84, 0) 70%),
+      linear-gradient(180deg, #081226 0%, #0c2146 52%, #0b1d33 100%);
+  }
+  /* スポットライトの光線 */
+  #stage::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      repeating-conic-gradient(from 190deg at 12% -8%, rgba(255, 255, 255, 0.06) 0deg 3deg, rgba(255, 255, 255, 0) 3deg 8deg),
+      repeating-conic-gradient(from 170deg at 88% -8%, rgba(255, 255, 255, 0.06) 0deg 3deg, rgba(255, 255, 255, 0) 3deg 8deg);
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0) 75%);
+    mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, 0) 75%);
+  }
+  /* ぼかした光の粒と、周辺を落とすビネット */
+  #stage::after {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(circle 140px at 7% 88%, rgba(255, 214, 102, 0.12), rgba(255, 214, 102, 0)),
+      radial-gradient(circle 110px at 93% 82%, rgba(120, 190, 255, 0.12), rgba(120, 190, 255, 0)),
+      radial-gradient(circle 90px at 50% 96%, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0)),
+      radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55) 100%);
+  }
+  /* 写真・イラストが設定されたとき：光線・光の粒は出さず、写真を全面に敷く */
+  #stage.has-photo { background-size: cover; background-position: center; background-repeat: no-repeat; }
+  #stage.has-photo::before, #stage.has-photo::after { display: none; }
+  /* 白いカードと文字が読みやすいよう、背景（特に写真）の上に暗い膜をかける */
+  #stageShade {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: linear-gradient(180deg, rgba(4, 9, 20, 0.30) 0%, rgba(4, 9, 20, 0.55) 100%);
+  }
+
+  #app { position: relative; z-index: 2; display: flex; flex-direction: column; height: 100vh; padding: 1.2vh 1.4vw; gap: 1.2vh; }
   #connErrorBanner {
     display: none; text-align: center; background: #b3261e; color: #fff;
     padding: 6px; border-radius: 8px; font-size: 14px;
   }
   #connErrorBanner.visible { display: block; }
 
+  /* --- ヘッダー（テーマ画像、無ければ両チームのロゴ） --- */
   #header { flex: 0 0 auto; text-align: center; }
   .theme-image {
-    display: block; width: auto; height: auto; max-width: 100%; max-height: 20vh;
-    margin: 0 auto; border-radius: 12px;
+    display: block; width: auto; height: auto; max-width: 100%; max-height: 14vh;
+    margin: 0 auto; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   }
-  #headerLogos { display: flex; align-items: center; justify-content: center; gap: 24px; }
-  #headerLogos .vs { font-size: clamp(18px, 3vh, 34px); font-weight: bold; color: var(--text-muted); }
-  .head-logo { width: clamp(40px, 9vh, 96px); height: clamp(40px, 9vh, 96px); border-radius: 50%; object-fit: cover; background: #1f2733; }
-  .head-logo-fallback {
-    width: clamp(40px, 9vh, 96px); height: clamp(40px, 9vh, 96px); border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: clamp(18px, 4vh, 40px); font-weight: bold; color: #fff;
+  #headerLogos { display: flex; align-items: center; justify-content: center; gap: 2vw; }
+  #headerLogos .vs { font-size: clamp(18px, 3.4vh, 40px); font-weight: 900; color: #fff; text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6); letter-spacing: 0.1em; }
+  .head-logo, .head-logo-fallback {
+    width: clamp(40px, 8vh, 90px); height: clamp(40px, 8vh, 90px); border-radius: 50%;
+    border: 3px solid #fff; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   }
-  #label { font-size: clamp(14px, 2.4vh, 26px); color: var(--text-muted); margin-top: 4px; min-height: 1.2em; }
+  .head-logo { object-fit: cover; background: #fff; }
+  .head-logo-fallback { display: flex; align-items: center; justify-content: center; font-size: clamp(18px, 3.6vh, 40px); font-weight: 900; color: #fff; }
+  #label { font-size: clamp(14px, 2.4vh, 28px); color: #e9eef5; text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); margin-top: 0.6vh; min-height: 1.2em; font-weight: 700; letter-spacing: 0.05em; }
 
-  #battleGrid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-height: 0; }
+  #battleGrid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 1.6vw; min-height: 0; }
 
-  /* --- チームパネル：背景はチームカラーのグラデーション＋任意の背景画像 --- */
+  /* --- チームパネル --- */
   .team-panel {
     position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0;
-    border-radius: 14px; padding: 10px 12px; overflow: hidden;
+    border-radius: 22px; padding: 1vh 1vw 1.2vh; overflow: hidden;
+    background: rgba(6, 12, 24, 0.40);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10), 0 10px 30px rgba(0, 0, 0, 0.35);
   }
-  #panelA { background: linear-gradient(160deg, color-mix(in srgb, var(--team-a-color) 45%, #0b0f14), #0b0f14 85%); }
-  #panelB { background: linear-gradient(200deg, color-mix(in srgb, var(--team-b-color) 45%, #0b0f14), #0b0f14 85%); }
-  .panel-bg {
-    position: absolute; inset: 0; background-size: cover; background-position: center;
-    opacity: 0.35; pointer-events: none;
-  }
+  /* チームごとの背景画像（events.metadata.rankingBackgroundUrl）：パネルの内側に半透明で敷く */
+  .panel-bg { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0.30; pointer-events: none; }
   .panel-bg[hidden] { display: none; }
-  .panel-inner { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 8px; }
+  .panel-inner { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0.8vh; }
 
-  .team-head { display: flex; align-items: center; justify-content: center; gap: 10px; flex: 0 0 auto; }
-  .team-head .head-logo, .team-head .head-logo-fallback { width: clamp(28px, 5vh, 52px); height: clamp(28px, 5vh, 52px); font-size: clamp(14px, 2.4vh, 24px); }
-  .team-name { font-size: clamp(16px, 3.2vh, 34px); font-weight: bold; text-align: center; word-break: break-word; }
-  .confirmed-at { text-align: center; font-size: clamp(10px, 1.5vh, 14px); color: var(--text-muted); flex: 0 0 auto; }
-
-  .sections { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .section { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+  /* チーム名の帯：チームカラーのグラデーション＋斜めの縞＋光沢。端を斜めに切り、影は外側のラッパーで付ける */
+  .team-band-wrap { flex: 0 0 auto; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5)); }
+  .team-band {
+    position: relative; display: flex; align-items: center; justify-content: center; gap: 1.2vw;
+    height: clamp(56px, 10vh, 120px); padding: 0 3vw; overflow: hidden;
+    clip-path: polygon(2.5% 0, 100% 0, 97.5% 100%, 0 100%);
+    background: linear-gradient(135deg,
+      color-mix(in srgb, var(--panel-color) 72%, #fff) 0%,
+      var(--panel-color) 42%,
+      color-mix(in srgb, var(--panel-color) 62%, #000) 100%);
+  }
+  .team-band::before { /* 斜めの縞 */
+    content: ''; position: absolute; inset: 0;
+    background: repeating-linear-gradient(115deg, rgba(255, 255, 255, 0.13) 0 16px, rgba(255, 255, 255, 0) 16px 34px);
+  }
+  .team-band::after { /* 上半分の光沢と、下辺の細い光の線 */
+    content: ''; position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0) 52%),
+      linear-gradient(0deg, rgba(255, 255, 255, 0.55) 0, rgba(255, 255, 255, 0) 5px);
+  }
+  .team-band > * { position: relative; z-index: 1; }
+  .team-band .head-logo, .team-band .head-logo-fallback { width: clamp(36px, 7vh, 82px); height: clamp(36px, 7vh, 82px); flex: 0 0 auto; }
+  .team-name {
+    font-size: clamp(22px, 5.2vh, 60px); font-weight: 900; color: #fff; letter-spacing: 0.04em;
+    text-shadow: 0 3px 8px rgba(0, 0, 0, 0.55), 0 0 2px rgba(0, 0, 0, 0.6); word-break: break-word; text-align: center;
+  }
+  .confirmed-at { text-align: center; font-size: clamp(10px, 1.5vh, 16px); color: var(--text-muted); flex: 0 0 auto; }
   .section-title {
-    flex: 0 0 auto; font-size: clamp(12px, 2.2vh, 24px); font-weight: bold; color: var(--text-muted);
-    border-bottom: 2px solid var(--panel-color); padding-bottom: 4px; margin-bottom: 6px;
+    flex: 0 0 auto; font-size: clamp(13px, 2.4vh, 28px); font-weight: 800; color: #fff; letter-spacing: 0.12em;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); padding-bottom: 0.5vh;
+    border-bottom: 3px solid var(--panel-color);
   }
-  .rank-list { flex: 1; min-height: 0; display: grid; grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); gap: 3px; }
 
-  .rank-row {
-    display: flex; align-items: center; gap: clamp(4px, 0.9vh, 10px); min-height: 0; min-width: 0;
-    background: rgba(11, 15, 20, 0.62); border: 1px solid rgba(255, 255, 255, 0.10);
-    border-radius: 8px; padding: 2px clamp(4px, 1vh, 10px);
-    /* 文字は「画面高さ」と「表示件数あたりの行の高さ」の小さい方に合わせる（top=20でも行からはみ出さない）。
-       1画面に1つのランキングだけなので、行の高さに余裕があり、従来より大きく表示できる。 */
-    font-size: clamp(9px, min(3.2vh, calc(32vh / var(--rows))), 38px);
+  /* --- ランキングの一覧（1画面にrows名。残りは同期して自動スクロール） --- */
+  .section { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; gap: 0.8vh; }
+  .list-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+  .list-track { display: flex; flex-direction: column; gap: var(--gap); padding-top: var(--pad-top); padding-bottom: var(--gap); will-change: transform; }
+
+  /* --- 白いカード --- */
+  .rank-card {
+    position: relative; flex: 0 0 auto; height: var(--row-h);
+    display: flex; align-items: center; gap: calc(var(--unit) * 0.2);
+    padding: 0 calc(var(--unit) * 0.26) 0 calc(var(--unit) * 0.22);
+    border-radius: calc(var(--unit) * 0.2);
+    background: linear-gradient(180deg, #ffffff 0%, #eef2f7 100%);
+    color: #17202e;
+    border-left: calc(var(--unit) * 0.07) solid color-mix(in srgb, var(--panel-color) 85%, #fff);
+    box-shadow: 0 calc(var(--unit) * 0.07) calc(var(--unit) * 0.18) rgba(0, 0, 0, 0.42), 0 2px 4px rgba(0, 0, 0, 0.30);
+    font-size: calc(var(--unit) * 0.40);
   }
-  .rank-row.top1 { border-color: #f5c518; background: linear-gradient(90deg, rgba(245, 197, 24, 0.22), rgba(11, 15, 20, 0.62)); }
-  .rank-row.top2 { border-color: #cfd6de; background: linear-gradient(90deg, rgba(207, 214, 222, 0.16), rgba(11, 15, 20, 0.62)); }
-  .rank-row.top3 { border-color: #cd7f32; background: linear-gradient(90deg, rgba(205, 127, 50, 0.20), rgba(11, 15, 20, 0.62)); }
+  /* 1〜3位：金・銀・銅の太い帯と、うっすら色づいた背景 */
+  .rank-card.top1 { border-left-color: #f5b800; background: linear-gradient(90deg, #fff1b8 0%, #ffffff 55%); box-shadow: 0 calc(var(--unit) * 0.07) calc(var(--unit) * 0.22) rgba(245, 184, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.30); }
+  .rank-card.top2 { border-left-color: #aab4c0; background: linear-gradient(90deg, #e6ebf1 0%, #ffffff 55%); }
+  .rank-card.top3 { border-left-color: #cd7f32; background: linear-gradient(90deg, #f3dcc4 0%, #ffffff 55%); }
 
-  .rank-badge { display: flex; align-items: center; flex: 0 0 auto; gap: 2px; }
-  .crown { width: 1.35em; height: 1.35em; flex: 0 0 auto; }
-  .crown-spacer { width: 1.35em; height: 1.35em; flex: 0 0 auto; }
-  .rank-number { min-width: 1.4em; text-align: right; font-weight: bold; font-variant-numeric: tabular-nums; color: var(--text-muted); }
-  .top1 .rank-number { color: #f5c518; }
-  .top2 .rank-number { color: #cfd6de; }
-  .top3 .rank-number { color: #e6975a; }
-
-  .photo { height: 88%; aspect-ratio: 1 / 1; border-radius: 50%; object-fit: cover; flex: 0 0 auto; background: #1f2733; }
-  .photo-fallback {
-    height: 88%; aspect-ratio: 1 / 1; border-radius: 50%; flex: 0 0 auto;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.8em; font-weight: bold; color: #fff;
+  /* 順位バッジ（丸）と冠。冠はバッジの上にのせる */
+  .rank-badge { position: relative; flex: 0 0 auto; width: calc(var(--unit) * 0.62); height: calc(var(--unit) * 0.62); }
+  .rank-number {
+    display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; border-radius: 50%;
+    background: #e3e8ef; color: #55606f; font-weight: 900; font-size: calc(var(--unit) * 0.34);
+    font-variant-numeric: tabular-nums; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.10);
   }
-  .rank-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rank-value { flex: 0 0 auto; font-weight: bold; font-variant-numeric: tabular-nums; }
-  .rank-value small { font-size: 0.55em; color: var(--text-muted); margin-left: 3px; font-weight: normal; }
+  .top1 .rank-number { background: linear-gradient(180deg, #ffd84d, #f0a800); color: #fff; text-shadow: 0 1px 2px rgba(120, 80, 0, 0.5); }
+  .top2 .rank-number { background: linear-gradient(180deg, #dfe5ec, #98a3b1); color: #fff; text-shadow: 0 1px 2px rgba(60, 70, 85, 0.5); }
+  .top3 .rank-number { background: linear-gradient(180deg, #e6a566, #b8691e); color: #fff; text-shadow: 0 1px 2px rgba(90, 45, 10, 0.5); }
+  .crown { position: absolute; left: 50%; top: calc(var(--unit) * -0.30); width: calc(var(--unit) * 0.50); height: calc(var(--unit) * 0.50); transform: translateX(-50%) rotate(-8deg); filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.35)); }
+
+  .photo, .photo-fallback {
+    flex: 0 0 auto; height: calc(var(--unit) * 0.80); aspect-ratio: 1 / 1; border-radius: 50%;
+    border: calc(var(--unit) * 0.04) solid var(--panel-color); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30);
+  }
+  .photo { object-fit: cover; background: #dfe5ec; }
+  .photo-fallback { display: flex; align-items: center; justify-content: center; font-size: calc(var(--unit) * 0.30); font-weight: 900; color: #fff; }
+  .rank-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; letter-spacing: 0.02em; }
+  .rank-value { flex: 0 0 auto; font-weight: 900; font-size: calc(var(--unit) * 0.46); font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--panel-color) 72%, #000); text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8); }
+  .rank-value small { font-size: 0.42em; color: #6b7686; margin-left: 0.25em; font-weight: 700; }
 
   .waiting, .empty {
     flex: 1; display: flex; align-items: center; justify-content: center;
-    color: var(--text-muted); font-size: clamp(14px, 2.4vh, 24px); text-align: center; padding: 10px;
+    color: #e9eef5; font-size: clamp(16px, 3vh, 34px); text-align: center; padding: 10px; font-weight: 700;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
   }
-  .empty { font-size: clamp(12px, 2.2vh, 22px); }
-  /* view指定が無いときの案内（旧URL・ブックマーク向け） */
-  #errorState a { color: #7fb0ff; margin: 0 10px; }
-  #errorState .guide-links { margin-top: 14px; white-space: normal; }
+  .empty { font-size: clamp(14px, 2.6vh, 30px); }
 
-  /* スポンサー枠：未設定ならスロットごと出さない（レイアウトを崩さない） */
-  .sponsor-slot {
-    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
-    height: clamp(28px, 7vh, 72px);
-  }
-  .sponsor-slot[hidden] { display: none; }
+  /* スポンサー枠：どちらかのチームに設定があれば、両パネルに同じ高さの枠を確保する（一覧の高さを揃えるため）。
+     未設定のチームの枠は空のまま（レイアウトを崩さない） */
+  .sponsor-slot { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; height: clamp(28px, 7vh, 80px); }
   .sponsor-slot img { max-height: 100%; max-width: 70%; object-fit: contain; }
 
+  /* view指定が無いときの案内（旧URL・ブックマーク向け） */
   #loadingState, #errorState {
-    display: flex; flex: 1; align-items: center; justify-content: center;
-    font-size: 18px; color: var(--text-muted); text-align: center; padding: 20px; white-space: pre-line;
+    position: relative; z-index: 2; display: flex; flex: 1; align-items: center; justify-content: center;
+    font-size: 20px; color: #e9eef5; text-align: center; padding: 20px; white-space: pre-line;
   }
+  #errorState a { color: #8fc0ff; margin: 0 10px; }
+  #errorState .guide-links { margin-top: 14px; white-space: normal; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
+<div id="stage"></div>
+<div id="stageShade"></div>
 <div id="app">
   <div id="connErrorBanner"></div>
   <div id="loadingState">読み込み中...</div>
@@ -163,10 +243,16 @@
 
   const params = new URLSearchParams(location.search);
   const battleId = params.get('battle_id');
-  // 表示件数：既定10件、&top=20で最大20件（スナップショット自体が上位20件まで）。
-  const topParam = parseInt(params.get('top'), 10);
-  const TOP_N = Number.isFinite(topParam) ? Math.min(20, Math.max(1, topParam)) : 10;
-  document.documentElement.style.setProperty('--rows', String(TOP_N));
+  // top：総件数（既定10、最大20。スナップショット自体が上位20件まで）。
+  // rows：1画面に大きく見せる件数（既定5、3〜10）。top > rows のとき、残りはスクロールで見せる。
+  // scroll：auto（既定。6位以降を自動スクロール）／off（固定表示。上位rows名のみ）。
+  const intParam = (name, def, min, max) => {
+    const n = parseInt(params.get(name), 10);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def;
+  };
+  const TOP_N = intParam('top', 10, 1, 20);
+  const ROWS = intParam('rows', 5, 3, 10);
+  const SCROLL_AUTO = params.get('scroll') !== 'off';
 
   const loadingState = document.getElementById('loadingState');
   const errorState = document.getElementById('errorState');
@@ -237,11 +323,7 @@
   const CROWN_COLORS = { 1: ['#f5c518', '#b8860b'], 2: ['#dfe5ec', '#8a95a3'], 3: ['#cd7f32', '#7a4a1a'] };
   function crownEl(rank) {
     const colors = CROWN_COLORS[rank];
-    if (!colors) {
-      const sp = document.createElement('span');
-      sp.className = 'crown-spacer';
-      return sp;
-    }
+    if (!colors) return null;
     const ns = 'http://www.w3.org/2000/svg';
     const svg = document.createElementNS(ns, 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
@@ -272,18 +354,19 @@
     return d;
   }
 
-  function buildRow(entry, { withPhoto, color }) {
-    const row = document.createElement('div');
-    row.className = 'rank-row' + (entry.rank >= 1 && entry.rank <= 3 ? ' top' + entry.rank : '');
+  function buildCard(entry, { withPhoto, color }) {
+    const card = document.createElement('div');
+    card.className = 'rank-card' + (entry.rank >= 1 && entry.rank <= 3 ? ' top' + entry.rank : '');
 
     const badge = document.createElement('div');
     badge.className = 'rank-badge';
-    badge.appendChild(crownEl(entry.rank));
-    const num = document.createElement('span');
+    const num = document.createElement('div');
     num.className = 'rank-number';
     num.textContent = entry.rank;
     badge.appendChild(num);
-    row.appendChild(badge);
+    const crown = crownEl(entry.rank);
+    if (crown) badge.appendChild(crown);
+    card.appendChild(badge);
 
     if (withPhoto) {
       const url = safeUrl(entry.imageUrl);
@@ -295,9 +378,9 @@
         img.alt = '';
         img.src = url;
         img.onerror = () => img.replaceWith(initialAvatar(fallbackText, color, 'photo-fallback', entry.number != null));
-        row.appendChild(img);
+        card.appendChild(img);
       } else {
-        row.appendChild(initialAvatar(fallbackText, color, 'photo-fallback', entry.number != null));
+        card.appendChild(initialAvatar(fallbackText, color, 'photo-fallback', entry.number != null));
       }
     }
 
@@ -305,7 +388,7 @@
     name.className = 'rank-name';
     name.textContent = entry.displayName;
     name.title = entry.displayName;
-    row.appendChild(name);
+    card.appendChild(name);
 
     const value = document.createElement('div');
     value.className = 'rank-value';
@@ -313,29 +396,8 @@
     const unit = document.createElement('small');
     unit.textContent = 'pt';
     value.appendChild(unit);
-    row.appendChild(value);
-    return row;
-  }
-
-  function buildSection(title, entries, opts) {
-    const sec = document.createElement('div');
-    sec.className = 'section';
-    const t = document.createElement('div');
-    t.className = 'section-title';
-    t.textContent = title;
-    sec.appendChild(t);
-    if (entries.length === 0) {
-      const e = document.createElement('div');
-      e.className = 'empty';
-      e.textContent = opts.emptyMessage;
-      sec.appendChild(e);
-      return sec;
-    }
-    const list = document.createElement('div');
-    list.className = 'rank-list';
-    entries.slice(0, TOP_N).forEach((entry) => list.appendChild(buildRow(entry, opts)));
-    sec.appendChild(list);
-    return sec;
+    card.appendChild(value);
+    return card;
   }
 
   function buildLogo(team, color, className, fallbackClass) {
@@ -353,7 +415,10 @@
     return initialAvatar(name, color, fallbackClass);
   }
 
-  function renderPanel(panelEl, team, color, hasThemeImage) {
+  // 各パネルの一覧（スクロールの対象）。renderPanelが作り直すたびに更新する。
+  let tracks = [];
+
+  function renderPanel(panelEl, team, color, hasThemeImage, showSponsorSlot) {
     panelEl.innerHTML = '';
     panelEl.style.setProperty('--panel-color', color);
 
@@ -367,16 +432,20 @@
     const inner = document.createElement('div');
     inner.className = 'panel-inner';
 
+    // チーム名の帯（グラデーション＋縞＋光沢）
     const org = team.organization;
-    const head = document.createElement('div');
-    head.className = 'team-head';
-    // テーマ画像があるときは、画像内にロゴが含まれる前提でパネル見出しはチーム名のみ。
-    if (!hasThemeImage) head.appendChild(buildLogo(team, color, 'head-logo', 'head-logo-fallback'));
+    const bandWrap = document.createElement('div');
+    bandWrap.className = 'team-band-wrap';
+    const band = document.createElement('div');
+    band.className = 'team-band';
+    // テーマ画像があるときは、画像内にロゴが含まれる前提で帯はチーム名のみ。
+    if (!hasThemeImage) band.appendChild(buildLogo(team, color, 'head-logo', 'head-logo-fallback'));
     const nameEl = document.createElement('div');
     nameEl.className = 'team-name';
     nameEl.textContent = org ? org.name : (team.event_title || '(チーム未設定)');
-    head.appendChild(nameEl);
-    inner.appendChild(head);
+    band.appendChild(nameEl);
+    bandWrap.appendChild(band);
+    inner.appendChild(bandWrap);
 
     const snap = team.snapshot;
     if (snap.snapshotId === null) {
@@ -391,35 +460,162 @@
       inner.appendChild(at);
 
       // 1画面に表示するのは、view で指定された1種類のランキングだけ。
-      const sections = document.createElement('div');
-      sections.className = 'sections';
-      if (view === 'target') {
-        // 選手が存在しないチーム（スポンサー対抗戦等、target_idがNULL）や、誰も選手を推さなかった
-        // チームは、選手別が0件になる（スナップショットからは区別できない）。見出しと案内だけを出す。
-        sections.appendChild(buildSection('推し選手ランキング', snap.target, { withPhoto: true, color, emptyMessage: 'このチームには選手ランキングの対象がありません' }));
+      const section = document.createElement('div');
+      section.className = 'section';
+      const title = document.createElement('div');
+      title.className = 'section-title';
+      title.textContent = view === 'target' ? '推し選手ランキング' : '応援ユーザーランキング';
+      section.appendChild(title);
+
+      const entries = view === 'target' ? snap.target : snap.user;
+      if (entries.length === 0) {
+        const e = document.createElement('div');
+        e.className = 'empty';
+        // 選手別が0件：選手が存在しないチーム（スポンサー対抗戦等、target_idがNULL）や、誰も選手を推さなかった
+        // チーム（スナップショットからは区別できない）。ユーザー別が0件：ニックネーム登録済み（cheer_logs.user_idあり）
+        // の応援のみが対象のため、応援データ自体はあっても未登録なら0件になる。原因が分かる文言にする。
+        e.textContent = view === 'target'
+          ? 'このチームには選手ランキングの対象がありません'
+          : 'ニックネーム登録済みの応援がまだありません';
+        section.appendChild(e);
       } else {
-        // ユーザー別は、ニックネーム登録済み（cheer_logs.user_idあり）の応援のみが対象。
-        // 応援データ自体はあっても未登録なら0件になるため、原因が分かる文言にする。
-        sections.appendChild(buildSection('応援ユーザーランキング', snap.user, { withPhoto: false, color, emptyMessage: 'ニックネーム登録済みの応援がまだありません' }));
+        const viewport = document.createElement('div');
+        viewport.className = 'list-viewport';
+        const track = document.createElement('div');
+        track.className = 'list-track';
+        entries.slice(0, TOP_N).forEach((entry) => track.appendChild(buildCard(entry, { withPhoto: view === 'target', color })));
+        viewport.appendChild(track);
+        section.appendChild(viewport);
+        tracks.push(track);
       }
-      inner.appendChild(sections);
+      inner.appendChild(section);
     }
 
-    // スポンサー枠（events.metadata.sponsorLogoUrl）：未設定なら出さない。
-    const sponsorUrl = safeUrl(team.decor && team.decor.sponsor_logo_url);
-    if (sponsorUrl) {
+    // スポンサー枠（events.metadata.sponsorLogoUrl）。どちらかのチームに設定があれば、両パネルに同じ高さの枠を確保する。
+    if (showSponsorSlot) {
       const slot = document.createElement('div');
       slot.className = 'sponsor-slot';
-      const img = document.createElement('img');
-      img.alt = '';
-      img.src = sponsorUrl;
-      img.onerror = () => slot.remove();
-      slot.appendChild(img);
+      const sponsorUrl = safeUrl(team.decor && team.decor.sponsor_logo_url);
+      if (sponsorUrl) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = sponsorUrl;
+        img.onerror = () => img.remove();
+        slot.appendChild(img);
+      }
       inner.appendChild(slot);
     }
 
     panelEl.appendChild(inner);
   }
+
+  // --- 画面の高さとrowsから、1行の高さ（--row-h）を決める ------------------------------
+  // 一覧の表示領域の高さHに、rows枚のカードと余白がちょうど収まるようにする（冠が上にはみ出す分の
+  // 余白 --pad-top も含める）。ウィンドウの大きさが変わっても、大きさの比率は変わらない。
+  let viewportH = 0;
+  let maxOffset = 0;
+
+  function applyLayout() {
+    const viewports = Array.from(document.querySelectorAll('.list-viewport'));
+    if (viewports.length === 0) { maxOffset = 0; return; }
+    const H = Math.min(...viewports.map((v) => v.clientHeight));
+    if (H <= 0) return;
+    const gap = Math.max(8, Math.round(H * 0.022));
+    const rowH = Math.max(36, Math.floor((H - gap * (ROWS - 1)) / (ROWS + 0.22)));
+    const root = document.documentElement.style;
+    root.setProperty('--row-h', rowH + 'px');
+    root.setProperty('--gap', gap + 'px');
+    root.setProperty('--pad-top', Math.round(rowH * 0.22) + 'px');
+    // カード内の寸法の基準：カードの幅に収まる大きさ（順位バッジ・写真・氏名4文字・pt・余白で約6.6単位）で頭打ちにする。
+    // rows=3のように1行が非常に高いときも、氏名が省略されないようにするため。
+    const cardW = tracks.length ? tracks[0].clientWidth : 0;
+    const unit = cardW > 0 ? Math.min(rowH, Math.floor(cardW / 6.6)) : rowH;
+    root.setProperty('--unit', unit + 'px');
+    viewportH = H;
+    rowStep = rowH + gap;
+    // 値を反映した後の高さを測る（左右で長さが違っても、長い方に合わせて同期してスクロールする）
+    const total = Math.max(...tracks.map((t) => t.scrollHeight));
+    maxOffset = Math.max(0, total - H);
+    setOffset(offset);
+  }
+
+  // --- スクロール（左右のチームを同期。自動／手動） ---------------------------------------
+  let offset = 0;
+  function setOffset(v) {
+    offset = Math.min(maxOffset, Math.max(0, v));
+    const t = 'translateY(' + (-offset) + 'px)';
+    tracks.forEach((tr) => { tr.style.transform = t; });
+  }
+
+  const HOLD_TOP_MS = 6000;      // 上位rows名を見せたまま止める時間
+  const HOLD_BOTTOM_MS = 4000;   // 一番下で止める時間
+  const SCROLL_UP_MS = 1500;     // 先頭へ戻る時間
+  const MS_PER_ROW = 1300;       // 下へ送る速さ（1行あたり）
+  const MANUAL_PAUSE_MS = 10000; // 手動操作の後、自動スクロールを止める時間
+  // 状態：holdTop（先頭で停止）→ down（下へ）→ holdBottom（最下部で停止）→ up（先頭へ戻る）→ holdTop …
+  //       手動操作されたら paused（一定時間止め、その後は先頭へ戻ってから再開）
+  let phase = 'holdTop';
+  let phaseStart = 0;
+  let phaseFrom = 0;
+  let phaseTo = 0;
+  let phaseDuration = 0;
+  let pausedUntil = 0;
+  let rowStep = 100; // 1行ぶんの送り量（カードの高さ＋余白）。applyLayoutが更新する
+  const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+
+  function startPhase(next, now, to, duration) {
+    phase = next;
+    phaseStart = now;
+    phaseFrom = offset;
+    phaseTo = to;
+    phaseDuration = duration;
+  }
+
+  function resetScroll() {
+    setOffset(0);
+    startPhase('holdTop', performance.now(), 0, 0);
+  }
+
+  function tick(now) {
+    if (SCROLL_AUTO && maxOffset > 0) {
+      if (phase === 'paused') {
+        if (now >= pausedUntil) startPhase('up', now, 0, SCROLL_UP_MS);
+      } else {
+        const elapsed = now - phaseStart;
+        if (phase === 'holdTop') {
+          if (elapsed >= HOLD_TOP_MS) startPhase('down', now, maxOffset, Math.max(2500, (maxOffset / rowStep) * MS_PER_ROW));
+        } else if (phase === 'down' || phase === 'up') {
+          const x = Math.min(1, elapsed / phaseDuration);
+          setOffset(phaseFrom + (phaseTo - phaseFrom) * ease(x));
+          if (x >= 1) startPhase(phase === 'down' ? 'holdBottom' : 'holdTop', now, phaseTo, 0);
+        } else if (phase === 'holdBottom') {
+          if (elapsed >= HOLD_BOTTOM_MS) startPhase('up', now, 0, SCROLL_UP_MS);
+        }
+      }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // 手動操作（ホイール・タッチ）。scroll=offのときは固定表示のため無効。操作の後、一定時間は自動スクロールを止め、
+  // その後は先頭へ戻ってから自動スクロールを再開する。
+  function manualScroll(delta) {
+    if (!SCROLL_AUTO || maxOffset <= 0) return;
+    setOffset(offset + delta);
+    pausedUntil = performance.now() + MANUAL_PAUSE_MS;
+    phase = 'paused';
+  }
+  const grid = document.getElementById('battleGrid');
+  grid.addEventListener('wheel', (e) => { manualScroll(e.deltaY); e.preventDefault(); }, { passive: false });
+  let touchY = null;
+  grid.addEventListener('touchstart', (e) => { touchY = e.touches[0].clientY; }, { passive: true });
+  grid.addEventListener('touchmove', (e) => {
+    if (touchY === null) return;
+    const y = e.touches[0].clientY;
+    manualScroll(touchY - y);
+    touchY = y;
+  }, { passive: true });
+  grid.addEventListener('touchend', () => { touchY = null; }, { passive: true });
+  window.addEventListener('resize', applyLayout);
 
   function render(data) {
     const colorA = (data.team_a.organization && data.team_a.organization.color) || colorFor(data.team_a.event_id);
@@ -428,6 +624,17 @@
     document.documentElement.style.setProperty('--team-b-color', colorB);
 
     document.getElementById('label').textContent = data.label || '';
+
+    // 背景：events.metadata.stageBackgroundUrl（写真・イラスト）。無ければCSSで描いたスタジアム。
+    const stageEl = document.getElementById('stage');
+    const stageUrl = safeUrl(data.stage_background_url);
+    if (stageUrl) {
+      stageEl.style.backgroundImage = 'url(' + JSON.stringify(stageUrl) + ')';
+      stageEl.classList.add('has-photo');
+    } else {
+      stageEl.style.backgroundImage = '';
+      stageEl.classList.remove('has-photo');
+    }
 
     // ヘッダー：テーマ画像があれば画像、無ければ両チームのロゴ（VS）
     const themeEl = document.getElementById('themeImage');
@@ -450,12 +657,20 @@
       logosEl.hidden = false;
     }
 
-    renderPanel(document.getElementById('panelA'), data.team_a, colorA, !!themeUrl);
-    renderPanel(document.getElementById('panelB'), data.team_b, colorB, !!themeUrl);
+    tracks = [];
+    const sponsorSlot = !!(safeUrl(data.team_a.decor && data.team_a.decor.sponsor_logo_url) ||
+                           safeUrl(data.team_b.decor && data.team_b.decor.sponsor_logo_url));
+    renderPanel(document.getElementById('panelA'), data.team_a, colorA, !!themeUrl, sponsorSlot);
+    renderPanel(document.getElementById('panelB'), data.team_b, colorB, !!themeUrl, sponsorSlot);
 
     loadingState.hidden = true;
     errorState.hidden = true;
     content.hidden = false;
+
+    // 新しい確定結果は、先頭から見せる。サイズは表示してから測る。
+    offset = 0;
+    applyLayout();
+    resetScroll();
   }
 
   let stopped = false;
@@ -466,7 +681,7 @@
       id: t.event_id, title: t.event_title, org: t.organization, decor: t.decor,
       snapshot: { id: t.snapshot.snapshotId, at: t.snapshot.triggeredAt, rows: view === 'target' ? t.snapshot.target : t.snapshot.user },
     });
-    return JSON.stringify({ label: data.label, theme: data.theme_image_url, a: pick(data.team_a), b: pick(data.team_b) });
+    return JSON.stringify({ label: data.label, theme: data.theme_image_url, stage: data.stage_background_url, a: pick(data.team_a), b: pick(data.team_b) });
   }
 
   async function poll() {
@@ -501,6 +716,7 @@
     }
   }
 
+  requestAnimationFrame(tick);
   poll();
 })();
 </script>
