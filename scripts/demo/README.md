@@ -21,7 +21,8 @@
 
 - `src/`・`public/`・`migrations/`は一切変更していない。`battle.html`本体・スコア計算ロジックにも手を加えていない
 - デバイスは事前登録が必須（未登録MACで`connect`すると`category_id`未設定の行が自動作成され、`NO_CATEGORY`で応援できない）。`battle-demo-prepare.js`が担当する
-- 送信シーケンスは `connect → select_team → count`（`register`・`set_oshi`は送らない。`--set-oshi`指定時のみ`set_oshi`を追加）
+- 送信シーケンスは `connect → register → select_team → count`（`set_oshi`は送らない。`--set-oshi`指定時のみ`set_oshi`を追加）
+  - **`register`（2026-10-07追加、既定で送る。`--no-register`で従来どおり省略）：** メールは`demo-<MAC小文字・コロン無し>@example.invalid`、ニックネームは`デモ応援団A-0001`形式。メールがMACから決まる固定値のため、再実行しても同じ`users`行を使い回す（サーバー側の`ON CONFLICT (email)`）。これを送らないと`cheer_logs.user_id`がNULLになり、順位確定のユーザー別集計（`INNER JOIN users`）から全件除外されて`ranking-battle.html`が空になる。登録に失敗してもデモは続行する（そのデバイスの応援は匿名で記録される）
 - 遅延計測（本番DBとの突合）は今回未実装。`--sent-log-path`で送信時刻ログのみ出力可能（互換のため残してある）
 
 ## 管理API・公開APIのレート制限（500リクエスト/15分、2026-09-28追記）
@@ -110,7 +111,7 @@ node scripts/demo/battle-demo.js --battle-id=<uuid> --org-a=<uuid> --org-b=<uuid
 `--devices-per-team`（既定500）、`--duration-ms`（既定180000）、`--count-interval-ms`（既定5000）、
 `--ramp-up-ms`（既定自動）、`--finish`（`close`/`A`/`B`/`none`、既定`close`）、`--url`
 （既定`wss://ws.cheerstick.com/cheer`）、`--mac-prefix`（既定`AA:00:00:02`）、
-`--team-b-start-index`（既定32768）、`--set-oshi=<target_id>`（既定送らない）、
+`--team-b-start-index`（既定32768）、`--set-oshi=<target_id>`（既定送らない）、`--no-register`（既定は`register`を送る）、
 `--report-interval-ms`（既定10000）、`--metrics-log-path`（既定自動）、`--sent-log-path`、
 `--stop-threshold`（既定0.05）、`--target-range=<low>-<high>`（既定`0.45-0.55`、
 下記「拮抗演出ロジック」参照）、`--burst`（既定無効、下記「猛攻演出」参照）、

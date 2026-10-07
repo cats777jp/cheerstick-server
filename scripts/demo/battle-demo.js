@@ -4,8 +4,12 @@
 //
 // scripts/load-test/load-test.js の構造（VirtualDevice、分散開始、指数バックオフ再接続、
 // Stats、logOnce、uncaughtException対策）を土台とし、以下を追加している。
-//   - connect -> select_team -> [set_oshi（--set-oshi指定時のみ）] -> count の送信シーケンス
-//     （register は送らない。デバイスはPhase 2の準備スクリプトで事前登録済みの前提）
+//   - connect -> [register（既定で送る。--no-registerで省略）] -> select_team ->
+//     [set_oshi（--set-oshi指定時のみ）] -> count の送信シーケンス
+//     （デバイス行はPhase 2の準備スクリプトで事前登録済みの前提。registerはニックネーム・メールを
+//     登録してデバイスにユーザーを紐づけるためのもの：registerを送らないと cheer_logs.user_id が
+//     NULLになり、順位確定のユーザー別集計〔INNER JOIN users〕から除外されてしまう。
+//     メールはMACから決まる固定値のため再実行しても同じユーザーを使い回す）
 //   - 「目標比率追従方式」の拮抗演出ロジック（cheerstick-battle-demo-phase1-2-impl-20260927.md
 //     2-3節、KMT様承認済み）
 //   - 緊急停止（同2-5節）
@@ -86,6 +90,7 @@ function parseArgs(argv) {
     macPrefix: 'AA:00:00:02',
     teamBStartIndex: 0x8000,
     setOshiTargetId: null,
+    register: true,
     reportIntervalMs: 10000,
     metricsLogPath: null,
     sentLogPath: null,
@@ -119,6 +124,7 @@ function parseArgs(argv) {
       case 'mac-prefix': args.macPrefix = value; break;
       case 'team-b-start-index': args.teamBStartIndex = parseInt(value, 10); break;
       case 'set-oshi': args.setOshiTargetId = value; break;
+      case 'no-register': args.register = false; break;
       case 'report-interval-ms': args.reportIntervalMs = parseInt(value, 10); break;
       case 'metrics-log-path': args.metricsLogPath = value; break;
       case 'sent-log-path': args.sentLogPath = value; break;
@@ -423,6 +429,11 @@ class VirtualDevice {
     const baseIndex = team === 'A' ? index : ctx.args.teamBStartIndex + index;
     this.mac = macForIndex(ctx.args.macPrefix, baseIndex);
     this.organizationId = team === 'A' ? ctx.args.orgA : ctx.args.orgB;
+    // register用（--no-register指定時は使わない）。メールはMACから決まる固定値のため、再実行しても
+    // 同じusers行を使い回す（サーバー側findOrCreateUserByEmailのON CONFLICT (email)）。
+    // 予約済みTLD .invalid のため実在のアドレスにはならない。
+    this.email = `demo-${this.mac.replace(/:/g, '').toLowerCase()}@example.invalid`;
+    this.nickname = `デモ応援団${team}-${String(index + 1).padStart(4, '0')}`;
     this.stage = 'idle';
     this.reconnectAttempts = 0;
     this.ws = null;
@@ -508,14 +519,25 @@ class VirtualDevice {
     if (msg.type === 'error') {
       this.ctx.stats.recordServerError(msg.message);
       this.ctx.stats.logOnce('app_error:' + msg.message, `server returned error: ${msg.message}`);
+      if (this.stage === 'register_sent') {
+        // 登録に失敗してもデモ自体は続行する（その場合このデバイスの応援はuser_id無し＝匿名で記録される）。
+        this.sendSelectTeam();
+      }
       return;
     }
     if (msg.type !== 'connect') return;
 
     switch (this.stage) {
       case 'connect_sent':
-        this.stage = 'select_team_sent';
-        this.sendJson({ type: 'select_team', id: this.mac, organization_id: this.organizationId });
+        if (this.ctx.args.register) {
+          this.stage = 'register_sent';
+          this.sendJson({ type: 'register', id: this.mac, name: this.nickname, email: this.email });
+        } else {
+          this.sendSelectTeam();
+        }
+        break;
+      case 'register_sent':
+        this.sendSelectTeam();
         break;
       case 'select_team_sent':
         if (this.ctx.args.setOshiTargetId) {
@@ -533,6 +555,11 @@ class VirtualDevice {
       default:
         break;
     }
+  }
+
+  sendSelectTeam() {
+    this.stage = 'select_team_sent';
+    this.sendJson({ type: 'select_team', id: this.mac, organization_id: this.organizationId });
   }
 
   scheduleNextCount(delay) {

@@ -320,6 +320,25 @@ async function main() {
     statusAfterDuration.body.status === 'set', JSON.stringify(statusAfterDuration.body));
   check('時間経過による終了でも、子プロセスは実際に終了している', !isProcessAlive(secondChildPid), `pid=${secondChildPid}`);
 
+  // === 9b. デモの応援データはregister済みのユーザーに紐づく（2026-10-07追加） ==========
+  // battle-demo.jsがselect_teamの前にregisterを送るため、cheer_logs.user_idが埋まる。
+  // 埋まっていないと順位確定のユーザー別集計（INNER JOIN users）から全件除外され、
+  // ranking-battle.htmlが空になる。
+  console.log('\n[verify] === step 9b: demo cheer_logs carry user_id (registered demo users) ===');
+  const logStats = await verifyPool.query(`SELECT count(*)::int AS total, count(user_id)::int AS with_user FROM cheer_logs`);
+  check('デモのcheer_logsが記録されている', logStats.rows[0].total > 0, JSON.stringify(logStats.rows[0]));
+  check('全てのcheer_logs行にuser_idが入っている（NULL 0件）', logStats.rows[0].total === logStats.rows[0].with_user, JSON.stringify(logStats.rows[0]));
+  const demoUsers = await verifyPool.query(
+    `SELECT count(*)::int AS n, count(DISTINCT email)::int AS distinct_email FROM users WHERE email LIKE 'demo-%@example.invalid'`
+  );
+  check('デモ用ユーザー（demo-<MAC>@example.invalid）が作成され、メールは一意',
+    demoUsers.rows[0].n > 0 && demoUsers.rows[0].n === demoUsers.rows[0].distinct_email, JSON.stringify(demoUsers.rows[0]));
+  const ownersAfter9 = await verifyPool.query(`SELECT d.mac_address, d.owner_user_id FROM devices d WHERE d.owner_user_id IS NOT NULL`);
+  check('デモ用デバイスにowner_user_idが設定されている（ユーザー数と一致）',
+    ownersAfter9.rows.length > 0 && ownersAfter9.rows.length === demoUsers.rows[0].n,
+    `owners=${ownersAfter9.rows.length} users=${demoUsers.rows[0].n}`);
+  const ownerMapAfter9 = new Map(ownersAfter9.rows.map((r) => [r.mac_address, r.owner_user_id]));
+
   // === 10. pm2相当の終了シグナル（SIGTERM）で、子プロセスが道連れで終了する =====
   console.log('\n[verify] === step 10: simulated pm2 shutdown kills the running child ===');
   await callDemo('/demo/setup', 'POST'); // 前回分のfinish-run込みで新しいバトルを用意
@@ -335,6 +354,18 @@ async function main() {
   adminDemoController.killRunningChildForShutdown();
   await sleep(1500);
   check('サーバー終了処理相当の呼び出しで、子プロセスが実際に終了する', !isProcessAlive(thirdChildPid), `pid=${thirdChildPid}`);
+
+  // 再実行（別バトルでの3回目）でも、同じMACは同じユーザーを使い回す（ON CONFLICT (email)）
+  const ownersAfter10 = await verifyPool.query(`SELECT d.mac_address, d.owner_user_id FROM devices d WHERE d.owner_user_id IS NOT NULL`);
+  const ownerMapAfter10 = new Map(ownersAfter10.rows.map((r) => [r.mac_address, r.owner_user_id]));
+  const changedOwners = [...ownerMapAfter9].filter(([mac, uid]) => ownerMapAfter10.get(mac) !== uid);
+  check('再実行しても、登録済みデバイスの所有ユーザーは変わらない（同じユーザーを使い回す）',
+    changedOwners.length === 0, `changed=${changedOwners.length}`);
+  const demoUsersAfter10 = await verifyPool.query(
+    `SELECT count(*)::int AS n, count(DISTINCT email)::int AS distinct_email FROM users WHERE email LIKE 'demo-%@example.invalid'`
+  );
+  check('再実行でもデモ用ユーザーのメールは一意のまま（重複行が増えない）',
+    demoUsersAfter10.rows[0].n === demoUsersAfter10.rows[0].distinct_email, JSON.stringify(demoUsersAfter10.rows[0]));
 
   // === 11. チーム名に依存しない取得（作成日時が最も古い2件）の確認 =============
   // 2026-09-29変更：将来チーム名が変わってもコード変更なしで動くことを確認する。

@@ -296,7 +296,7 @@
     if (entries.length === 0) {
       const e = document.createElement('div');
       e.className = 'empty';
-      e.textContent = '応援データがありません';
+      e.textContent = opts.emptyMessage;
       sec.appendChild(e);
       return sec;
     }
@@ -364,8 +364,10 @@
       const hasTargets = snap.target.length > 0;
       const sections = document.createElement('div');
       sections.className = 'sections ' + (hasTargets ? 'two' : 'one');
-      if (hasTargets) sections.appendChild(buildSection('選手ランキング', snap.target, { withPhoto: true, color }));
-      sections.appendChild(buildSection('応援ユーザーランキング', snap.user, { withPhoto: false, color }));
+      if (hasTargets) sections.appendChild(buildSection('選手ランキング', snap.target, { withPhoto: true, color, emptyMessage: '選手への応援がまだありません' }));
+      // ユーザー別は、ニックネーム登録済み（cheer_logs.user_idあり）の応援のみが対象。
+      // 応援データ自体はあっても未登録なら0件になるため、原因が分かる文言にする。
+      sections.appendChild(buildSection('応援ユーザーランキング', snap.user, { withPhoto: false, color, emptyMessage: 'ニックネーム登録済みの応援がまだありません' }));
       inner.appendChild(sections);
     }
 
