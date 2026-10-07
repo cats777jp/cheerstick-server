@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-10-07（続き） 対抗戦順位発表画面のコミット・push、staging実DBでの確認完了
+
+### 実施したこと
+- コード（`e0a6805`）とdocs（`75a4dfb`）を別コミットで`origin/feature/reference-data`へpush（岩村様の指示。未追跡の`cheerstick-ws`は含めず）
+- 岩村様がSSHトンネル（`localhost:5433`→staging）を張った後、`SELECT current_database()`で`cheerstick_staging`（ロール`cheerstick_stg`、migration 011・012適用済み）であることを確認してから実行。トンネルが張られる前に起動していた`ssh`プロセスはポート転送無しの本番EC2への通常セッションで、DB接続には使えないため、張り直しを依頼した（本番には接続していない）
+- 確認スクリプト（リポジトリ外・非コミット）で、実PostgreSQLに対して23項目を確認し、すべて合格：`PATCH /admin/events/:id`のmetadata更新（3キー同時・1キー解除＋1キー更新・非更新時の維持・複数キー同時解除・文字列以外の400）、両チーム順位確定（A・B同時POST、実DBの`RANK() OVER`）→新GET（20件打ち切り・同順位・画像/背番号補完・選手なしチーム・装飾キー・再確定で最新に切替）、確定後も試合が`live`のままであること、既存GETの応答キー不変
+- `ranking-battle.html`を実データでブラウザ確認（コンソールエラーなし）。スクリーンショット：`C:Projectsscreenshotsanking-battle-staging-20261007.jpg`
+- 確認用データ（`RBV-`プレフィックス）は全件削除。staging上の残存0件、試合数は確認前と同じ15件
+
+### 変更したファイル
+- `docs/spec.md`（9.14に追記・変更履歴）、`docs/worklog.md`（本エントリ）。コードの変更なし
+
+### 判明した事実 / 想定と違ったこと
+- 確認スクリプトの静的配信側にWindowsのパス区切りの不具合があり（画面のコードの問題ではない）、1回目の目視が「nf」表示になった。確認データを削除してスクリプトを直し、再実行して合格・目視確認した（1回目のデータも全件削除済み）
+- pg-memでは確認できなかった`jsonb ||`／`-`、`RANK() OVER`は、実PostgreSQLで想定どおり動作した（本番コード`src/`の変更は不要だった）
+
+### 次回への申し送り
+- 本番反映は未実施（岩村様の指示待ち）。手順は直前のエントリ「次回への申し送り」3のとおり（`ranking-battle.html`→`/var/www/cheerstick-app/`、`ranking-control.html`→`/var/www/cheerstick-admin/`、新規は`chown`/`chmod`、`diff`確認、`pm2 restart`）
+- 装飾枠の管理画面入力欄は後日。実機の会場スクリーン（1080p・4K・実写真）での見え方は未確認
+
+### 未解決のまま残した課題
+- 8,000人・20,000人規模の確定時間（`docs/proposals/ranking-battle-future-scaling.md`）。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-07 対抗戦向け順位発表画面`ranking-battle.html`の実装（ローカル確認まで・本番未反映・未コミット）
 
 ### 実施したこと
