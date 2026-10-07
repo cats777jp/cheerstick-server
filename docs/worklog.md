@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-10-07 対抗戦向け順位発表画面`ranking-battle.html`の実装（ローカル確認まで・本番未反映・未コミット）
+
+### 実施したこと
+- 依頼に先立ち、順位確定（`POST /admin/events/:id/ranking-snapshot`）が試合・`count`受信に影響するかを調査（読み取りのみ）。**`events.status`は変更せず、`count`の経路にも触れない**（確定は集計結果の保存のみ）。確定の所要時間は行数に比例し、現状規模なら一瞬、8,000人規模では数秒〜約25秒の見込み（外挿・実測なし）
+- 設計方針を提示し、岩村様の承認（新規エンドポイント、表示件数既定10・`top=20`、装飾枠はPATCHのみ、`ranking-control.html`に両チーム確定ボタン）を得て実装
+- 新画面`public/ranking-battle.html`、新GET`/event-battles/:id/ranking-snapshots/latest`、`PATCH /admin/events/:id`のmetadataキー（`ranking_background_url`・`sponsor_logo_url`）、`ranking-control.html`の「対抗戦（2チーム）」欄を追加。仕様は`docs/spec.md` 9.14
+- 8,000人・20,000人規模の確定時間の課題を`docs/proposals/ranking-battle-future-scaling.md`に記録（今回は対応しない）
+
+### 変更したファイル
+- コード：`public/ranking-battle.html`（新規）、`src/controllers/eventBattleRankingController.js`（新規）、`scripts/ranking-battle/local-verify.js`（新規）、`src/routes/eventBattles.js`、`src/db/cheerstickQueries.js`、`src/controllers/adminEventController.js`、`public/admin/ranking-control.html`
+- docs：`docs/spec.md`（9.14・変更履歴）、`docs/worklog.md`（本エントリ）、`docs/proposals/ranking-battle-future-scaling.md`（新規）
+- 触っていない：`battle.html`、`ranking-user.html`、`ranking-target.html`、既存のGET、レート制限、WebSocket、DB（マイグレーションなし）
+
+### 判明した事実 / 想定と違ったこと
+- 確認：`scripts/ranking-battle/local-verify.js`（pg-mem）37項目PASS。実ブラウザで10件・20件・片側のみ確定・管理画面の両チーム確定（片方scheduledで個別表示）を目視。コンソールエラーなし。スクリーンショットは`C:\Projects\screenshots\ranking-battle-*-20261007.jpg`・`ranking-control-battle-card-20261007.jpg`
+- **pg-memはウィンドウ関数（`RANK() OVER`）とjsonbの`||`/`-`に未対応。** ハーネス側でこの2種のSQLをJSで等価に置き換えて検証した（`src/`は無変更）。よって`events.metadata`への`||`/`-`のSQLそのもの（既存のテーマ画像と同種）は**実PostgreSQLで未確認**
+- 開発中の修正：背番号が2桁の選手で先頭1文字しか出ない不具合、`top=20`で文字が行からはみ出す不具合を修正
+- 「選手を持つが誰も推されなかったチーム」も選手別が0件になり、選手セクションが非表示になる（スナップショットからは「選手がいないチーム」と区別できない）。仕様として9.14に記載
+- 対抗戦の2チームの確定は2回のPOSTで、スナップショットは別々。両者の確定時刻は同時呼び出しで近づけるが、一致はしない
+
+### 次回への申し送り
+1. 未コミット（コード・docsとも）。コミットはコードと`docs:`を別にする（CLAUDE.md）。`git diff --stat docs/`の確認後に岩村様の承認でコミット、pushはその後
+2. staging等の実PostgreSQLで、`PATCH /admin/events/:id`のmetadata更新（3キー同時・解除・マージ）と、順位確定→新GETを確認
+3. 本番反映（岩村様、TeraTerm）：`git pull`→`ranking-battle.html`を`/var/www/cheerstick-app/`、`ranking-control.html`を`/var/www/cheerstick-admin/`へ`cp`（新規は`chown ubuntu:ubuntu`・`chmod 664`）→`diff`確認→`pm2 restart cheerstick-server`（API追加のため。WebSocketが一度切れる）
+4. 装飾枠（背景・スポンサーロゴ）の管理画面入力欄は後日（素材確定後）。キーの追加は`EVENT_METADATA_URL_FIELDS`に1行
+5. 実機の会場スクリーンでの見え方（1080p・4K・実写真）は未確認。今回の確認はローカルのブラウザのみ
+
+### 未解決のまま残した課題
+- 8,000人・20,000人規模の確定時間（`docs/proposals/ranking-battle-future-scaling.md`）。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-06（続き5） 火花演出の既定ON化・「対抗戦画面を開く」リンクの本番反映と確認完了（岩村様の報告に基づく記録）
 
 下記「続き4」の変更（コミット`ff15313`、docs`df64906`）を、岩村様がTeraTermで本番へ反映し、反映後の確認を完了した。

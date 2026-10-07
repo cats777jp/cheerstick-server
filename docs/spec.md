@@ -1871,6 +1871,67 @@ HTTP経由でAPIを一気通貫確認。25項目、全PASS）：**
 > 拮抗点の光・火花・揺れが発火（`sparkOn=true`、スクリーンショット）、`fx=none`では火花DOM 0個・発火なし
 > （縦幅2倍・グラデーションは維持）、`fx=spark`は`fx`なしと同じく28個。
 
+### 9.14 対抗戦向け順位発表画面 `public/ranking-battle.html`（2026-10-07実装・ローカル確認まで・本番未反映）
+
+対抗戦（2チーム、8.4章）の会場スクリーン向けに、左右2チームの**順位確定結果**を1画面で見せる画面を追加した。
+ライブ更新ではなく「確定結果」の表示。既存の単一リスト形式（`ranking-user.html`・`ranking-target.html`、9.11章）は**変更せず残している**。
+
+**URL：** `ranking-battle.html?battle_id=<対抗戦ID>[&top=10|20]`（`top`は既定10、最大20。スナップショット自体が上位20件まで）
+
+**データ取得（新規テーブル・DBスキーマ変更なし）：**
+
+```
+GET /api/v1/event-battles/:id/ranking-snapshots/latest      （src/controllers/eventBattleRankingController.js）
+  → { battle_id, label, theme_image_url,
+      team_a / team_b: { event_id, event_title, organization{id,name,logo_url,color}|null,
+                         decor: { background_url, sponsor_logo_url },
+                         snapshot: { snapshotId|null, triggeredAt, user[], target[] } } }
+  user[]   : { rank, displayName, cheerValue }
+  target[] : { rank, displayName, cheerValue, imageUrl, number }   ← targetsをLEFT JOINして現在の画像・背番号を補う
+```
+
+- 既存の`GET /events/:eventId/ranking-snapshots/latest`（9.11章・`ranking-user/target.html`用）は**変更していない**（応答のキーも従来どおり）。
+- 対抗戦用ルーター（`src/routes/eventBattles.js`）に1行追加しただけなので、スコアAPIと同じレート制限・短時間キャッシュ（12章）を継承する。設定の変更なし。
+- スナップショットは試合（event）ごと。A・Bそれぞれの最新を返し、**未確定のチームは`snapshotId: null`・空配列**（画面は「まだ順位が確定していません」）。
+- `ranking_snapshot_entries`は画像を持たないため、選手の画像・背番号は`targets`から現在値を補う。`targets`の行が既に無ければ`imageUrl`/`number`が`null`になるだけで、順位・名前・応援量は確定時点のまま。
+- 認証：スコアAPIと同じく無し・`/api/v1/admin/`配下ではないためnginxのIP制限の対象外（`battle_id`による簡易保護、8.4章と同じ位置づけ）。
+
+**画面の仕様：**
+- 上部：対抗戦テーマ画像（8.4章・`events.metadata.themeImageUrl`、A優先→B）。無ければ両チームのロゴ（VS）。
+- 左右2チームのパネル。それぞれ「選手ランキング（顔写真付き）」と「応援ユーザーランキング（ニックネームとpt）」。
+- 順位の横に冠（1位=金・2位=銀・3位=銅、インラインSVG）。同点は`RANK()`方式の同順位で、同じ冠が付く。4位以下は数字のみ。
+- チームカラー（`organizations.color`）の背景グラデーション。未設定時はIDから決める既定色（`battle.html`と同じ方式）。
+- **選手が存在しないチーム**（`target_id`がNULLでスナップショットの選手別が0件）は、選手セクションを出さずユーザーランキングのみ全幅で表示。
+  ※「選手を持つチームだが誰も推されなかった」場合も選手別が0件のため同様に非表示になる（両者はスナップショットからは区別できない）。
+- 写真なし・読み込み失敗時は、背番号（無ければ頭文字）入りの円で代替。
+- 自動更新は既存の順位発表画面と同じ3秒ポーリングを踏襲。ただしAPI応答が前回と同一の間は再描画しない（画像のちらつき防止）。
+- 外部から来るURL（ロゴ・画像・装飾）は`http(s)://`または`/`始まりのみ許可。名前等は`textContent`で描画。
+
+**装飾枠（events.metadata、DB変更なし）：** 対抗戦テーマ画像（8.4章）と同じ方式で、**チーム（試合）ごと**に次のキーを読む。未設定なら枠ごと出さない。
+
+| API（`PATCH /admin/events/:id`）の項目 | `events.metadata`のキー | 用途 |
+|---|---|---|
+| `theme_image_url` | `themeImageUrl` | 対抗戦テーマ画像（既存・8.4章） |
+| `ranking_background_url` | `rankingBackgroundUrl` | パネル背景画像（グラデーションの下に半透明で敷く） |
+| `sponsor_logo_url` | `sponsorLogoUrl` | パネル下部のスポンサー枠 |
+
+- 値が空文字・nullならそのキーのみ削除（他のキーは維持）。文字列・null以外は`400 INVALID_METADATA_VALUE`。複数キーの同時指定可（1回の`UPDATE`にまとめる）。
+- **キーの追加方法：** `src/db/cheerstickQueries.js`の`EVENT_METADATA_URL_FIELDS`に1行足すだけでPATCHが受け付ける。読む側（`eventBattleRankingController`の`decor`と画面）を足せば表示できる。
+- **管理画面への入力欄は未実装**（素材が未確定のため後日追加。それまではPATCH直叩き）。入力欄は`events.html`のテーマ画像ウィジェットを流用できる想定。
+
+**管理画面（`public/admin/ranking-control.html`）：** 「対抗戦（2チーム）」欄を追加。
+- 対抗戦を選び「両チーム順位確定」を押すと、既存の`POST /events/:id/ranking-snapshot`をA・Bに**同時に**呼ぶ（新しいAPIなし）。結果はチームごとに表示し、片方がscheduled等で確定できなくても、もう片方は確定される。
+- 順位発表画面のURL（表示件数10/20の切り替え付き）とコピーボタン。
+- 既存の「試合を選んで順位確定」「会場スクリーンURL（ユーザー別・選手別）」は変更なし。
+
+**確認（2026-10-07、ローカル・pg-mem）：** `scripts/ranking-battle/local-verify.js`（37項目PASS）と、実ブラウザ（claude-in-chrome）での目視。
+- 未確定・両チーム確定・片側のみ確定・再確定で最新に切り替わる・選手なしチーム・同点の同順位・20件打ち切り・写真あり／なし・装飾の設定／解除／マージ・不正値の400・既存GETの応答キー不変を確認。
+- スクリーンショット：`C:\Projects\screenshots\ranking-battle-*-20261007.jpg`、`ranking-control-battle-card-20261007.jpg`。
+- **ハーネスの制約（実PostgreSQLでの確認は未実施）：** pg-memはウィンドウ関数（`RANK() OVER`）とjsonbの`||`/`-`演算子に未対応のため、ハーネス側で順位確定の集計とmetadataのUPDATEをJSで等価に置き換えて検証した。`src/`は変更していない。**`events.metadata`への`||`/`-`のSQL自体（既存のテーマ画像と同種）は、staging等の実PostgreSQLで確認が必要。**
+- 本番デプロイは未実施。デプロイ時は`ranking-battle.html`を`/var/www/cheerstick-app/`へ、`ranking-control.html`を`/var/www/cheerstick-admin/`へコピーし（新規ファイルは`chown ubuntu:ubuntu`・`chmod 664`、`docs/runbook.md`参照）、`pm2 restart`が必要（API追加のため）。
+
+**将来対応（今回は対象外）：** 8,000人・20,000人規模では順位確定1回に数秒〜約25秒かかる見込み。詳細は`docs/proposals/ranking-battle-future-scaling.md`。
+
 ## 10. 未実施の検証
 
 **2,000〜20,000本規模の負荷試験は一度も実施していない。**
@@ -2744,3 +2805,4 @@ WebARENA VPSから`battle-demo.js`で、本番EC2（t3.micro）に対し`legacy`
 | 2026-10-01 | 9.4・9.13に追記：`gauge=recent`のゲージ縦幅2倍・グラデーションの`gauge=recent`全般への適用、火花の上下両方向化 | KMT様指示書（見た目調整）に基づく。実機の本番イベント画面（`gauge=recent`付き）の見た目にも影響することをKMT様が確認済み。既存記述の変更・削除なし（9.13の「`fx`有効時のみバー色」は追記で現行を明記） |
 | 2026-10-06 | 9.13に追記：火花演出を既定ON化（`&fx=none`で無効化する除外方式）、デモモードのチェックボックスを「ゲージ演出（火花）OFF」に反転、8.4章の対抗戦ペア一覧のURLに`gauge=recent&poll=1000`を付与し「対抗戦画面を開く」リンクを追加 | 見込み顧客向けデモで好評だったため実機の本番イベント画面でも常時表示したいという岩村様の依頼、および現場でURLが分かりにくく手打ち・ブックマークに頼っていたため。実機の対抗戦画面が「直近の勢い方式」に切り替わることは岩村様が了承済み。コミット`ff15313`。既存記述の変更・削除なし（9.13の「`fx=spark`のときのみ」等は追記で現行を明記）。本記載時点で本番未反映 |
 | 2026-10-06 | 9.13の2026-10-06追記（火花の既定ON化・`fx=none`・対抗戦ペア一覧の「対抗戦画面を開く」）の状態を「本番未反映」から「本番反映済み」へ更新（追記のみ） | 岩村様がTeraTermで本番へ反映し、反映後の確認3点（ペア一覧URLの`&gauge=recent&poll=1000`付与、デモのチェックなしで火花・シェイク発火、チェックありで非発火）が問題なしとの報告を受けたため。数値・結果は岩村様の報告に基づく記録。既存記述は削除せず、9.13追記の「本番未反映」は本行をもって現行を更新 |
+| 2026-10-07 | 9.14「対抗戦向け順位発表画面`ranking-battle.html`」を新設。8.9・9.11の既存画面・既存GETは変更なし | KMT様（岩村様）の依頼。対抗戦向けに左右2チーム・選手（顔写真）／ユーザー別ランキング・冠・チームカラー・装飾枠（`events.metadata`）の画面を追加。新規テーブルなし、新規GET（`/event-battles/:id/ranking-snapshots/latest`）1本とPATCHのmetadataキー2つ（`ranking_background_url`・`sponsor_logo_url`）を追加。ローカル（pg-mem）で37項目確認、実PostgreSQLでの`jsonb`演算子確認と本番デプロイは未実施。装飾枠の管理画面入力欄は後日 |
