@@ -1947,6 +1947,24 @@ GET /api/v1/event-battles/:id/ranking-snapshots/latest      （src/controllers/e
 
 > **2026-10-07追記（空表示の文言）：** ユーザー別が0件のときの文言を「応援データがありません」から「ニックネーム登録済みの応援がまだありません」に変更した（選手別は「選手への応援がまだありません」）。ユーザー別は`cheer_logs.user_id`ありの応援のみが対象で、応援データ自体はあっても未登録なら0件になるため、原因が分かる表現にした（9.12章の追記参照）。集計仕様・API応答は変更なし。
 
+> **2026-10-07追記（推し選手ランキングと応援ユーザーランキングを別URLに分割・`ranking-control.html`の見出し整理・ローカル確認まで・本番未反映）：** 画面スペースの都合（選手とユーザーを同時に表示すると窮屈）で、上記のURL仕様を次のように変更した。**1本のURLで両方を表示する旧形式は廃止**し、`ranking-battle.html`を`view`パラメータで出し分ける（別ファイルは作らない。共通部分が多く、デプロイ対象が増えないため）。
+>
+> ```
+> ranking-battle.html?battle_id=<対抗戦ID>&view=target[&top=10|20]   … 推し選手ランキング（顔写真・冠付き）
+> ranking-battle.html?battle_id=<対抗戦ID>&view=user[&top=10|20]     … 応援ユーザーランキング（ニックネーム・pt・冠付き）
+> ```
+>
+> - どちらも左右2チームを並べ、各パネルに**1つのランキングだけ**を大きく表示する（文字・行が従来より大きい）。冠・同順位・チームカラー・背景画像・スポンサー枠・テーマ画像は従来どおり。
+> - **`view`が無い・不正なとき**（旧URL・ブックマーク）は、ランキングを表示せず、「表示の種類（view）の指定がありません」と、`view=target`・`view=user`への2つのリンク（`battle_id`を引き継ぐ）を表示する。
+> - **`view=target`で、あるチームの選手別が0件**（選手がいないチーム、または誰も選手を推さなかったチーム。スナップショットからは区別できない）の場合は、そのパネルに「このチームには選手ランキングの対象がありません」と表示する（従来の「選手セクションを非表示にしてユーザーのみ全幅」は、画面を分けたため該当しなくなった）。`view=user`が0件のときは「ニックネーム登録済みの応援がまだありません」。
+> - 再描画の判定は、表示中の`view`に関係する部分（確定結果・装飾・チーム情報）だけを比較する（表示していない側のランキングが変わっただけでは再描画しない）。
+> - **API（`GET /event-battles/:id/ranking-snapshots/latest`）は変更していない。** 両方のデータを一度に返す設計のままで、画面側が出し分ける。
+> - **`public/admin/ranking-control.html`：** 対抗戦用のURL欄を、「推し選手ランキング」（上）と「応援ユーザーランキング」（下）の2つ（それぞれ「コピー」付き、表示件数は共通）に分けた。あわせて、画面全体を**「対抗戦用」（上）**と**「単独イベント用（対抗戦を組まない試合）」（下）**の見出しに整理した（旧：対抗戦の欄が下にあり、用途の表記がなかった）。「両チーム順位確定」・単独イベント用の確定ボタンの動作は変更なし。
+> - **単独イベント用の`ranking-user.html`・`ranking-target.html`（9.11章）は変更せず残す。** 対抗戦を組まない試合（V・ファーレン長崎のホームゲーム、8,000人規模イベントの男子・女子フェーズ等）で必要になるため。実イベントでの使用実績は、2026-10-07時点でまだない。
+> - **将来の拡張候補（未実装）：** 単独イベントも`ranking-battle.html`のリッチな表示（冠・顔写真・チームカラー等）にし、旧2画面を引退させる案。詳細は`docs/proposals/ranking-battle-single-event-mode.md`。1月の8,000人イベントで男子・女子フェーズを同じ見せ方にしたい可能性があるため記録した。
+> - 確認：ローカル（pg-mem、`scripts/ranking-battle/local-verify.js`のサーバー）でブラウザ目視（`view=target`・`view=user`、`top=20`、選手なしのチーム、片側のみ確定、`view`なしの案内、`ranking-control.html`）。コンソールエラーなし。スクリーンショットは`C:\Projects\screenshots\ranking-battle-view-*-20261007.jpg`・`ranking-control-split-urls-20261007.jpg`。
+> - デプロイ：`ranking-battle.html`を`/var/www/cheerstick-app/`へ、`ranking-control.html`を`/var/www/cheerstick-admin/`へ、既存ファイルの上書きコピー（新規ファイルではないため`chown`は不要）。サーバー側の変更はなく`pm2 restart`も不要。
+
 ## 10. 未実施の検証
 
 **2,000〜20,000本規模の負荷試験は一度も実施していない。**
@@ -2823,3 +2841,4 @@ WebARENA VPSから`battle-demo.js`で、本番EC2（t3.micro）に対し`legacy`
 | 2026-10-07 | 9.14「対抗戦向け順位発表画面`ranking-battle.html`」を新設。8.9・9.11の既存画面・既存GETは変更なし | KMT様（岩村様）の依頼。対抗戦向けに左右2チーム・選手（顔写真）／ユーザー別ランキング・冠・チームカラー・装飾枠（`events.metadata`）の画面を追加。新規テーブルなし、新規GET（`/event-battles/:id/ranking-snapshots/latest`）1本とPATCHのmetadataキー2つ（`ranking_background_url`・`sponsor_logo_url`）を追加。ローカル（pg-mem）で37項目確認、実PostgreSQLでの`jsonb`演算子確認と本番デプロイは未実施。装飾枠の管理画面入力欄は後日 |
 | 2026-10-07 | 9.14に追記：staging実DB（実PostgreSQL）での確認完了（23項目合格） | 前回のpg-mem確認で未確認だった`events.metadata`の`jsonb ||`／`-`のSQLと、実DBの`RANK() OVER`による順位確定→新GETの流れを、岩村様が張ったSSHトンネル経由でstagingに対して確認した。確認用データは全件削除済み。既存記述の変更・削除なし。本番は未反映 |
 | 2026-10-07 | 9.12に追記：デモ（`battle-demo.js`）が`select_team`の前に`register`を送るよう変更（既定。`--no-register`で従来動作）。9.14に追記：ユーザー別0件時の文言変更。`docs/runbook.md`に旧デモ分の`cheer_logs.user_id`埋め戻し手順を追加 | デモ後の`ranking-battle.html`が空になった件の調査（デモのデバイスが`register`されず`cheer_logs.user_id`がNULLで、順位確定のユーザー別集計の`INNER JOIN users`から除外されていた）を受けた岩村様の指示。本番ではニックネーム・メール登録が必須で匿名応援は発生しないためデモ特有の問題。順位確定の集計仕様（`ranking-user.html`・`ranking-target.html`含む）・本番の応援フローは変更していない。ローカル（pg-mem）でデモ検証41項目PASS、埋め戻しSQLはstaging実DBでROLLBACK前提で確認。本番未反映 |
+| 2026-10-07 | 9.14に追記：対抗戦の順位発表画面を`view=target`（推し選手）・`view=user`（応援ユーザー）の2URLに分割し、旧「1本で両方表示」は廃止（`view`なしは案内表示）。`ranking-control.html`のURL欄を2つに分け、画面を「対抗戦用」（上）・「単独イベント用」（下）に整理。単独イベント用の`ranking-user.html`・`ranking-target.html`は残す。将来の拡張候補として`docs/proposals/ranking-battle-single-event-mode.md`を追加 | 画面スペースの都合（選手とユーザーを1画面に同時表示すると窮屈）という岩村様の依頼。方式は新規ファイルではなく`view`パラメータ（共通部分が多く、デプロイ対象が増えないため）。APIは変更なし（両方のデータを返す設計のまま）。旧2画面は、対抗戦を組まない単独イベント（V・ファーレン長崎のホームゲーム、8,000人イベントの男子・女子フェーズ）で必要になるため残す（岩村様承認）。ローカルで目視確認、本番未反映 |
