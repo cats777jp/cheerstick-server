@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-10-07（続き9） 順位発表画面の見栄え刷新（サイズ拡大・自動スクロール・カード型・背景）（ローカル確認まで・本番未反映・未コミット）
+
+### 実施したこと
+- **調査・設計（岩村様承認済み）：** 1画面に大きく見せるのは上位5名、自動スクロール既定（`scroll=off`で固定）、背景は新キー`stageBackgroundUrl`（API応答に1フィールド追加）、管理画面（`ranking-control.html`）への選択肢追加は見送り（URLパラメータのみ）
+- **`ranking-battle.html`の刷新：**
+  - URLパラメータ：`rows`（1画面の人数、既定5、3〜10）、`scroll`（`auto`既定／`off`）。`top`は総件数（既定10、最大20）の意味になるが既存のURLは壊れない
+  - 1行の高さは画面の高さと`rows`から決める。カード内の寸法は「行の高さ」と「カードの幅」の小さい方で頭打ち（`rows=3`のような非常に高い行でも氏名が省略されない）
+  - 自動スクロール：6位以降を、先頭6秒停止→下へ（1行1.3秒）→最下部4秒停止→先頭へ戻る、の往復。左右のチームは同期。手動のホイール・タッチも可（操作後10秒停止して先頭へ戻り再開。`scroll=off`では無効）
+  - デザイン：白いカード（影つき）、1〜3位は金・銀・銅の帯と大きな冠（バッジの上）、チーム名の帯はグラデーション＋斜めの縞＋光沢、余白を広げた、背景はCSSで描いた夜のスタジアム（既定）または写真・イラスト
+- **API（後方互換の追加）：** `GET /event-battles/:id/ranking-snapshots/latest`に`stage_background_url`（試合A優先、無ければB、未設定はnull）。`PATCH /admin/events/:id`に`stage_background_url`（`EVENT_METADATA_URL_FIELDS`に1行）
+- 記録：`docs/spec.md` 9.14に追記・変更履歴、`docs/runbook.md`に反映手順と背景画像の設定方法
+
+### 変更したファイル
+- コード：`public/ranking-battle.html`、`src/controllers/eventBattleRankingController.js`、`src/db/cheerstickQueries.js`、`scripts/ranking-battle/local-verify.js`
+- docs：`docs/spec.md`、`docs/runbook.md`、`docs/worklog.md`（本エントリ）
+- 触っていないもの：集計・スナップショット・`battle.html`・`ranking-user.html`・`ranking-target.html`・`ranking-control.html`、DB（マイグレーションなし）
+
+### 判明した事実 / 想定と違ったこと
+- 確認：`scripts/ranking-battle/local-verify.js`は45項目PASS（従来37＋背景キー8）。ローカルのブラウザ（pg-mem、前回のランキング見せ用データ）で、1920×1080の`rows=5`・`10`・`3`、自動スクロール（先頭→6〜10位→先頭へ戻る）、手動のホイール（左右が同期して停止）、背景画像あり／なし、選手なしのチーム、片側のみ確定、スポンサー枠、を目視。コンソールエラーなし。スクリーンショットは`C:\Projects\screenshots\ranking-rich-*-20261007.jpg`
+- **「4倍」は、線形の拡大では物理的に不可能**（1080pで5名なら1行の高さは最大約140px）。5名表示で、1行の高さ約2.1倍（約56px→約120px）、氏名約48px、顔写真約96px、面積では約4〜5倍
+- 実装中の不具合を確認で見つけて修正：`rows=3`で文字が大きくなりすぎ、氏名が「タ…」のように省略された。カード内の寸法を、行の高さとカードの幅の小さい方（`--unit`）に変えて解消
+- ローカルの確認サーバー（pg-mem）は、jsonbの`||`に未対応のため、背景キーのPATCH経由の設定は500になる（本番・stagingの実PostgreSQLの問題ではない。従来のテーマ画像等と同じ制約）。背景画像ありの目視は、DBへ直接設定して行った。**`PATCH`で背景キーを設定するSQLそのものは、実PostgreSQL（staging）では未確認**（`||`／`-`の式自体は、2026-10-07にstagingで確認済みの既存の式と同じ）
+- 会場の実機・実写真（1080p・4K、実際の背景写真）での見え方、自動スクロールの速さ・停止時間（6秒・4秒・1行1.3秒）は未確認。実際のスクリーンで見てから調整する余地がある
+
+### 次回への申し送り
+1. 未コミット（コード・docsとも）。コードと`docs:`は別コミット。`git diff --stat docs/`の確認後、岩村様の承認でコミット・push
+2. 本番反映（岩村様、TeraTerm）：`git pull`→`ranking-battle.html`を`/var/www/cheerstick-app/`へ上書き`cp`（chown不要）→`diff`確認→**`pm2 restart cheerstick-server`が必要**（API・PATCHの変更を含むため。実イベントの無い時間帯に。WebSocketが一度切れる）。反映後、順位発表画面の新デザインと、API応答の`stage_background_url`（`null`）を確認
+3. 背景素材は後日用意（岩村様）。届いたら、runbookの手順（`POST /admin/uploads/image`でURLを得て、`PATCH /admin/events/:id`の`stage_background_url`に設定）。実PostgreSQLでの`PATCH`は、そのとき本番で初めて動く（stagingで先に確認しておくのが安全）
+4. 管理画面への`rows`・`scroll`の選択肢、背景画像の入力欄は、今回見送り（必要になったら追加）
+
+### 未解決のまま残した課題
+- 上記の本番反映・背景素材。未追跡の`cheerstick-ws`は従来どおり
+
+---
+
 ## 2026-10-07（続き8） ランキング見せ用デモの本番反映・動作確認の完了（岩村様の報告に基づく記録）
 
 本エントリは**岩村様の報告に基づく記録**。Claude Codeは本番に接続しておらず、本番での確認は行っていない（コード変更もなし）。過去エントリは編集しない運用のため、「続き7」の「本番未反映・選手と画像は未投入」は、本エントリで**本番反映済み・投入済み**に更新する。

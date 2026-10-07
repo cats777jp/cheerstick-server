@@ -993,6 +993,34 @@ node scripts/demo/ranking-showcase-prepare.js --yes
 - **後片付け（削除）：** `docs/proposals/demo-cleanup-2026-10-07.md`の第7章・付録C（棚卸し）・付録D（削除）。先に、そのデモの試合を付録A・Bの手順で削除する。
 - 画像ファイルの再生成が必要なとき（選手の定義を変えたとき）：`node scripts/demo/generate-demo-avatars.js`（ローカル）。同じ入力から同じ画像ができる。
 
+### 順位発表画面（ranking-battle.html）の見栄え刷新の反映と、背景画像の設定（2026-10-07追加）
+
+理由：順位発表画面の見た目を刷新した（`docs/spec.md` 9.14章の2026-10-07追記）。**今回はサーバー側の変更（API応答に
+`stage_background_url`、`PATCH /admin/events/:id`に同キー）を含むため、静的ファイルのコピーに加えて`pm2 restart`が必要**
+（直前の`view`分割は静的ファイルのみで再起動不要だった）。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+sudo cp public/ranking-battle.html /var/www/cheerstick-app/ranking-battle.html   # 既存ファイルの上書き（chown不要）
+diff /var/www/cheerstick-app/ranking-battle.html public/ranking-battle.html && echo "ranking-battle: OK"
+pm2 restart cheerstick-server   # 実イベントの無い時間帯に（WebSocketが一度切れる）
+```
+
+- 反映後の確認：`ranking-control.html`の「対抗戦用」に表示される2つのURL（`view=target`・`view=user`）を開く。背景は、素材が無い間はCSSで描いた夜のスタジアムが出る。
+- **表示のパラメータ（URL）：** `rows`（1画面に大きく見せる人数、既定5、3〜10）、`scroll`（`auto`＝既定、6位以降を自動スクロール／`off`＝固定表示）、`top`（総件数、既定10、最大20）。例：`…&view=target&rows=5&top=10`、固定表示にするなら`&scroll=off`。
+- **背景画像（スタジアム風の写真・イラスト）の設定：** 管理画面の入力欄は未実装。画像（jpg/png、5MBまで、横長の1920×1080程度）をアップロードしてURLを得て、対抗戦の試合Aまたは試合B（A優先）に設定する。本番EC2から、管理API（`127.0.0.1:3000`）を使う例：
+  ```bash
+  # 1. アップロード（レスポンスの url を控える）
+  curl -s -F "file=@stadium.jpg" http://127.0.0.1:3000/api/v1/admin/uploads/image
+  # 2. 試合Aに設定（試合のIDは管理画面または GET /api/v1/admin/events で確認）
+  curl -s -X PATCH -H "Content-Type: application/json" \
+    -d '{"stage_background_url":"<上で得たurl>"}' http://127.0.0.1:3000/api/v1/admin/events/<試合AのID>
+  # 解除する場合は "stage_background_url": "" （空文字）を送る
+  ```
+  設定後、順位発表画面は次回のポーリング（3秒以内）で画像が反映される（画面の再読み込みは不要）。写真は、白いカードと文字が読みやすいよう、暗い膜をかけて表示される。
+- 素材を差し替えたい・外したいときは、同じPATCHで別のURL・空文字を送る（削除用の特別な手順は不要）。アップロードした画像は`/var/www/cheerstick-app/images/uploads/`に残る（バックアップ手順は上の「アップロード画像のバックアップ」）。
+
 ---
 
 ## 未確認・保留中のファイル
