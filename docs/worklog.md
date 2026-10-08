@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-10-08（続き2） Vanstone様の実機検証用デバイス（A4:C1:38:32:06:07）のcategory_id設定（本番DBの書き込み）
+
+- **依頼（岩村様）：** 実機検証用に`A4:C1:38:32:06:07`を新規登録（当初は`is_demo=true`、V・ファーレン長崎のカテゴリー）
+- **事前確認（読み取りのみ）：** 当該MACは**既に本番`devices`にあった**（id `a59eb021-7cec-4765-a188-eb850aea55a9`、`category_id`=NULL、`is_demo=false`、`owner_user_id`=NULL、`created_at`=2026-10-08 01:10:56 UTC）。`POST`では409になるため、登録ではなく更新で対応。`categories`は「Jリーグ」「SVリーグ」「デモ用」の3件のみで「V・ファーレン長崎」というカテゴリーは無い（長崎は組織で、`organizations.category_id`はJリーグ）。登録経緯の記録は`docs/`に無く、登録時刻がVanstone様の追加依頼に近いことから、アプリ側からの接続で自動登録された可能性があると岩村様が判断
+- **方針（岩村様確定）：** `is_demo=false`（当初の`true`から訂正。Vanstone様が自分たちで検証する通常の実機として、実機検証イベントの集計に含める）、`category_id`=Jリーグ（`10000000-0000-0000-0000-000000000001`）
+- **実行：** 本番EC2上から`PATCH http://127.0.0.1:3000/api/v1/admin/devices/a59eb021-7cec-4765-a188-eb850aea55a9`、body `{"category_id":"10000000-0000-0000-0000-000000000001","is_demo":false}` → HTTP 200
+- **更新前→後：** `category_id` NULL→Jリーグ、`is_demo` false→false（変更なし）、`owner_user_id` NULLのまま
+- **確認：** SELECTで上記の値を確認済み。対象は当該1行のみ。実機での接続（WebSocket `connect`がエラーにならないこと）は未確認
+- **補足：** `category_id`未設定だとWebSocket `connect`でエラーになる仕様（2026-08-18エントリ）。`devices`に`updated_at`列は無い
+
+---
+
 ## 2026-10-08（続き） 順位発表画面の10位表示不具合：本番反映・動作確認の完了（岩村様の報告）
 
 - 前エントリの修正（コミット`490fbf0`、`public/ranking-battle.html`の`ResizeObserver`追加）を本番へ反映済み。岩村様が本番で動作確認し、**10位・20位まで表示とスクロール（自動・手動）に問題ないことを確認**したと報告を受けた
