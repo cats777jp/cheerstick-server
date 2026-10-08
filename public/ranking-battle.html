@@ -617,6 +617,17 @@
   grid.addEventListener('touchend', () => { touchY = null; }, { passive: true });
   window.addEventListener('resize', applyLayout);
 
+  // 一覧の表示領域の高さは、ヘッダーのテーマ画像の読み込み完了などで後から変わる（画像が無い場合との差は十数％）。
+  // 描画直後の1回だけ測ると、スクロール範囲（maxOffset）が古い値のまま固定され、最下位の行が見えなくなるため、
+  // 表示領域の大きさが変わるたびに測り直す。
+  let layoutObserver = null;
+  function observeLayout() {
+    if (layoutObserver) layoutObserver.disconnect();
+    if (typeof ResizeObserver === 'undefined') return;
+    layoutObserver = new ResizeObserver(applyLayout);
+    document.querySelectorAll('.list-viewport').forEach((v) => layoutObserver.observe(v));
+  }
+
   function render(data) {
     const colorA = (data.team_a.organization && data.team_a.organization.color) || colorFor(data.team_a.event_id);
     const colorB = (data.team_b.organization && data.team_b.organization.color) || colorFor(data.team_b.event_id);
@@ -671,6 +682,7 @@
     offset = 0;
     applyLayout();
     resetScroll();
+    observeLayout();
   }
 
   let stopped = false;
