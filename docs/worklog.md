@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-10-10 セッション
+
+### 実施したこと
+- **サーリューション様（旧Node-RED版WebView開発者）の情報と現行システムの比較調査**（コード読み取りのみ・実装なし）：①`broadcast`（試合開始・終了通知）は現行に**未実装**（`broadcast()`は定義のみで呼び出しゼロ、WebViewも`connect`/`error`しか処理しない）。②送信タイミングは「5回受信ごと」で旧仕様と一致するが、ペイロードは旧`{type:"count", id, count(累積), stat, ts}`に対し現行は`{type:"count", id, value(5回分の増分), duration_ms}`で別物。③`PATCH /admin/events/:id/status`はDB更新・ログ・応答のみで、WebViewへの通知は**無い**。④旧stopのテストモードは試合全体の管理者操作に対する全員向け挙動という理解はサーリューション様の説明と整合するが、現行docsには明示的な記載がなく、spec 9章は「試合状態(stat)表示：不要との方針」。現行はlive以外ならサーバーが`count`を黙って破棄（4.3章）
+- **「応援を終了する」の修正**（`public/index.html`）：WebSocketを閉じずに応援終了画面（`endedCard`）に留まり、「続きから応援する」で応援中画面へ戻れるようにした。詳細は`docs/spec.md` 9.15。ローカル確認（モックWS＋Chrome）まで完了、本番未反映
+
+### 変更したファイル
+- `public/index.html`（コミット b8d9fbf）
+- `docs/spec.md`（9章の注記・9.15新設・変更履歴）、`docs/worklog.md`
+
+### 判明した事実 / 想定と違ったこと
+- 本番コードとの差異は未確認（本番EC2にはSSH接続していない。ローカルHEADは`origin/feature/reference-data`と一致）
+- 旧`count`は累積値、現行は増分値。旧`gameController`の`stat`語彙（on/pause/end）、旧WebViewの`start/stop`、現行DBの`scheduled/live/paused/finished`で状態の語彙が三者三様
+- 終了後は`onCheerStickData`が即returnするため、LED返送（`stat:'OK'`）も止まる。終了中のLED状態はアプリ任せ（実機で観察要）
+
+### 次回への申し送り
+- **実機テスト：** WebView側（終了画面・接続維持・count停止／再開）とアプリ全体（最小化するか・BLEが切れるか・終了中のLED）を分けて記録する（報告形式は9.15末尾）
+- **Vanstone様への確認（回答待ち）：** `{stat:'end'}`受信時にアプリを終了・最小化する実装か
+- **本番反映：** `public/index.html`の変更のみ。`/home/ubuntu/cheerstick-server-new/public/index.html`と`/var/www/cheerstick-app/index.html`の2箇所同期＋diff確認が必要。ご指示があるまで未実施
+- **判断待ち（実装していない）：** `broadcast`による試合開始・終了通知を作るか。作る場合は、増分値vs累積値、`paused`をstop扱いにするか、試合中にページを開いたときの既存累積の反映、`team_id`単位か全員向けか、の4点を要決定
+
+### 未解決のまま残した課題
+- `intentionalClose`が死にコードとして残っている（最小限の修正方針のため触らず）
+- 非live中もクライアントが`count`を送り続け、画面は「試合中の累計」のままで、公式記録か練習扱いか利用者に分からない（上記`broadcast`の判断とセット）
+
+---
+
 ## 2026-10-08（続き6） SSH制限の詳細（セキュリティグループ情報）を`docs/runbook.md`に反映（岩村様の情報提供）
 
 - **岩村様から共有された情報：** 変更前の許可元は`0.0.0.0/0`（全世界）。設定場所はAWSマネジメントコンソールの、EC2インスタンスに紐づくセキュリティグループ（`sg-023981e11e3fadeed`、`launch-wizard-1`）のインバウンドルール編集画面。ロールバックは同じ画面で22番ポートのソースを`49.156.217.121/32`から`0.0.0.0/0`に戻して保存（緊急時以外は行わない想定）
