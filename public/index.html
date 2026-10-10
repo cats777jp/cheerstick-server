@@ -470,6 +470,12 @@
     <button id="endCheeringBtn">応援を終了する</button>
   </div>
 
+  <!-- 6. 応援終了画面 -->
+  <div id="endedCard" class="card hidden">
+    <h1>応援ありがとうございました</h1>
+    <button id="resumeCheeringBtn" style="margin-top: 20px;">続きから応援する</button>
+  </div>
+
 <script>
 (function () {
   const params = new URLSearchParams(window.location.search);
@@ -528,6 +534,8 @@
   const playerSelectCard = document.getElementById('playerSelectCard');
   const welcomeCard = document.getElementById('welcomeCard');
   const cheeringCard = document.getElementById('cheeringCard');
+  const endedCard = document.getElementById('endedCard');
+  const resumeCheeringBtn = document.getElementById('resumeCheeringBtn');
 
   const startCheeringBtn = document.getElementById('startCheeringBtn');
   const endCheeringBtn = document.getElementById('endCheeringBtn');
@@ -580,6 +588,7 @@
   let socket;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
+  let cheerEnded = false; // 「応援を終了する」後は、再接続しても終了画面を維持する
   let intentionalClose = false; // 「応援を終了する」ボタン等での意図的な切断フラグ（再接続しない）
 
   // ランダム要素を含む再接続待機時間を計算する。
@@ -655,7 +664,7 @@
   }
 
   function hideAllCards() {
-    [nameFormCard, teamSelectCard, playerSelectCard, welcomeCard, cheeringCard].forEach((c) =>
+    [nameFormCard, teamSelectCard, playerSelectCard, welcomeCard, cheeringCard, endedCard].forEach((c) =>
       c.classList.add('hidden')
     );
   }
@@ -809,6 +818,7 @@
   }
 
   function renderConnect(msg) {
+    if (cheerEnded) return; // 終了画面を維持（再接続後のconnect応答で画面が戻らないように）
     const { status, user, team, member, teams, targets, message } = msg;
 
     // category_id未設定デバイス等、そもそもカードを出せないケース。
@@ -929,7 +939,7 @@
     connect();
   });
 
-  startCheeringBtn.addEventListener('click', () => {
+  function enterCheeringScreen() {
     hideAllCards();
     cheeringCard.classList.remove('hidden');
     matchCheerCount = 0;
@@ -937,6 +947,21 @@
     // 前回セッションからの電池残量警告の継続時間・表示状態を持ち越さない
     batteryLowSince = null;
     batteryDisplay.classList.add('hidden');
+    // 5回バッチの途中経過を持ち越さない（終了→再開で端数が混ざらないように）
+    cheerBatchCount = 0;
+    cheerBatchSum = 0;
+    cheerBatchStartedAt = null;
+    bleDisconnectNotified = false;
+    bleAlertDisplay.classList.add('hidden');
+  }
+
+  startCheeringBtn.addEventListener('click', enterCheeringScreen);
+
+  // 終了画面からの再開。WebSocketは終了後も維持されているため再接続・再登録は不要。
+  // 累積カウントは0から再スタート（保持は対象外）。
+  resumeCheeringBtn.addEventListener('click', () => {
+    cheerEnded = false;
+    enterCheeringScreen();
   });
 
   // ---------- ネイティブアプリ向けブリッジ（送信側） ----------
@@ -963,17 +988,9 @@
     window.CheerStickBridge && window.CheerStickBridge.sendEnd &&
       window.CheerStickBridge.sendEnd({ stat: 'end' });
 
-    intentionalClose = true;
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (socket) {
-      socket.close();
-    }
-
+    cheerEnded = true;
     hideAllCards();
-    welcomeCard.classList.remove('hidden');
+    endedCard.classList.remove('hidden');
   });
 
   [nameInput, emailInput].forEach((el) => {
