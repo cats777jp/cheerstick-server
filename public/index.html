@@ -985,9 +985,9 @@
   };
 
   endCheeringBtn.addEventListener('click', () => {
-    window.CheerStickBridge && window.CheerStickBridge.sendEnd &&
-      window.CheerStickBridge.sendEnd({ stat: 'end' });
-
+    // 注意: sendEnd({stat:'end'})は「ネイティブアプリへアプリ終了を依頼する」信号のため、
+    // ここでは送らない。終了画面は旧システムのstop（デバイステストモード）に相当する。
+    // sendEnd自体は将来「アプリを終了する」機能用に残してある。
     cheerEnded = true;
     hideAllCards();
     endedCard.classList.remove('hidden');
@@ -1080,8 +1080,9 @@
   window.onCheerStickData = function (payload) {
     if (!payload) return;
 
-    // a. 応援中画面が表示されていない間は何もしない
-    if (cheeringCard.classList.contains('hidden')) return;
+    // a. 応援中画面・終了画面のどちらでもない間は何もしない。
+    //    終了画面（cheerEnded）の間も解析とLED返送は続ける（旧システムのstopと同じ）
+    if (cheeringCard.classList.contains('hidden') && !cheerEnded) return;
 
     // b. BLE切断検知。サーバーへ通知する（type: "ble_disconnect"、2026-09-29追加）。
     //    send()はWebSocketが接続中（OPEN）でなければ何もしない設計のため、接続が
@@ -1105,26 +1106,29 @@
     const intensity = analyzeVibrationData(payload.accel);
 
     // e. 受信5回ごとにまとめてカウント表示更新・サーバー送信
-    if (cheerBatchCount === 0) {
-      cheerBatchStartedAt = Date.now();
-    }
-    cheerBatchCount += 1;
-    cheerBatchSum += intensity;
+    //    終了画面の間は積算もcount送信もしない（サーバーへ送らないのはここだけ）
+    if (!cheerEnded) {
+      if (cheerBatchCount === 0) {
+        cheerBatchStartedAt = Date.now();
+      }
+      cheerBatchCount += 1;
+      cheerBatchSum += intensity;
 
-    if (cheerBatchCount >= BATCH_SIZE) {
-      matchCheerCount += cheerBatchSum;
-      cheerCountDisplay.textContent = formatNumber(matchCheerCount);
+      if (cheerBatchCount >= BATCH_SIZE) {
+        matchCheerCount += cheerBatchSum;
+        cheerCountDisplay.textContent = formatNumber(matchCheerCount);
 
-      send({
-        type: 'count',
-        id: deviceId,
-        value: cheerBatchSum,
-        duration_ms: Date.now() - cheerBatchStartedAt,
-      });
+        send({
+          type: 'count',
+          id: deviceId,
+          value: cheerBatchSum,
+          duration_ms: Date.now() - cheerBatchStartedAt,
+        });
 
-      cheerBatchCount = 0;
-      cheerBatchSum = 0;
-      cheerBatchStartedAt = null;
+        cheerBatchCount = 0;
+        cheerBatchSum = 0;
+        cheerBatchStartedAt = null;
+      }
     }
 
     // f. LED値を計算して送信
