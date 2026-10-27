@@ -339,6 +339,33 @@ ls -la $D/
   新規`tokens.css`・`shell.css`は置いたままでよい（戻した版は参照しないため無害）。
   `tee`でも既存ファイルの所有者・権限は維持される。段階1を反映していない場合は、`index.html`は`ecd92c4`の版へ戻し、`ui.css`は置いたままでよい
 
+### 管理画面UI刷新 段階2（events.html）のデプロイ（2026-10-29追記・本番未反映）
+
+**理由：** `events.html`の試合管理を新デザインへ移行したため（`docs/spec.md` 9.5章追記、コミット`11ddb72`）。
+**変更は`events.html`の1ファイルのみ。** 新規ファイルは無く、`ui.css`・`tokens.css`・`shell.css`も無変更のため、
+chown/chmodは不要（既存ファイルの上書きで所有者は引き継がれる）。**`pm2 restart`・nginx reloadは不要**（静的ファイルのみ。`src/`は無変更）。
+CSS・JSの`?v=`も変わっていない（`events.html`自体が古いままに見える場合はCtrl+F5）。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+sudo cp public/admin/events.html /var/www/cheerstick-admin/
+diff /var/www/cheerstick-admin/events.html public/admin/events.html && echo "events.html: OK"
+ls -la /var/www/cheerstick-admin/events.html
+```
+
+- **反映後の確認（オフィスのIPから）：** `https://admin.cheerstick.com/events.html`で、live の試合が最上部の大きなカードで出ること
+  （停止＝黄・終了＝赤が離れている）、予定・停止中の表、終了済みの折りたたみ（既定で閉じている）、新規試合登録、
+  「⋯」メニューの削除（確認ダイアログが出る）、状態バッジの日本語表記、Consoleにエラーが無いこと。
+  **本番データを操作して確認する場合は、live の試合を誤って停止・終了しないこと**（試合直前・試合中は表示確認のみにする）
+- **ロールバック（直前の版は`94e0155`）：**
+  ```bash
+  cd /home/ubuntu/cheerstick-server-new
+  git show 94e0155:public/admin/events.html | sudo tee /var/www/cheerstick-admin/events.html > /dev/null
+  git show 94e0155:public/admin/events.html | diff - /var/www/cheerstick-admin/events.html && echo "events.html: rolled back"
+  ```
+  戻した版は`common.css`を読むため、`common.css`・`common.js`が配信先に残っていることが前提（残っている。削除は段階7の予定）
+
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 
 **理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能
