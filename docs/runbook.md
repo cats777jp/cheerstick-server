@@ -392,6 +392,80 @@ ls -la /var/www/cheerstick-admin/events.html
   ```
   戻した版は`tokens.css`・`shell.css`・`ui.css`・`brand.css`・`shell.js`を読む（配信先に残っているため問題なし）
 
+### 管理画面UI刷新 デモ変更（サーバー側を含む）のデプロイ（2026-10-31追記・本番未反映）
+
+**理由：** デモのテーマ画像の取得元変更・`GET /demo/status`の項目追加・デモ枠の表示改善（`docs/spec.md` 9.5章の2026-10-31追記、コミット`5581da8`）は、
+サーバー側のコード（`src/services/demoModeState.js`・`src/controllers/adminDemoController.js`・`scripts/demo/battle-demo-prepare.js`。
+最後のものはコントローラーがin-processで`require`する）を含むため、**`pm2 restart cheerstick-server`が必要**。静的ファイルは`events.html`のみ。
+
+**`pm2 restart`の影響（実行前に必ず確認）：**
+- **WebSocketは全接続が切断される。** 再接続の挙動はアプリ側の実装次第で、本セッションでは未確認
+- **デモの状態（`demoModeState`）はメモリ上のため、再起動で「未セット」に戻る。** 実行中のデモの子プロセスは終了する（`killRunningChildForShutdown`）。
+  再起動前にセット済みだったデモの試合はlive のまま残り、次の「デモをセット」は`--pause-other-live`で停止してから進む（前回分の自動終了は行われない）
+- **本番の試合中・デモ実行中は実施しない。** 空き時間に行う
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+sudo cp public/admin/events.html /var/www/cheerstick-admin/
+diff /var/www/cheerstick-admin/events.html public/admin/events.html && echo "events.html: OK"
+pm2 restart cheerstick-server
+pm2 list                                            # cheerstick-server が online であること
+pm2 logs cheerstick-server --lines 30 --nostream    # 起動時のエラーが無いこと
+```
+
+- **反映の順序：** 追加したのは新しい項目だけで、古い`events.html`が新サーバーに接続しても、新しい`events.html`が古いサーバーに接続しても動く
+  （新しい項目が無ければ従来どおりの表示）。どちらを先にしてもよい
+- **反映後の確認（オフィスのIPから）：** 管理画面のデモ枠で「デモをセット」を押し、`pm2 logs cheerstick-server --lines 80 --nostream | grep "theme image url"`で
+  `[prepare] theme image url: <URL> (source: permanent demo event 620f09c5)`（または`05efa49a`）が出ること。出ない場合は
+  `(none)`＋`WARNING`が出て、画面に「テーマ画像なし」が表示される（恒久デモの試合の`events.metadata.themeImageUrl`、および試合が非表示化されていないことを確認する）。
+  新しい試合A・Bの両方にテーマ画像が入ること。デモを終了（自然終了または停止）すると「終了（実行済み）」と出て、①が強調されること。
+  **セット・開始は本番のデモ機能を実際に動かす操作**（試合直前・試合中は避ける）
+- **ロールバック（直前の版は`5581da8^`＝`6e5f42b`）：** コードを戻して同じ手順。
+  ```bash
+  cd /home/ubuntu/cheerstick-server-new
+  git checkout 5581da8^ -- src scripts public/admin/events.html   # ※サーバーのworking treeを変更する。実施前に`git status`で他の変更が無いことを確認
+  sudo cp public/admin/events.html /var/www/cheerstick-admin/
+  pm2 restart cheerstick-server
+  ```
+  この`git checkout`はサーバーのリポジトリの作業ツリーを書き換える（`git pull`で戻せる）。他の未コミット変更が無いことを確認してから実行する。
+  静的ファイルのみを戻すなら`git show 5581da8^:public/admin/events.html | sudo tee /var/www/cheerstick-admin/events.html > /dev/null`（サーバー側のコードは戻らない点に注意）
+
+### 管理画面UI刷新 favicon（静的ファイルのみ）のデプロイ（2026-10-31追記・本番未反映）
+
+**理由：** Consoleの`/favicon.ico`の404を解消するため（`docs/spec.md` 9.5章の2026-10-31追記、コミット`20760fa`）。
+**`brand/`ディレクトリごと新規。** 新規ファイルは所有者が`root`になるため、`chown`/`chmod`が必須（ディレクトリは755、ファイルは664）。
+静的ファイルのみで、**`pm2 restart`・nginx reloadは不要**。上のデモ側と独立しており、どちらを先にしてもよい
+（`events.html`はデモ側と共有のため、両方を反映する場合は上のデモ側の手順で`events.html`をコピーした後、favicon側でも`events.html`をコピーする。
+どちらのコミットも`git pull`後の`public/admin/events.html`が最終版なので、最後に1回コピーすれば足りる）。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+D=/var/www/cheerstick-admin
+# 1) brand/ を先に置く（shell.js が参照する前に配置する）
+sudo mkdir -p $D/brand
+sudo cp public/admin/brand/favicon.svg $D/brand/
+sudo chown -R ubuntu:ubuntu $D/brand
+sudo chmod 755 $D/brand
+sudo chmod 664 $D/brand/favicon.svg
+# 2) shell.js と5ページのHTMLを上書き
+sudo cp public/admin/shell.js public/admin/index.html public/admin/events.html public/admin/masters.html public/admin/targets.html public/admin/ranking-control.html $D/
+# 3) 反映確認（7つとも OK）
+for f in shell.js index.html events.html masters.html targets.html ranking-control.html brand/favicon.svg; do diff $D/$f public/admin/$f && echo "$f: OK"; done
+ls -la $D/brand/
+```
+
+- **反映後の確認：** Ctrl+F5のうえで、ブラウザのタブに「推」のアイコンが出ること、Consoleの`/favicon.ico`の404が消えること。
+  ブラウザはfaviconを強くキャッシュするため、すぐに変わらない場合がある（タブを閉じて開き直す）
+- **ロールバック：** `shell.js`と5つのHTMLを`20760fa^`の版に戻す（`brand/`は置いたままでよい）。
+  ```bash
+  cd /home/ubuntu/cheerstick-server-new
+  D=/var/www/cheerstick-admin
+  for f in shell.js index.html events.html masters.html targets.html ranking-control.html; do git show 20760fa^:public/admin/$f | sudo tee $D/$f > /dev/null; done
+  ```
+  `events.html`は`20760fa^`（＝デモ側の変更を含む版）に戻る。デモ側を未反映のまま戻す場合は`5581da8^`の版を使う
+
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 
 **理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能

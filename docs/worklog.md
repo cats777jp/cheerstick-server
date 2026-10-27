@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-10-31 デモのテーマ画像の取得元変更・デモ枠の表示改善・faviconの実装とコミット
+
+### 実施したこと
+- 2026-10-27の本番のデモで、「セット」で作られる試合のうちテーマ画像が入ったのが4件中1件だった件を調査（コード読み取りのみ。本番DB・EC2には接続していない）。
+  取得元が恒久デモの対抗戦ペア`3d909ed3`に固定され、ペアが削除されると取得が404になって無言で画像なしになる設計と判明（仮説。本番での裏付けは未取得）
+- KMT様の承認（恒久デモの試合は`620f09c5`＝A・`05efa49a`＝B、手動停止も「終了（実行済み）」、案内文は1行のみ、`--theme-source-battle-id`の既定は「なし」）に従って実装（コミット`5581da8`）
+  - テーマ画像の取得元を恒久デモの試合の`events.metadata.themeImageUrl`（A優先、なければB）に変更。新しい試合A・B両方に設定。取得失敗は警告ログ
+  - `GET /demo/status`に`themeImageMissing`・`lastEndedAt`を追加（既存の項目は不変）
+  - デモ枠：「終了（実行済み）」で①を強調、残り0秒は「まもなく終了」、「テーマ画像なし」バッジ、案内1行
+- faviconの`/favicon.ico` 404を解消（コミット`20760fa`）。`shell.js`が`brand/favicon.svg`の`link rel=icon`を差し込む。SVGは「推」の仮置き
+- docs（spec 9.5・9.12、runbook、worklog）を追記
+- ローカル確認：デモ側はpg-mem＋実サーバーのハーネスで71件PASS（元は56件）、画面は6状態を実Chromeで確認。favicon側は5ページの`rel="icon"`・SVGの200配信・`/favicon.ico`の要求が無いことを確認
+
+### 変更したファイル
+- コード（`5581da8`）：`scripts/demo/battle-demo-prepare.js`、`src/services/demoModeState.js`、`src/controllers/adminDemoController.js`、`public/admin/events.html`、`scripts/demo/local-verify-demo-mode.js`
+- コード（`20760fa`）：`public/admin/shell.js`、`public/admin/brand/favicon.svg`（新規）、5ページの`?v=`（`index`／`events`／`masters`／`targets`／`ranking-control`）
+- docs：`docs/spec.md`（9.5追記・9.12追記・変更履歴）、`docs/runbook.md`（デモ側とfavicon側のデプロイ・ロールバック手順）、`docs/worklog.md`
+
+### 判明した事実 / 想定と違ったこと
+- デモのセットが呼ぶ準備スクリプトの`PATCH /admin/events/:id`（テーマ画像設定）は、pg-memがJSONBの`||`に未対応のため、既存のharnessでは一度も実行されていなかった
+  （画像が取得できない前提だったため）。今回、`ranking-battle`のharnessと同じJS側の置き換えを入れて初めて経路を実行した。`||`のSQLそのものは未検証
+- デモの子プロセスは起動から約70秒で終了する（ramp-up 1秒＋60秒、終了判定が10秒間隔）。管理画面の「残り○秒」は起動から60秒で数えるため、「残り0秒」のまま約10秒`running`が続く
+- `local-verify-demo-mode.js`の1回目の実行で、時間依存の1件（`デモのcheer_logsが記録されている`）が失敗した。元のharness（HEAD）は56/56、修正後は他の作業なしで2回続けて71/71。
+  並行作業の負荷による揺れと見ているが、原因は特定していない
+- 自動操作のChromeでは、アイコン指定の無いページでも`/favicon.ico`を要求しなかったため、404の再現と消失の直接比較はできなかった
+- コミットの分離：`events.html`のfavicon用`?v=`の1行は、デモ側のコミットに入らないよう一時的に戻してからaddし、favicon側のコミットで反映した（`git add -p`は対話式で使えないため）
+
+### 次回への申し送り
+- **本番未反映（デモ側・favicon側とも）。** 手順はrunbook「管理画面UI刷新 デモ変更（サーバー側を含む）のデプロイ」（`pm2 restart`が必要、WebSocket切断・デモ状態のリセットあり）と
+  「管理画面UI刷新 favicon（静的ファイルのみ）のデプロイ」（`brand/`のchown/chmod）。反映はKMT様の指示後
+- 未確認：本番の恒久デモ2試合の`metadata`に`themeImageUrl`が入っているか（反映後の最初の「デモをセット」のpm2ログ`theme image url:`で確認できる）、実時間のデモでの表示、`pm2 restart`後の挙動、実PostgreSQLでの`||`のSQL
+- 2026-10-27の件の裏付け（pm2ログ、nginxの`DELETE …3d909ed3`、DB）は未取得
+- 次の段階：段階4（`ranking-control.html`）（KMT様の指示待ち）
+
+### 未解決のまま残した課題
+- お客様向けの認証・データ範囲の限定（`docs/proposals/admin-customer-access-todo.md`、変更なし）
+- 恒久デモのペアの作り直し手順は提案のみ（実施していない）
+
+---
+
 ## 2026-10-30 管理画面UI刷新 段階3（events.htmlのデモモード・対抗戦ペア一覧を新デザインへ移行）の実装・ローカル確認
 
 ### 実施したこと
