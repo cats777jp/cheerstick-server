@@ -28,9 +28,15 @@ const DEFAULT_TEAM_B_NAME = 'J SPORTS';
 const DEFAULT_DEVICES_PER_TEAM = 500;
 const DEFAULT_MAC_PREFIX = 'AA:00:00:02';
 const DEFAULT_TEAM_B_START_INDEX = 0x8000; // 32768
-// 2026-09-25作成の恒久デモ（docs/spec.md 8.4章）。--theme-image-url未指定時、
-// このバトルのテーマ画像を引き継ぐ（公開スコアAPI経由、読み取りのみ）。
+// 2026-09-25作成の恒久デモ（docs/spec.md 8.4章）の対抗戦ペア。2026-10-30以降は、テーマ画像の
+// 既定の取得元ではなくなった（ペアが管理画面から削除されると画像が無言で入らなくなったため）。
+// 他箇所（note表示）の参照用に残す。
 const PERMANENT_DEMO_BATTLE_ID = '3d909ed3-3207-4222-a6f9-a6c39980b910';
+// テーマ画像の既定の取得元（2026-10-30変更）：ペアではなく、恒久デモの試合の
+// events.metadata.themeImageUrl。A（620f09c5）優先、なければB（05efa49a）。
+// 試合自体が管理画面から非表示化された場合は取得できない（GET /admin/eventsが返さないため）。
+const PERMANENT_DEMO_EVENT_A_ID = '620f09c5-8ceb-45de-b35d-7bf47821950a';
+const PERMANENT_DEMO_EVENT_B_ID = '05efa49a-ca92-4190-94ff-eea24ec5033a';
 const CREATE_CONCURRENCY = 20;
 // 管理API（src/app.js）のレート制限は500リクエスト/15分（トークンではなく固定ウィンドウ）。
 // 127.0.0.1:3000へ直接アクセスする本スクリプトはtrust proxy越しのクライアントIP分離が
@@ -52,7 +58,7 @@ function parseArgs(argv) {
     teamBStartIndex: DEFAULT_TEAM_B_START_INDEX,
     pauseOtherLive: false,
     themeImageUrl: null,
-    themeSourceBattleId: PERMANENT_DEMO_BATTLE_ID,
+    themeSourceBattleId: null, // 明示指定（--theme-source-battle-id）時のみ、従来どおりペアのスコアAPIから取得する
     label: null,
     yes: false,
     finishRun: null,
@@ -330,6 +336,33 @@ async function fetchThemeImageUrl(apiBase, battleId) {
   }
 }
 
+// テーマ画像のURLを決める。戻り値は { url, source }。取得できなければ url=null
+// （呼び出し側が警告ログ・デモ状態（themeImageMissing）へ反映する。無言では通過しない）。
+//   1) --theme-image-url（明示指定）
+//   2) --theme-source-battle-id（明示指定時のみ。従来どおりペアの公開スコアAPI経由）
+//   3) 既定：恒久デモの試合のevents.metadata.themeImageUrl（A優先、なければB）。ペアの有無に依存しない
+async function resolveThemeImageUrl(args) {
+  if (args.themeImageUrl) return { url: args.themeImageUrl, source: '--theme-image-url' };
+  if (args.themeSourceBattleId) {
+    const url = await fetchThemeImageUrl(args.apiBase, args.themeSourceBattleId);
+    return { url, source: `battle ${args.themeSourceBattleId}` };
+  }
+  try {
+    const { ok, body } = await apiCall(args.apiBase, 'GET', '/admin/events');
+    if (ok) {
+      const byId = new Map((body || []).map((e) => [e.id, e]));
+      for (const id of [PERMANENT_DEMO_EVENT_A_ID, PERMANENT_DEMO_EVENT_B_ID]) {
+        const ev = byId.get(id);
+        const url = ev && ev.metadata && ev.metadata.themeImageUrl;
+        if (typeof url === 'string' && url) return { url, source: `permanent demo event ${id.slice(0, 8)}` };
+      }
+    }
+  } catch (err) {
+    // 取得できなかったものとして、下の戻り値（url=null）に集約する
+  }
+  return { url: null, source: 'permanent demo events (not found / no themeImageUrl)' };
+}
+
 async function createEvent(apiBase, title, organizationId, yes) {
   if (!yes) return { title, organizationId, applied: false };
   const { ok, body } = await apiCall(apiBase, 'POST', '/admin/events', {
@@ -422,7 +455,7 @@ async function runPrepare(args) {
   const pauseCallsSoFar = args.yes ? pauseResult.filter((c) => c.applied).length : 0;
   const fixedCallsSoFar = 1 /* categories */ + 2 /* organizations */ + 1 /* events list */ + pauseCallsSoFar;
   const deviceListPages = Math.max(1, Math.ceil((existingMap.size || 1) / DEVICE_LIST_PAGE_SIZE));
-  const remainingFixedCalls = 1 /* theme fetch */ + 2 /* create event A/B */ + 1 /* theme set */ + 1 /* create battle */ + 2 /* set live x2 */;
+  const remainingFixedCalls = 1 /* theme fetch */ + 2 /* create event A/B */ + 2 /* theme set A/B */ + 1 /* create battle */ + 2 /* set live x2 */;
   const estimatedTotal = fixedCallsSoFar + deviceListPages + willCreate + willUpdate + remainingFixedCalls;
   console.log(
     '[prepare] request estimate for this run: ' +
@@ -445,8 +478,12 @@ async function runPrepare(args) {
     args.apiBase, args.macPrefix, args.teamBStartIndex, args.devicesPerTeam, category.id, args.yes, 'team B devices', existingMap
   );
 
-  const themeImageUrl = args.themeImageUrl || await fetchThemeImageUrl(args.apiBase, args.themeSourceBattleId);
-  console.log(`[prepare] theme image url: ${themeImageUrl || '(none)'}`);
+  const theme = await resolveThemeImageUrl(args);
+  const themeImageUrl = theme.url;
+  console.log(`[prepare] theme image url: ${themeImageUrl || '(none)'} (source: ${theme.source})`);
+  if (!themeImageUrl) {
+    console.warn('[prepare] WARNING: テーマ画像を取得できませんでした。画像なしの試合A・Bを作成します（恒久デモの試合のevents.metadata.themeImageUrlを確認してください）');
+  }
 
   const runStamp = new Date().toISOString().replace(/[:.]/g, '').slice(0, 13); // YYYYMMDDTHHMM
   const titleA = `デモ対抗戦 ${args.teamAName} vs ${args.teamBName} ${runStamp}`;
@@ -457,6 +494,7 @@ async function runPrepare(args) {
 
   if (args.yes) {
     await setEventTheme(args.apiBase, eventA.id, themeImageUrl, args.yes);
+    await setEventTheme(args.apiBase, eventB.id, themeImageUrl, args.yes);
     console.log(`[prepare] created event A: ${eventA.id} "${eventA.title}"`);
     console.log(`[prepare] created event B: ${eventB.id} "${eventB.title}"`);
   } else {
@@ -510,7 +548,7 @@ async function runPrepare(args) {
   }
   console.log('===============================================================\n');
 
-  return { category, orgA, orgB, teamAResult, teamBResult, eventA, eventB, battle, pauseResult };
+  return { category, orgA, orgB, teamAResult, teamBResult, eventA, eventB, battle, pauseResult, themeImageUrl };
 }
 
 // --- 後片付けモード -----------------------------------------------------------

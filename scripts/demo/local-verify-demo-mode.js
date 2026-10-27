@@ -111,6 +111,42 @@ function setupPgMem() {
   applyMigrations(memDb);
 
   const pgAdapter = memDb.adapters.createPg();
+
+  // pg-memはjsonbの`||`（マージ）・`-`（キー削除）演算子に未対応のため、updateEvent()が生成する
+  // `metadata = (metadata || $N::jsonb) - 'key'...`だけ、現在値を読んで同じ結果をJS側で計算し、
+  // 確定済みのjsonbを渡す形に置き換える（scripts/ranking-battle/local-verify.jsと同じ方式。2026-10-30追加）。
+  // デモのsetupが新しい試合A・Bにテーマ画像（PATCH /admin/events/:id の theme_image_url）を設定する経路の
+  // 確認に必要。※この置き換えのため、`||`演算子そのもののSQLはこのハーネスでは実行されない
+  // （実PostgreSQL上での確認はstaging等で別途必要）。
+  const META_RE = /metadata = (?:\(metadata \|\| \$(\d+)::jsonb\)|metadata)((?: - '[A-Za-z]+')*)/;
+  function shimMetadata(origQuery) {
+    return async function (text, params, ...rest) {
+      if (typeof text === 'string' && /^\s*UPDATE events SET/.test(text) && META_RE.test(text)) {
+        const m = text.match(META_RE);
+        const whereId = params[params.length - 1];
+        const cur = await origQuery.call(this, 'SELECT metadata FROM events WHERE id = $1', [whereId]);
+        if (cur.rows.length === 0) return origQuery.call(this, text, params, ...rest);
+        const curMeta = cur.rows[0].metadata;
+        const merged = { ...(typeof curMeta === 'string' ? JSON.parse(curMeta) : curMeta) };
+        const newParams = params.slice();
+        if (m[1]) Object.assign(merged, JSON.parse(params[Number(m[1]) - 1]));
+        for (const k of (m[2].match(/'([A-Za-z]+)'/g) || []).map((s) => s.slice(1, -1))) delete merged[k];
+        let replacement;
+        if (m[1]) {
+          newParams[Number(m[1]) - 1] = JSON.stringify(merged);
+          replacement = `metadata = $${m[1]}::jsonb`;
+        } else {
+          newParams.push(JSON.stringify(merged));
+          replacement = `metadata = $${newParams.length}::jsonb`;
+        }
+        return origQuery.call(this, text.replace(META_RE, () => replacement), newParams, ...rest);
+      }
+      return origQuery.call(this, text, params, ...rest);
+    };
+  }
+  pgAdapter.Pool.prototype.query = shimMetadata(pgAdapter.Pool.prototype.query);
+  pgAdapter.Client.prototype.query = shimMetadata(pgAdapter.Client.prototype.query);
+
   const pgModulePath = require.resolve('pg');
   require.cache[pgModulePath] = {
     id: pgModulePath,
@@ -225,6 +261,9 @@ async function main() {
   const statusAfterSetup = await callDemo('/demo/status', 'GET');
   check('setup後はstatus=set', statusAfterSetup.body.status === 'set', JSON.stringify(statusAfterSetup.body));
   check('setup後、battleIdが一致する', statusAfterSetup.body.battleId === firstBattleId);
+  check('setup直後は、実行済みの印（lastEndedAt）が無い（null）', statusAfterSetup.body.lastEndedAt === null, JSON.stringify(statusAfterSetup.body));
+  check('恒久デモの試合・ペアが無くてもsetupは成立し、テーマ画像なし（themeImageMissing=true）になる（2026-10-30）',
+    statusAfterSetup.body.themeImageMissing === true, JSON.stringify(statusAfterSetup.body));
   check('setup後、screenUrlが battle_id・gauge=recent・poll=1000 を含む',
     statusAfterSetup.body.screenUrl &&
     statusAfterSetup.body.screenUrl.includes(`battle_id=${firstBattleId}`) &&
@@ -255,6 +294,10 @@ async function main() {
   const stopResult = await callDemo('/demo/stop', 'POST');
   check('stopは200でstatus=set', stopResult.status === 200 && stopResult.body.status === 'set', JSON.stringify(stopResult.body));
   check('stop応答時点で、子プロセスが実際に終了している（PID生存確認）', !isProcessAlive(childPidAfterStart), `pid=${childPidAfterStart}`);
+  check('手動停止でも、実行済みの印（lastEndedAt、ISO形式）が立つ（2026-10-30）',
+    typeof stopResult.body.lastEndedAt === 'string' && !Number.isNaN(Date.parse(stopResult.body.lastEndedAt)), JSON.stringify(stopResult.body));
+  const stoppedStatus = await callDemo('/demo/status', 'GET');
+  check('GET /demo/status にも lastEndedAt が出る（ページを開き直しても実行済みと分かる）', stoppedStatus.body.status === 'set' && !!stoppedStatus.body.lastEndedAt, JSON.stringify(stoppedStatus.body));
 
   const stopWhenNotRunning = await callDemo('/demo/stop', 'POST');
   check('runningでないときのstopは409 DEMO_NOT_RUNNING',
@@ -265,6 +308,7 @@ async function main() {
   const resetupResult = await callDemo('/demo/setup', 'POST');
   check('再setupは201', resetupResult.status === 201, JSON.stringify(resetupResult.body));
   const secondBattleId = resetupResult.body.battleId;
+  check('再setup（setSet）で、実行済みの印（lastEndedAt）が消える', resetupResult.body.lastEndedAt === null, JSON.stringify(resetupResult.body));
   check('再setupで新しいbattleIdが発行される', secondBattleId && secondBattleId !== firstBattleId,
     `first=${firstBattleId} second=${secondBattleId}`);
 
@@ -319,6 +363,8 @@ async function main() {
   check(`${TEST_DURATION_MS}ms経過後、自動的にstatus=setへ戻る`,
     statusAfterDuration.body.status === 'set', JSON.stringify(statusAfterDuration.body));
   check('時間経過による終了でも、子プロセスは実際に終了している', !isProcessAlive(secondChildPid), `pid=${secondChildPid}`);
+  check('自然終了でも、実行済みの印（lastEndedAt、ISO形式）が立つ（2026-10-30）',
+    typeof statusAfterDuration.body.lastEndedAt === 'string' && !Number.isNaN(Date.parse(statusAfterDuration.body.lastEndedAt)), JSON.stringify(statusAfterDuration.body));
 
   // === 9b. デモの応援データはregister済みのユーザーに紐づく（2026-10-07追加） ==========
   // battle-demo.jsがselect_teamの前にregisterを送るため、cheer_logs.user_idが埋まる。
@@ -415,6 +461,53 @@ async function main() {
 
   // 後片付け：3チーム目を削除し、DB状態を元に戻す
   await callDemo('/demo/setup', 'POST'); // 直前のバトルをfinish-run相当で片付ける
+
+  // === 10. テーマ画像：恒久デモの試合のevents.metadataから取得し、新しい試合A・B両方へ入れる（2026-10-30） ===
+  // ペア（3d909ed3）は作らない（ペアが存在しなくても動くことの確認）。恒久デモの試合のIDは本番と同じ固定値。
+  console.log('\n[verify] === step 10: theme image source = permanent demo events metadata ===');
+  const PERM_A = '620f09c5-8ceb-45de-b35d-7bf47821950a';
+  const PERM_B = '05efa49a-ca92-4190-94ff-eea24ec5033a';
+  const PERM_BATTLE = '3d909ed3-3207-4222-a6f9-a6c39980b910';
+  const URL_A = '/images/uploads/theme-permanent-a.png';
+  const URL_B = '/images/uploads/theme-permanent-b.png';
+  await verifyPool.query(
+    `INSERT INTO events (id, organization_id, title, starts_at, status, metadata) VALUES ($1, $2, '恒久デモA', NOW(), 'finished', $3::jsonb)`,
+    [PERM_A, ORG_A_ID, JSON.stringify({ themeImageUrl: URL_A })]);
+  await verifyPool.query(
+    `INSERT INTO events (id, organization_id, title, starts_at, status, metadata) VALUES ($1, $2, '恒久デモB', NOW(), 'finished', $3::jsonb)`,
+    [PERM_B, ORG_B_ID, JSON.stringify({ themeImageUrl: URL_B })]);
+  const permBattleCount = await verifyPool.query('SELECT COUNT(*)::int AS n FROM event_battles WHERE id = $1', [PERM_BATTLE]);
+  check('前提：恒久デモのペア（3d909ed3）は存在しない', permBattleCount.rows[0].n === 0, JSON.stringify(permBattleCount.rows[0]));
+
+  async function battleThemes(battleId) {
+    const r = await verifyPool.query(
+      `SELECT ea.metadata AS a_meta, ebv.metadata AS b_meta FROM event_battles eb
+         JOIN events ea ON ea.id = eb.event_a_id JOIN events ebv ON ebv.id = eb.event_b_id WHERE eb.id = $1`, [battleId]);
+    const parse = (m) => (typeof m === 'string' ? JSON.parse(m) : (m || {}));
+    return { a: parse(r.rows[0].a_meta).themeImageUrl || null, b: parse(r.rows[0].b_meta).themeImageUrl || null };
+  }
+
+  const themeBoth = await callDemo('/demo/setup', 'POST');
+  check('恒久デモの試合A・B両方に画像があり、ペアが無くてもsetupは201', themeBoth.status === 201, JSON.stringify(themeBoth.body));
+  const themesBoth = await battleThemes(themeBoth.body.battleId);
+  check('A優先：新しい試合A・B両方にAの画像が入る', themesBoth.a === URL_A && themesBoth.b === URL_A, JSON.stringify(themesBoth));
+  check('画像を取得できたときは themeImageMissing=false', themeBoth.body.themeImageMissing === false, JSON.stringify(themeBoth.body));
+
+  await verifyPool.query(`UPDATE events SET metadata = '{}'::jsonb WHERE id = $1`, [PERM_A]);
+  const themeFallbackB = await callDemo('/demo/setup', 'POST');
+  const themesFallbackB = await battleThemes(themeFallbackB.body.battleId);
+  check('Aに画像が無ければBの画像を使い、新しい試合A・B両方に入る', themesFallbackB.a === URL_B && themesFallbackB.b === URL_B, JSON.stringify(themesFallbackB));
+  check('Bの画像で取得できたときも themeImageMissing=false', themeFallbackB.body.themeImageMissing === false);
+
+  await verifyPool.query(`UPDATE events SET metadata = '{}'::jsonb WHERE id = $1`, [PERM_B]);
+  const themeNone = await callDemo('/demo/setup', 'POST');
+  check('A・Bとも画像が無くてもsetupは201で成立する（無言で止まらず、デモ自体は使える）', themeNone.status === 201, JSON.stringify(themeNone.body));
+  const themesNone = await battleThemes(themeNone.body.battleId);
+  check('A・Bとも画像が無いと、新しい試合A・Bにも画像は入らず themeImageMissing=true になる',
+    themesNone.a === null && themesNone.b === null && themeNone.body.themeImageMissing === true,
+    JSON.stringify({ themes: themesNone, missing: themeNone.body.themeImageMissing }));
+  const themeNoneStatus = await callDemo('/demo/status', 'GET');
+  check('GET /demo/status にも themeImageMissing=true が出る', themeNoneStatus.body.themeImageMissing === true, JSON.stringify(themeNoneStatus.body));
   await verifyPool.query(`DELETE FROM organizations WHERE id = $1`, [THIRD_ORG_ID]);
 
   // === 12. ランキング見せ用（2026-10-07）：デモ用ダミー選手があると、推しエントリー付きで実行される ====

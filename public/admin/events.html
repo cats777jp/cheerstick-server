@@ -107,6 +107,8 @@
   .demo-status-label #demoStatusLabel { color: var(--color-text); font-weight: bold; }
   .demo-countdown { font-size: 22px; font-weight: bold; font-variant-numeric: tabular-nums; color: var(--status-live); }
   .demo-showcase-note { font-size: 13px; color: var(--color-muted); }
+  .demo-theme-note { font-size: 12px; font-weight: bold; color: var(--color-warn); background: var(--color-warn-soft); border: 1px solid var(--color-warn); border-radius: 999px; padding: 2px 10px; }
+  .demo-guide { font-size: 13px; color: var(--color-muted); margin: 12px 0 0; }
   .demo-steps { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; }
   .demo-step {
     flex: 1 1 220px;
@@ -278,6 +280,8 @@
       <span id="demoCountdown" class="demo-countdown hidden"></span>
       <!-- ランキング見せ用（2026-10-07）：デモ用チームにダミー選手がいると、推しエントリー付きで実行される -->
       <span id="demoShowcaseNote" class="demo-showcase-note hidden"></span>
+      <!-- テーマ画像を取得できなかったセットのとき（2026-10-30追加。GET /demo/status の themeImageMissing） -->
+      <span id="demoThemeNote" class="demo-theme-note hidden">テーマ画像なし</span>
     </div>
     <!-- ボタンの文言（特に「デモを開始」）は変えないこと：開始/停止の分岐が textContent で判定している。
          番号・説明はボタンの外（.demo-step-head）に置く。 -->
@@ -311,6 +315,7 @@
         </div>
       </div>
     </div>
+    <p class="demo-guide">デモ終了後は ① のセットから始めてください。</p>
   </div>
 
   <!-- (G) 対抗戦ペア管理（2チーム対抗応援合戦機能、2026-09-11追加）。
@@ -1048,13 +1053,15 @@
   const demoStatusLabelEl = document.getElementById('demoStatusLabel');
   const demoCountdownEl = document.getElementById('demoCountdown');
   const demoShowcaseNoteEl = document.getElementById('demoShowcaseNote');
+  const demoThemeNoteEl = document.getElementById('demoThemeNote');
   const demoSetupBtn = document.getElementById('demoSetupBtn');
   const demoStartStopBtn = document.getElementById('demoStartStopBtn');
   const demoScreenLink = document.getElementById('demoScreenLink');
 
   function formatCountdown(remainingMs) {
     const totalSec = Math.ceil(remainingMs / 1000);
-    return `残り${totalSec}秒`;
+    // 残り0秒でもデモ用プロセスの終了まで約10秒かかる（終了判定が10秒間隔のため）ので、止まって見えないようにする
+    return totalSec <= 0 ? 'まもなく終了' : `残り${totalSec}秒`;
   }
 
   // ボタンの活性・非活性（指示書1章の表のとおり）。
@@ -1062,7 +1069,10 @@
   //   ②デモを開始/停止：セット済みなら「開始」、実行中なら「停止」として押せる。未セットなら押せない
   //   ③表示画面を開く：screenUrlがある（idleでない）ときだけリンクとして機能する
   function renderDemoStatus(status) {
-    demoStatusLabelEl.textContent = DEMO_STATUS_LABELS[status.status] || status.status;
+    // 実行済み（自然終了・手動停止）はサーバーが返す lastEndedAt で判定する（ページを開き直しても同じ表示になる）
+    const ended = status.status === 'set' && !!status.lastEndedAt;
+    demoStatusLabelEl.textContent = ended ? '終了（実行済み）' : (DEMO_STATUS_LABELS[status.status] || status.status);
+    demoThemeNoteEl.classList.toggle('hidden', !(status.status !== 'idle' && status.themeImageMissing === true));
 
     demoSetupBtn.disabled = status.status === 'running';
 
@@ -1102,12 +1112,14 @@
 
   // ステップの強調・薄表示（UI刷新 段階3。見た目のみ。ボタンの disabled 条件は上の renderDemoStatus のまま）。
   //   未セット：①を強調、②③は薄く／セット済み：②を強調、①③は通常／実行中：②（停止）を強調、①は薄く
+  //   終了（実行済み）：①を強調、②③は通常（②は押せるが、実行済みの試合に重ねず ① から始めるのが推奨）
   function applyDemoStepStyles(status) {
     const state = status.status;
     const hasScreen = !!status.screenUrl;
+    const ended = state === 'set' && !!status.lastEndedAt;
     const steps = {
-      demoStep1: state === 'running' ? 'dim' : (state === 'idle' ? 'current' : ''),
-      demoStep2: state === 'idle' ? 'dim' : 'current',
+      demoStep1: state === 'running' ? 'dim' : ((state === 'idle' || ended) ? 'current' : ''),
+      demoStep2: state === 'idle' ? 'dim' : (ended ? '' : 'current'),
       demoStep3: hasScreen ? '' : 'dim',
     };
     Object.keys(steps).forEach((id) => {

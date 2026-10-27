@@ -161,6 +161,7 @@ exports.setup = async (req, res, next) => {
       screenUrl,
       sparkEffect,
       showcase,
+      themeImageMissing: !result.themeImageUrl,
     });
 
     res.status(201).json(demoModeState.getPublicStatus());

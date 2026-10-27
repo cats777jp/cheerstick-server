@@ -22,6 +22,8 @@ const state = {
   orgAId: null,
   orgBId: null,
   screenUrl: null,
+  themeImageMissing: false, // テーマ画像を取得できなかったセットか（管理画面の「テーマ画像なし」表示用、2026-10-30追加）
+  lastEndedAt: null, // 実行（自然終了・手動停止）が終わった時刻（ms epoch）。setSetで消す（2026-10-30追加。ページを開き直しても「実行済み」と分かるようにする）
   showcase: null, // ランキング見せ用の設定（{ macPrefix, targetIdsA, targetIdsB }）。ダミー選手が無ければnull（従来どおり）
   sparkEffect: true, // 火花演出の有無（2026-10-01追加、2026-10-06に既定ONへ変更）。true=火花ON（既定）、false=OFF（screenUrlに&fx=noneを付与済み）
   startedAt: null, // ms epoch（Date.now()）。runningのときのみ
@@ -52,18 +54,22 @@ function setIdle() {
   state.orgBId = null;
   state.screenUrl = null;
   state.showcase = null;
+  state.themeImageMissing = false;
+  state.lastEndedAt = null;
   state.sparkEffect = true;
   state.startedAt = null;
   state.childProcess = null;
 }
 
-function setSet({ battleId, orgAId, orgBId, screenUrl, sparkEffect = true, showcase = null }) {
+function setSet({ battleId, orgAId, orgBId, screenUrl, sparkEffect = true, showcase = null, themeImageMissing = false }) {
   state.status = 'set';
   state.battleId = battleId;
   state.orgAId = orgAId;
   state.orgBId = orgBId;
   state.screenUrl = screenUrl;
   state.showcase = showcase;
+  state.themeImageMissing = themeImageMissing === true;
+  state.lastEndedAt = null; // 新しくセットし直したら「実行済み」の印は消す
   state.sparkEffect = sparkEffect !== false;
   state.startedAt = null;
   state.childProcess = null;
@@ -82,6 +88,7 @@ function setStoppedBackToSet() {
   state.status = 'set';
   state.startedAt = null;
   state.childProcess = null;
+  state.lastEndedAt = Date.now(); // 自然終了・手動停止のどちらでも立てる（管理画面は「終了（実行済み）」と表示する）
 }
 
 function getPublicStatus() {
@@ -101,6 +108,9 @@ function getPublicStatus() {
       : null,
     elapsedMs,
     remainingMs,
+    // 2026-10-30追加（既存の項目は変えていない）
+    themeImageMissing: state.themeImageMissing,
+    lastEndedAt: state.lastEndedAt ? new Date(state.lastEndedAt).toISOString() : null,
   };
 }
 
