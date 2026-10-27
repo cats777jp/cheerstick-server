@@ -99,16 +99,82 @@
   /* 狭い画面では列を折り返さず、表の枠内で横スクロールさせる */
   .table-wrap td, .table-wrap th { white-space: nowrap; }
 
-  /* デモモード・対抗戦ペア：段階3で新デザインへ移行するまでの暫定スタイル（旧スタイルをトークン化しただけ） */
-  .battle-url-row { display: flex; gap: 6px; align-items: center; }
-  .battle-url-row input { width: auto; flex: 1 1 220px; font-size: 12px; padding: 6px 8px; }
-  .demo-status-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-  .demo-status-label { font-size: 14px; }
-  .demo-countdown { font-size: 20px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  /* デモモード（UI刷新 段階3）：① セット → ② 開始 → ③ 表示画面 の3ステップ。
+     今おすすめのステップ（.current）を枠と色で強調し、押せないステップ（.dim）は薄くする。
+     強調・薄くする判定は renderDemoStatus() の末尾（applyDemoStepStyles）で行い、ボタンの disabled 条件は変えない。 */
+  .demo-status-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .demo-status-label { font-size: 14px; color: var(--color-muted); }
+  .demo-status-label #demoStatusLabel { color: var(--color-text); font-weight: bold; }
+  .demo-countdown { font-size: 22px; font-weight: bold; font-variant-numeric: tabular-nums; color: var(--status-live); }
   .demo-showcase-note { font-size: 13px; color: var(--color-muted); }
+  .demo-steps { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; }
+  .demo-step {
+    flex: 1 1 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    transition: opacity 0.15s, border-color 0.15s;
+  }
+  .demo-step-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; }
+  .demo-step-no {
+    flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--color-border);
+    color: var(--color-text);
+    font-size: 13px;
+  }
+  .demo-step-body { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+  .demo-step button { margin: 0; }
+  .demo-step.current { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+  .demo-step.current .demo-step-no { background: var(--color-accent); color: var(--color-on-accent); }
+  .demo-step.current button:not(:disabled):not(.danger) {
+    background: var(--color-accent); border-color: var(--color-accent); color: var(--color-on-accent);
+  }
+  .demo-step.dim { opacity: 0.45; }
+  .demo-arrow { align-self: center; color: var(--color-muted); font-size: 18px; }
   .demo-screen-link.disabled { pointer-events: none; opacity: 0.5; }
-  .demo-spark-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; cursor: pointer; }
+  .demo-spark-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; cursor: pointer; color: var(--color-text); }
   .demo-spark-toggle input { width: auto; }
+  @media (max-width: 899px) { .demo-arrow { display: none; } }
+
+  .empty-note { color: var(--color-muted); text-align: center; padding: 20px; }
+
+  /* 対抗戦ペア一覧（UI刷新 段階3）：表をやめて、1ペア1枚のカード行にする */
+  .battle-list { display: flex; flex-direction: column; gap: 12px; }
+  .battle-card {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .battle-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .battle-label { font-size: 16px; font-weight: bold; min-width: 0; overflow-wrap: anywhere; }
+  .battle-head button { margin: 0; flex: none; }
+  .battle-vs { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .battle-side { min-width: 0; }
+  .side-tag { font-size: 11px; color: var(--color-muted); margin-bottom: 2px; }
+  .side-title { font-size: 15px; font-weight: bold; overflow-wrap: anywhere; }
+  .side-org { font-size: 13px; color: var(--color-muted); }
+  .vs-mark {
+    font-size: 13px; font-weight: bold; letter-spacing: 0.08em;
+    color: var(--color-muted);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    padding: 4px 12px;
+  }
+  .battle-url-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .battle-url-row input { width: auto; flex: 1 1 320px; font-size: 12px; padding: 8px 10px; }
+  .battle-url-row button { margin: 0; }
+  @media (max-width: 899px) {
+    .battle-vs { grid-template-columns: 1fr; gap: 6px; }
+    .vs-mark { justify-self: start; }
+  }
 </style>
 </head>
 <body data-page="events">
@@ -213,18 +279,37 @@
       <!-- ランキング見せ用（2026-10-07）：デモ用チームにダミー選手がいると、推しエントリー付きで実行される -->
       <span id="demoShowcaseNote" class="demo-showcase-note hidden"></span>
     </div>
-    <div>
-      <button id="demoSetupBtn">デモをセット</button>
-      <button id="demoStartStopBtn">デモを開始</button>
-      <a id="demoScreenLink" class="demo-screen-link disabled" href="#" target="_blank" rel="noopener">
-        <button type="button" id="demoScreenLinkBtn">表示画面を開く</button>
-      </a>
-      <!-- 火花演出（2026-10-01追加、2026-10-06に既定ONへ変更）。初期はチェックなし＝火花ON。
-           チェックを入れると火花OFF（screenUrlに&fx=none）。サーバー側の状態は問い合わせない。
-           「デモをセット」を押した瞬間の状態だけが、そのデモのscreenUrlに反映される。 -->
-      <label class="demo-spark-toggle">
-        <input type="checkbox" id="sparkEffectToggle" autocomplete="off"> ゲージ演出（火花）OFF
-      </label>
+    <!-- ボタンの文言（特に「デモを開始」）は変えないこと：開始/停止の分岐が textContent で判定している。
+         番号・説明はボタンの外（.demo-step-head）に置く。 -->
+    <div class="demo-steps">
+      <div id="demoStep1" class="demo-step">
+        <div class="demo-step-head"><span class="demo-step-no">1</span>セットする</div>
+        <div class="demo-step-body">
+          <button id="demoSetupBtn">デモをセット</button>
+          <!-- 火花演出（2026-10-01追加、2026-10-06に既定ONへ変更）。初期はチェックなし＝火花ON。
+               チェックを入れると火花OFF（screenUrlに&fx=none）。サーバー側の状態は問い合わせない。
+               「デモをセット」を押した瞬間の状態だけが、そのデモのscreenUrlに反映される。 -->
+          <label class="demo-spark-toggle">
+            <input type="checkbox" id="sparkEffectToggle" autocomplete="off"> ゲージ演出（火花）OFF
+          </label>
+        </div>
+      </div>
+      <div class="demo-arrow">&rarr;</div>
+      <div id="demoStep2" class="demo-step">
+        <div class="demo-step-head"><span class="demo-step-no">2</span>開始・停止する</div>
+        <div class="demo-step-body">
+          <button id="demoStartStopBtn">デモを開始</button>
+        </div>
+      </div>
+      <div class="demo-arrow">&rarr;</div>
+      <div id="demoStep3" class="demo-step">
+        <div class="demo-step-head"><span class="demo-step-no">3</span>表示画面を開く</div>
+        <div class="demo-step-body">
+          <a id="demoScreenLink" class="demo-screen-link disabled" href="#" target="_blank" rel="noopener">
+            <button type="button" id="demoScreenLinkBtn">表示画面を開く</button>
+          </a>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -252,21 +337,8 @@
 
   <div class="card">
     <h2>対抗戦ペア一覧</h2>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>ラベル</th>
-          <th>試合A</th>
-          <th>試合B</th>
-          <th>スクリーン表示URL</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="battlesTableBody">
-        <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
-      </tbody>
-    </table>
+    <div id="battlesList" class="battle-list">
+      <div class="empty-note">読み込み中...</div>
     </div>
   </div>
 </div>
@@ -823,7 +895,7 @@
   const battleEventA = document.getElementById('battleEventA');
   const battleEventB = document.getElementById('battleEventB');
   const battleLabel = document.getElementById('battleLabel');
-  const battlesTableBody = document.getElementById('battlesTableBody');
+  const battlesList = document.getElementById('battlesList');
 
   function battleScreenUrl(battleId) {
     // 2026-10-06変更：現場で常に正しいURLで開けるよう、gauge=recent&poll=1000を付与
@@ -850,29 +922,42 @@
   }
 
   function renderBattlesTable(battles) {
-    battlesTableBody.innerHTML = '';
+    battlesList.innerHTML = '';
 
     if (battles.length === 0) {
-      battlesTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">登録されている対抗戦ペアはありません</td></tr>';
+      battlesList.innerHTML = '<div class="empty-note">登録されている対抗戦ペアはありません</div>';
       return;
     }
 
+    // UI刷新 段階3：1ペア1枚のカード行（A・VS・B、全幅のURL欄、コピー、画面を開く、削除）。
     battles.forEach((battle) => {
-      const tr = document.createElement('tr');
+      const tr = document.createElement('div');
+      tr.className = 'battle-card';
       const url = battleScreenUrl(battle.id);
 
       tr.innerHTML = `
-        <td>${escapeHtml(battle.label || '-')}</td>
-        <td>${escapeHtml(battle.event_a_title)}（${escapeHtml(battle.event_a_organization_name || 'チーム未設定')}）</td>
-        <td>${escapeHtml(battle.event_b_title)}（${escapeHtml(battle.event_b_organization_name || 'チーム未設定')}）</td>
-        <td>
-          <div class="battle-url-row">
-            <input type="text" readonly value="${escapeHtml(url)}">
-            <button type="button" class="battle-copy-btn">コピー</button>
-            <a href="${escapeHtml(url)}" target="_blank" rel="noopener"><button type="button">対抗戦画面を開く</button></a>
+        <div class="battle-head">
+          <div class="battle-label">${escapeHtml(battle.label || '（ラベル無し）')}</div>
+          <div class="action-cell"></div>
+        </div>
+        <div class="battle-vs">
+          <div class="battle-side">
+            <div class="side-tag">試合A（画面左側）</div>
+            <div class="side-title">${escapeHtml(battle.event_a_title)}</div>
+            <div class="side-org">${escapeHtml(battle.event_a_organization_name || 'チーム未設定')}</div>
           </div>
-        </td>
-        <td class="action-cell"></td>
+          <div class="vs-mark">VS</div>
+          <div class="battle-side">
+            <div class="side-tag">試合B（画面右側）</div>
+            <div class="side-title">${escapeHtml(battle.event_b_title)}</div>
+            <div class="side-org">${escapeHtml(battle.event_b_organization_name || 'チーム未設定')}</div>
+          </div>
+        </div>
+        <div class="battle-url-row">
+          <input type="text" readonly value="${escapeHtml(url)}">
+          <button type="button" class="battle-copy-btn">コピー</button>
+          <a href="${escapeHtml(url)}" target="_blank" rel="noopener"><button type="button">対抗戦画面を開く</button></a>
+        </div>
       `;
 
       tr.querySelector('.battle-copy-btn').addEventListener('click', async (e) => {
@@ -890,11 +975,11 @@
 
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = '削除';
-      deleteBtn.classList.add('danger');
+      deleteBtn.classList.add('danger-outline');
       deleteBtn.addEventListener('click', () => handleBattleDelete(battle));
       tr.querySelector('.action-cell').appendChild(deleteBtn);
 
-      battlesTableBody.appendChild(tr);
+      battlesList.appendChild(tr);
     });
   }
 
@@ -1011,6 +1096,25 @@
       demoScreenLink.href = '#';
       demoScreenLink.classList.add('disabled');
     }
+
+    applyDemoStepStyles(status);
+  }
+
+  // ステップの強調・薄表示（UI刷新 段階3。見た目のみ。ボタンの disabled 条件は上の renderDemoStatus のまま）。
+  //   未セット：①を強調、②③は薄く／セット済み：②を強調、①③は通常／実行中：②（停止）を強調、①は薄く
+  function applyDemoStepStyles(status) {
+    const state = status.status;
+    const hasScreen = !!status.screenUrl;
+    const steps = {
+      demoStep1: state === 'running' ? 'dim' : (state === 'idle' ? 'current' : ''),
+      demoStep2: state === 'idle' ? 'dim' : 'current',
+      demoStep3: hasScreen ? '' : 'dim',
+    };
+    Object.keys(steps).forEach((id) => {
+      const el = document.getElementById(id);
+      el.classList.toggle('current', steps[id] === 'current');
+      el.classList.toggle('dim', steps[id] === 'dim');
+    });
   }
 
   async function pollDemoStatus() {
