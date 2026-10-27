@@ -4,6 +4,43 @@
 
 ---
 
+## 2026-10-27 管理画面UI刷新 段階1（共通CSS・共通ナビ・ランチャー）の実装・ローカル確認
+
+### 実施したこと
+- 管理画面（`public/admin/`）の全ページと共通CSS・JSを調査し、デザイン案・段階分けをKMT様に提示、承認を得た
+  （判断事項はすべて既定案：状態バッジ日本語化／「全選択」は表示中の行のみ／「削除」は「⋯」メニュー／
+  デモ・対抗戦はevents.html内に残す／お客様向け認証は別項目）
+- 段階1を実装（コミット`ff95cef`）：`ui.css`・`brand.css`・`shell.js`を新設、`index.html`のみ新UIへ移行
+- お客様向け認証・データ範囲の限定を`docs/proposals/admin-customer-access-todo.md`にTODOとして記録
+- spec 9.5に追記、runbookに段階1のデプロイ手順を追記（pm2 restart不要の旨を含む）
+- ローカル確認：モックAPI＋Chromeヘッドレス。記録中／停止中の表示、現在地ハイライト、幅390pxで横はみ出し無し。
+  スクリーンショットは`C:\Projects\screenshots\admin-ui-stage1-*.png`
+
+### 変更したファイル
+- コード：`public/admin/ui.css`・`brand.css`・`shell.js`（新規）、`public/admin/index.html`
+- docs：`docs/spec.md`（9.5追記・変更履歴）、`docs/runbook.md`（デプロイ手順追記）、`docs/worklog.md`、`docs/proposals/admin-customer-access-todo.md`（新規）
+
+### 判明した事実 / 想定と違ったこと
+- `GET /events`は`hidden_at IS NULL`で絞っており、非表示の試合は一覧に返らない。
+  「非表示の試合の折りたたみ」は対象が無く、折りたたむのは終了済み（finished／cancelled）のみ
+- 作業環境にPythonが無く、スクリプトによる一括置換は使えなかった（Editで対応）
+- ヘッドレスChromeのスクリーンショットは窓幅が約500px未満だと右が切れて見える。レイアウトの不具合ではない
+  （iframe計測で幅390pxの横はみ出し無しを確認）
+
+### 次回への申し送り
+- **本番未反映。** 手順はrunbook「管理画面UI刷新 段階1のデプロイ」。反映はKMT様の指示後（TeraTermで実施）
+- 本番で段階1の見た目を確認した後、段階2（events.htmlの試合管理）に進む（KMT様の指示待ち）
+- 未確認：実API・staging DBでの動作、ブラウザでの実操作、`brand.css`差し替えの実地確認
+
+### 未解決のまま残した課題
+- お客様向けの認証・データ範囲の限定（`docs/proposals/admin-customer-access-todo.md`）。
+  `PATCH /admin/events/:id/status`の認証なし公開とも同根
+- 作業中、一時モックの停止に`taskkill /IM node.exe`（全nodeプロセス停止）を実行しようとして
+  権限ガードに拒否された。広すぎる操作だったため撤回し、自分で起動したモック3つのみをポート・
+  コマンドラインで特定して停止した（他のnodeプロセスへの影響なし）
+
+---
+
 ## 2026-10-19 Vanstone様受領仕様と現行実装の差分調査・記録（コード変更なし）
 
 ### 実施したこと

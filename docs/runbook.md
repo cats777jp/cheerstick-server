@@ -268,6 +268,33 @@ pm2 restart cheerstick-server
 > 詳細は`docs/worklog.md`2026-09-13エントリ
 > （「管理画面ランチャー化」「選手データ管理UI・応援集計画面」の本番デプロイ）参照。
 
+### 管理画面UI刷新 段階1のデプロイ（2026-10-27追記・本番未反映）
+
+**理由：** 管理画面UI刷新（`docs/spec.md` 9.5章追記）で新規3ファイル（`ui.css`・`brand.css`・`shell.js`）を
+追加し、`index.html`を新UIへ移行したため。**上の「6ファイル構成」に以下3ファイルが加わり、
+管理画面は計9ファイルになる**（`common.css`・`common.js`は未移行ページが使うため残す）。
+**静的ファイルのみの変更のため`pm2 restart`は不要**（Node側のコード変更なし。nginxもreload不要）。
+新規3ファイルは配信先に無いので、上記「★必須：新規ファイルをコピーした場合は所有者も確認する」の
+`chown`/`chmod`が必須。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+# 1) 新規3ファイルを先に置く（この時点では誰も参照しないため、置いただけでは画面は変わらない）
+sudo cp public/admin/ui.css public/admin/brand.css public/admin/shell.js /var/www/cheerstick-admin/
+sudo chown ubuntu:ubuntu /var/www/cheerstick-admin/ui.css /var/www/cheerstick-admin/brand.css /var/www/cheerstick-admin/shell.js
+sudo chmod 664 /var/www/cheerstick-admin/ui.css /var/www/cheerstick-admin/brand.css /var/www/cheerstick-admin/shell.js
+# 2) 続けてindex.htmlを置く（既存ファイルへの上書きのため所有者は引き継がれる）
+sudo cp public/admin/index.html /var/www/cheerstick-admin/
+# 3) 反映確認（4ファイルとも差分なしであること）
+for f in ui.css brand.css shell.js index.html; do diff /var/www/cheerstick-admin/$f public/admin/$f && echo "$f: OK"; done
+ls -la /var/www/cheerstick-admin/
+```
+
+ロールバック：`index.html`のみ旧版に戻す（`git show ff95cef^:public/admin/index.html`の内容を
+`/var/www/cheerstick-admin/index.html`へ置く）。新規3ファイルは置いたままでよい（参照されなくなるだけ）。
+各ページのHTMLは`?v=20261027`付きでCSS・JSを読む。次回以降、これらを更新するときは`?v=`の日付も更新すること。
+
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 
 **理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能
