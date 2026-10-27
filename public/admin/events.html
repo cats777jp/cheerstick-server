@@ -4,70 +4,176 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>試合管理 | 推しフル管理画面</title>
-<link rel="stylesheet" href="common.css">
 <link rel="stylesheet" href="tokens.css?v=20261028">
 <link rel="stylesheet" href="shell.css?v=20261028b">
+<link rel="stylesheet" href="ui.css?v=20261028">
 <link rel="stylesheet" href="brand.css?v=20261028">
 <style>
-  /* 対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11追加）。
-     2026-09-13、管理画面3ページ分割に伴い、旧index.htmlのインライン<style>から
-     events.htmlページ固有分としてそのまま移設。 */
-  .bulk-toolbar {
+  /* 試合管理ページ固有スタイル（2026-10-29、UI刷新 段階2）。色は --color-* / --status-* トークンを使う。 */
+
+  /* live の試合：最上部の大きなカード。停止（黄）と終了（赤）は間を大きく空けて配置する */
+  .live-panel { margin-bottom: var(--space); }
+  .live-panel-head { font-size: 14px; font-weight: bold; color: var(--status-live); margin-bottom: 8px; }
+  .live-card {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
     align-items: center;
+    gap: 16px 24px;
+    background: var(--live-bg);
+    border: 1px solid var(--live-border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
     margin-bottom: 12px;
   }
-  .bulk-toolbar span { font-size: 13px; color: var(--text-muted); }
-  .row-error {
-    color: #f87171;
-    font-size: 12px;
-    margin-top: 4px;
+  .live-card .live-check input { width: 18px; height: 18px; }
+  .live-info { flex: 1 1 260px; min-width: 0; }
+  .live-title { font-size: 20px; font-weight: bold; }
+  .live-meta { font-size: 13px; color: var(--color-muted); margin-top: 4px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .live-actions { display: flex; align-items: center; gap: 56px; flex-wrap: wrap; }
+  .live-actions button { font-size: 16px; padding: 12px 28px; margin: 0; font-weight: bold; }
+  .live-card .row-error { flex: 1 1 100%; }
+
+  /* 表の操作列：通常操作（開始・再開・停止）を左、危険操作（終了）と編集・「⋯」を右に離す */
+  .act-row { display: flex; align-items: center; gap: 8px; min-width: 260px; }
+  .act-row button { margin: 0; }
+  .act-main { display: flex; gap: 8px; }
+  .act-side { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+  .act-side .danger { margin-right: 12px; }
+  .row-error { color: #f08a84; font-size: 12px; margin-top: 4px; }
+
+  /* 「⋯」メニュー（削除）。表のスクロール枠で切れないよう、開いたときに fixed で位置を決める */
+  .more-menu { display: inline-block; position: relative; }
+  .more-menu > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 6px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-2);
+    font-size: 13px;
+    line-height: 1.5;
+    user-select: none;
   }
-  .battle-url-row {
-    display: flex;
-    gap: 6px;
-    align-items: center;
+  .more-menu > summary::-webkit-details-marker { display: none; }
+  .more-menu > summary:hover { border-color: var(--color-accent); }
+  .more-pop {
+    position: fixed;
+    z-index: 20;
+    min-width: 120px;
+    padding: 8px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
   }
-  .battle-url-row input {
-    width: auto;
-    flex: 1 1 220px;
-    font-size: 12px;
-    padding: 6px 8px;
-  }
-  /* デモモード（管理画面へのボタン追加、2026-09-29追加） */
-  .demo-status-row {
+  .more-pop button { width: 100%; margin: 0; }
+
+  /* 終了済み（既定で折りたたむ） */
+  .finished-section > summary { cursor: pointer; font-size: 16px; font-weight: bold; }
+  .finished-section > summary .count { font-weight: normal; font-size: 13px; color: var(--color-muted); margin-left: 8px; }
+  .finished-section[open] > summary { margin-bottom: 14px; }
+
+  /* 一括操作バー：1件以上選択したときだけ画面下部に固定表示 */
+  .bulk-bar {
+    position: fixed;
+    left: var(--sidebar-w);
+    right: 0;
+    bottom: 0;
+    z-index: 15;
     display: flex;
     align-items: center;
     gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 12px;
+    padding: 12px 24px;
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.4);
   }
+  .bulk-bar button { margin: 0; }
+  .bulk-bar #bulkFinishBtn { margin-left: 40px; }
+  #eventSelectedCount { font-size: 14px; font-weight: bold; margin-right: 8px; }
+  body { padding-bottom: 90px; }
+  @media (max-width: 899px) { .bulk-bar { left: 0; padding: 10px 16px; flex-wrap: wrap; } }
+
+  .create-form { max-width: 560px; }
+
+  /* 狭い画面では列を折り返さず、表の枠内で横スクロールさせる */
+  .table-wrap td, .table-wrap th { white-space: nowrap; }
+
+  /* デモモード・対抗戦ペア：段階3で新デザインへ移行するまでの暫定スタイル（旧スタイルをトークン化しただけ） */
+  .battle-url-row { display: flex; gap: 6px; align-items: center; }
+  .battle-url-row input { width: auto; flex: 1 1 220px; font-size: 12px; padding: 6px 8px; }
+  .demo-status-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
   .demo-status-label { font-size: 14px; }
   .demo-countdown { font-size: 20px; font-weight: bold; font-variant-numeric: tabular-nums; }
-  .demo-showcase-note { font-size: 13px; color: var(--text-muted); }
+  .demo-showcase-note { font-size: 13px; color: var(--color-muted); }
   .demo-screen-link.disabled { pointer-events: none; opacity: 0.5; }
   .demo-spark-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; cursor: pointer; }
+  .demo-spark-toggle input { width: auto; }
 </style>
 </head>
-<body data-page="events" data-shell="legacy">
+<body data-page="events">
 <script src="shell.js?v=20261028"></script>
 <div class="container">
   <h1>試合管理</h1>
-  <p><a href="index.html">&larr; 管理画面トップ</a></p>
+  <p class="page-lead">開催中の試合の操作、予定・停止中の試合の一覧、試合の登録を行います。</p>
   <div id="errorBar" class="error-bar"></div>
 
-  <!-- (A) 現在の記録状態 -->
+  <!-- (A) 記録中の試合（live）。live があれば試合ごとの大きなカード（停止・終了）、無ければ「記録停止中」。
+       中身は renderBanner() が描画する。 -->
   <div id="recordBanner" class="record-banner stopped">
     <div class="headline">■ 記録停止中</div>
     <div class="note">応援データは保存されません</div>
   </div>
 
+  <!-- (B) 試合一覧：予定・停止中。live は上のカード、終了済みは下の折りたたみに分ける。
+       一括開始/停止/終了は、既存のPATCH /events/:id/statusをチェック済みの試合IDに対して
+       1件ずつ順番に呼ぶだけ（遷移可否は既存APIの検証にそのまま委ねる）。 -->
+  <div class="card">
+    <h2>予定・停止中の試合</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"><input id="eventSelectAllCheckbox" type="checkbox" title="表示中の試合をすべて選択"></th>
+            <th>試合名</th>
+            <th>チーム</th>
+            <th>開始日時</th>
+            <th>状態</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="eventsTableBody">
+          <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <details id="finishedSection" class="card finished-section">
+    <summary>終了済みの試合<span id="finishedCount" class="count"></span></summary>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"></th>
+            <th>試合名</th>
+            <th>チーム</th>
+            <th>開始日時</th>
+            <th>状態</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="finishedTableBody">
+          <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+
   <!-- (C) 新規登録フォーム -->
   <div class="card">
     <h2>新規試合登録</h2>
-    <form id="createForm">
+    <form id="createForm" class="create-form">
       <label for="createTitle">試合名</label>
       <input id="createTitle" type="text" required>
 
@@ -86,36 +192,14 @@
     </form>
   </div>
 
-  <!-- (B) 試合一覧 -->
-  <div class="card">
-    <h2>試合一覧</h2>
-
-    <!-- 一括開始/停止/終了（2チーム対抗応援合戦機能、2026-09-11追加）。
-         既存のPATCH /events/:id/statusをチェック済みの試合IDに対して1件ずつ順番に呼ぶだけで、
-         現在のstatusに応じた遷移可否のチェックは行わない（既存APIの検証にそのまま委ねる）。 -->
-    <div class="bulk-toolbar">
-      <span id="eventSelectedCount">0件選択中</span>
-      <button id="bulkStartBtn">開始</button>
-      <button id="bulkPauseBtn">停止</button>
-      <button id="bulkFinishBtn" class="danger">終了</button>
-    </div>
-
-    <table>
-      <thead>
-        <tr>
-          <th class="checkbox-cell"><input id="eventSelectAllCheckbox" type="checkbox"></th>
-          <th>試合名</th>
-          <th>チーム</th>
-          <th>開始日時</th>
-          <th>状態</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="eventsTableBody">
-        <tr class="empty-row"><td colspan="6">読み込み中...</td></tr>
-      </tbody>
-    </table>
+  <!-- 一括操作バー（1件以上選択したときだけ表示） -->
+  <div id="bulkBar" class="bulk-bar hidden">
+    <span id="eventSelectedCount">0件選択中</span>
+    <button id="bulkStartBtn" class="primary">開始</button>
+    <button id="bulkPauseBtn" class="warn">停止</button>
+    <button id="bulkFinishBtn" class="danger">終了</button>
   </div>
+
 
   <!-- (H) デモモード（お客様向け「デモモード」機能、2026-09-29追加）。
        お客様の前で、すぐに100 vs 100の応援合戦デモを見せられるようにするための操作パネル。
@@ -168,6 +252,7 @@
 
   <div class="card">
     <h2>対抗戦ペア一覧</h2>
+    <div class="table-wrap">
     <table>
       <thead>
         <tr>
@@ -182,6 +267,7 @@
         <tr class="empty-row"><td colspan="5">読み込み中...</td></tr>
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 
@@ -247,11 +333,11 @@
   });
 
   const STATUS_LABELS = {
-    live: 'live',
-    paused: 'paused',
-    scheduled: 'scheduled',
-    finished: 'finished',
-    cancelled: 'cancelled',
+    live: '開催中',
+    paused: '停止中',
+    scheduled: '開始前',
+    finished: '終了',
+    cancelled: '中止',
   };
 
   function populateOrgSelect(selectEl, organizations) {
@@ -264,15 +350,40 @@
     });
   }
 
+  // live の試合ごとの大きなカード（UI刷新 段階2）。停止（黄）と終了（赤）は間を空けて配置する。
+  // ボタンの動作・確認ダイアログは表の行と同じ handleStatusChange()／actionButtonsFor() をそのまま使う。
+  function buildLiveCard(event) {
+    const card = document.createElement('div');
+    card.className = 'live-card';
+    card.innerHTML = `
+      <div class="live-check"><input type="checkbox" class="event-row-checkbox" data-id="${escapeHtml(event.id)}" title="一括操作の対象に選ぶ"></div>
+      <div class="live-info">
+        <div class="live-title">${escapeHtml(event.title)}</div>
+        <div class="live-meta">
+          <span class="badge live">${escapeHtml(STATUS_LABELS.live)}</span>
+          <span>${escapeHtml(event.organization_name || '-')}</span>
+          <span>開始 ${escapeHtml(formatDisplayDate(event.starts_at))}</span>
+        </div>
+      </div>
+      <div class="live-actions"></div>
+    `;
+    bindRowCheckbox(card.querySelector('.event-row-checkbox'), event);
+    const actions = card.querySelector('.live-actions');
+    const { main, end } = buildStatusButtons(event);
+    main.forEach((b) => actions.appendChild(b));
+    end.forEach((b) => actions.appendChild(b));
+    appendRowError(card, event);
+    return card;
+  }
+
   function renderBanner(events) {
     if (window.AdminShell) window.AdminShell.setRecordStatus(events);
     const liveEvents = events.filter((e) => e.status === 'live');
 
     if (liveEvents.length > 0) {
-      recordBanner.className = 'record-banner live';
-      recordBanner.innerHTML =
-        '<div class="headline">● 記録中</div>' +
-        liveEvents.map((e) => `<div class="detail">${escapeHtml(e.title)}</div>`).join('');
+      recordBanner.className = 'live-panel';
+      recordBanner.innerHTML = '<div class="live-panel-head">● 記録中</div>';
+      liveEvents.forEach((e) => recordBanner.appendChild(buildLiveCard(e)));
     } else {
       recordBanner.className = 'record-banner stopped';
       recordBanner.innerHTML =
@@ -314,23 +425,95 @@
   const eventRowErrors = new Map(); // eventId -> エラーメッセージ
   let lastEventsList = []; // 対抗戦ペア登録フォームのプルダウン用に最新の一覧を保持
 
+  const finishedTableBody = document.getElementById('finishedTableBody');
+  const finishedSection = document.getElementById('finishedSection');
+  const bulkBar = document.getElementById('bulkBar');
+
   function updateEventSelectedCount() {
     document.getElementById('eventSelectedCount').textContent = `${selectedEventIds.size}件選択中`;
+    bulkBar.classList.toggle('hidden', selectedEventIds.size === 0);
   }
 
-  function renderTable(events) {
-    eventsTableBody.innerHTML = '';
+  function bindRowCheckbox(checkbox, event) {
+    checkbox.checked = selectedEventIds.has(event.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) selectedEventIds.add(event.id);
+      else selectedEventIds.delete(event.id);
+      updateEventSelectedCount();
+    });
+  }
+
+  function appendRowError(container, event) {
+    const rowError = eventRowErrors.get(event.id);
+    if (!rowError) return;
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'row-error';
+    errorDiv.textContent = rowError;
+    container.appendChild(errorDiv);
+  }
+
+  // 状態変更ボタン。通常の遷移（開始・再開）は青、停止・「終了を取り消す」は黄、終了は赤。
+  // 終了（end）は通常操作（main）と別グループに分け、並べて置かない。
+  function buildStatusButtons(event) {
+    const main = [];
+    const end = [];
+    actionButtonsFor(event).forEach((btnDef) => {
+      const btn = document.createElement('button');
+      btn.textContent = btnDef.label;
+      if (btnDef.nextStatus === 'finished') {
+        btn.classList.add('danger');
+        end.push(btn);
+      } else {
+        btn.classList.add(btnDef.nextStatus === 'live' ? 'primary' : 'warn');
+        main.push(btn);
+      }
+      btn.addEventListener('click', () => handleStatusChange(event, btnDef));
+    });
+    return { main, end };
+  }
+
+  // 「⋯」メニュー：削除を入れる。確認ダイアログは handleDelete() の従来どおり。
+  function buildMoreMenu(event) {
+    const menu = document.createElement('details');
+    menu.className = 'more-menu';
+    menu.innerHTML = '<summary aria-label="その他の操作">⋯</summary><div class="more-pop"></div>';
+    const pop = menu.querySelector('.more-pop');
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '削除';
+    deleteBtn.classList.add('danger-outline');
+    deleteBtn.addEventListener('click', () => {
+      menu.open = false;
+      handleDelete(event);
+    });
+    pop.appendChild(deleteBtn);
+    menu.addEventListener('toggle', () => {
+      if (!menu.open) return;
+      const r = menu.querySelector('summary').getBoundingClientRect();
+      pop.style.top = `${r.bottom + 4}px`;
+      pop.style.left = `${Math.max(8, r.right - pop.offsetWidth)}px`;
+    });
+    return menu;
+  }
+
+  function closeAllMoreMenus() {
+    document.querySelectorAll('.more-menu[open]').forEach((m) => { m.open = false; });
+  }
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.more-menu')) closeAllMoreMenus();
+  });
+  window.addEventListener('scroll', closeAllMoreMenus, { passive: true });
+
+  function renderRows(tbody, events, emptyMessage) {
+    tbody.innerHTML = '';
 
     if (events.length === 0) {
-      eventsTableBody.innerHTML = '<tr class="empty-row"><td colspan="6">登録されている試合はありません</td></tr>';
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${escapeHtml(emptyMessage)}</td></tr>`;
       return;
     }
 
     events.forEach((event) => {
       const tr = document.createElement('tr');
-
       const statusLabel = STATUS_LABELS[event.status] || event.status;
-      const rowError = eventRowErrors.get(event.id);
 
       tr.innerHTML = `
         <td class="checkbox-cell"><input type="checkbox" class="event-row-checkbox" data-id="${escapeHtml(event.id)}"></td>
@@ -338,50 +521,53 @@
         <td>${escapeHtml(event.organization_name || '-')}</td>
         <td>${escapeHtml(formatDisplayDate(event.starts_at))}</td>
         <td><span class="badge ${escapeHtml(event.status)}">${escapeHtml(statusLabel)}</span></td>
-        <td class="action-cell"></td>
+        <td class="action-cell"><div class="act-row"><div class="act-main"></div><div class="act-side"></div></div></td>
       `;
 
-      const checkbox = tr.querySelector('.event-row-checkbox');
-      checkbox.checked = selectedEventIds.has(event.id);
-      checkbox.addEventListener('change', () => {
-        if (checkbox.checked) selectedEventIds.add(event.id);
-        else selectedEventIds.delete(event.id);
-        updateEventSelectedCount();
-      });
+      bindRowCheckbox(tr.querySelector('.event-row-checkbox'), event);
 
-      const actionCell = tr.querySelector('.action-cell');
-
-      actionButtonsFor(event).forEach((btnDef) => {
-        const btn = document.createElement('button');
-        btn.textContent = btnDef.label;
-        if (btnDef.confirm) btn.classList.add('danger');
-        btn.addEventListener('click', () => handleStatusChange(event, btnDef));
-        actionCell.appendChild(btn);
-      });
+      const actMain = tr.querySelector('.act-main');
+      const actSide = tr.querySelector('.act-side');
+      const { main, end } = buildStatusButtons(event);
+      main.forEach((b) => actMain.appendChild(b));
+      end.forEach((b) => actSide.appendChild(b));
 
       const editBtn = document.createElement('button');
       editBtn.textContent = '編集';
       editBtn.addEventListener('click', () => openEditModal(event));
-      actionCell.appendChild(editBtn);
+      actSide.appendChild(editBtn);
+      actSide.appendChild(buildMoreMenu(event));
 
-      const deleteBtn = document.createElement('button');
-      deleteBtn.textContent = '削除';
-      deleteBtn.classList.add('danger');
-      deleteBtn.addEventListener('click', () => handleDelete(event));
-      actionCell.appendChild(deleteBtn);
-
-      if (rowError) {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'row-error';
-        errorDiv.textContent = rowError;
-        actionCell.appendChild(errorDiv);
-      }
-
-      eventsTableBody.appendChild(tr);
+      appendRowError(tr.querySelector('.action-cell'), event);
+      tbody.appendChild(tr);
     });
+  }
+
+  // live は上のカード（renderBanner）、終了済み（finished／cancelled）は折りたたみ、それ以外は予定・停止中の表。
+  function renderTable(events) {
+    const active = events.filter((e) => !['live', 'finished', 'cancelled'].includes(e.status));
+    const done = events.filter((e) => e.status === 'finished' || e.status === 'cancelled');
+
+    renderRows(
+      eventsTableBody,
+      active,
+      events.length === 0 ? '登録されている試合はありません' : '予定・停止中の試合はありません'
+    );
+    renderRows(finishedTableBody, done, '終了済みの試合はありません');
+    document.getElementById('finishedCount').textContent = `${done.length}件`;
 
     document.getElementById('eventSelectAllCheckbox').checked = false;
   }
+
+  // 終了済みを閉じたとき、見えなくなった行の選択は解除する（見えない行を一括操作の対象に残さない）。
+  finishedSection.addEventListener('toggle', () => {
+    if (finishedSection.open) return;
+    finishedTableBody.querySelectorAll('.event-row-checkbox').forEach((cb) => {
+      cb.checked = false;
+      selectedEventIds.delete(cb.getAttribute('data-id'));
+    });
+    updateEventSelectedCount();
+  });
 
   async function handleStatusChange(event, btnDef) {
     if (btnDef.confirm) {
@@ -515,8 +701,12 @@
     );
   });
 
+  // 「全選択」は、いま画面に表示されている行だけを対象にする（折りたたまれた終了済みの行は対象外）。
   document.getElementById('eventSelectAllCheckbox').addEventListener('change', (e) => {
-    eventsTableBody.querySelectorAll('.event-row-checkbox').forEach((cb) => {
+    document.querySelectorAll('.event-row-checkbox').forEach((cb) => {
+      // 非表示（折りたたみ中の終了済みなど）の行は触らない。閉じた <details> の中は
+      // offsetParent では判定できないため、閉じているかどうかを直接確かめる。
+      if (cb.offsetParent === null || cb.closest('details:not([open])')) return;
       cb.checked = e.target.checked;
       const id = cb.getAttribute('data-id');
       if (e.target.checked) selectedEventIds.add(id);
