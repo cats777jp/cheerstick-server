@@ -25,6 +25,17 @@
     ] },
   ];
 
+  // favicon：<link rel="icon"> が無いとブラウザが /favicon.ico を取りに行って404になるため、
+  // ここで brand/favicon.svg を head に1回だけ差し込む（各HTMLを個別に編集しなくて済む）。
+  // お客様ごとの差し替えは brand/ の中身（favicon.svg・logo.png）と brand.css を入れ替える。
+  if (!document.head.querySelector('link[rel~="icon"]')) {
+    const icon = document.createElement('link');
+    icon.rel = 'icon';
+    icon.type = 'image/svg+xml';
+    icon.href = 'brand/favicon.svg';
+    document.head.appendChild(icon);
+  }
+
   const currentPage = document.body.getAttribute('data-page') || '';
 
   function isActive(item) {

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 管理画面のfavicon（仮置き）。「推」の文字を入れた簡易SVG。正式なロゴ・お客様向けの差し替えは、このファイルを置き換える。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#4d8dff"/>
+  <text x="32" y="46" text-anchor="middle" font-size="40" font-weight="700" fill="#ffffff"
+        font-family="'Hiragino Sans','Yu Gothic','Meiryo','Noto Sans CJK JP',sans-serif">推</text>
+</svg>
