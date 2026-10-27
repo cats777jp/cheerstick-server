@@ -4,31 +4,34 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>管理画面 | 推しフル管理画面</title>
-<link rel="stylesheet" href="common.css">
+<link rel="stylesheet" href="ui.css?v=20261027">
+<link rel="stylesheet" href="brand.css?v=20261027">
 <style>
-  /* ランチャー専用スタイル（2026-09-13、管理画面のランチャー方式への再構成に伴い新設）。 */
+  /* ランチャー専用スタイル（2026-09-13新設、2026-10-27 UI刷新でトークン化）。 */
   .launcher-nav {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 16px;
   }
   .launcher-nav a {
     display: block;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
     padding: 20px;
     text-decoration: none;
-    color: var(--text);
+    color: var(--color-text);
   }
-  .launcher-nav a:hover { border-color: var(--accent); }
+  .launcher-nav a:hover { border-color: var(--color-accent); }
   .launcher-nav .nav-title { font-size: 16px; font-weight: bold; margin-bottom: 6px; }
-  .launcher-nav .nav-desc { font-size: 13px; color: var(--text-muted); }
+  .launcher-nav .nav-desc { font-size: 13px; color: var(--color-muted); }
 </style>
 </head>
-<body>
+<body data-page="index">
+<script src="shell.js?v=20261027"></script>
 <div class="container">
-  <h1>管理画面</h1>
+  <h1>ダッシュボード</h1>
+  <p class="page-lead">試合の記録状態と、各管理機能への入口です。</p>
   <div id="errorBar" class="error-bar"></div>
 
   <!-- 記録状態バナー：旧index.html（試合管理・チーム管理・デバイス管理を1ページに
@@ -66,6 +69,7 @@
   const recordBanner = document.getElementById('recordBanner');
 
   function renderBanner(events) {
+    if (window.AdminShell) window.AdminShell.setRecordStatus(events);
     const liveEvents = events.filter((e) => e.status === 'live');
 
     if (liveEvents.length > 0) {
