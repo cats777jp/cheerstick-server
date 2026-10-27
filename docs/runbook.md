@@ -366,6 +366,32 @@ ls -la /var/www/cheerstick-admin/events.html
   ```
   戻した版は`common.css`を読むため、`common.css`・`common.js`が配信先に残っていることが前提（残っている。削除は段階7の予定）
 
+### 管理画面UI刷新 段階3（events.html）のデプロイ（2026-10-30追記・本番未反映）
+
+**理由：** `events.html`のデモモードと対抗戦ペア一覧を新デザインへ移行したため（`docs/spec.md` 9.5章追記、コミット`966f46c`）。
+**段階2と同じく`events.html`の1ファイルのみ。** 新規ファイルは無く、CSS・JSも無変更のためchown/chmodは不要。
+**`pm2 restart`・nginx reloadは不要**（静的ファイルのみ。`src/`は無変更）。`events.html`が古いままに見える場合はCtrl+F5。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+sudo cp public/admin/events.html /var/www/cheerstick-admin/
+diff /var/www/cheerstick-admin/events.html public/admin/events.html && echo "events.html: OK"
+ls -la /var/www/cheerstick-admin/events.html
+```
+
+- **反映後の確認（オフィスのIPから）：** `https://admin.cheerstick.com/events.html`で、デモモードが番号付き3ステップで出ること
+  （未セットなら①が強調、②③が薄い）、対抗戦ペア一覧がカード行で出ること（ラベル・試合A・VS・試合B・全幅のURL欄・コピー・画面を開く・削除）、Consoleにエラーが無いこと。
+  **本番で確認する際の注意：** 「デモをセット」「デモを開始」は本番のデモ機能を実際に動かす操作で、「削除」は対抗戦ペアを実際に削除する（確認ダイアログあり）。
+  試合直前・試合中は表示確認のみにすること
+- **ロールバック（直前の版は`8818106`＝段階2の版）：**
+  ```bash
+  cd /home/ubuntu/cheerstick-server-new
+  git show 8818106:public/admin/events.html | sudo tee /var/www/cheerstick-admin/events.html > /dev/null
+  git show 8818106:public/admin/events.html | diff - /var/www/cheerstick-admin/events.html && echo "events.html: rolled back"
+  ```
+  戻した版は`tokens.css`・`shell.css`・`ui.css`・`brand.css`・`shell.js`を読む（配信先に残っているため問題なし）
+
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 
 **理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能
