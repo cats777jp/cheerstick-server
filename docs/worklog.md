@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-10-28 管理画面UI刷新 サイドバーの先行追加（未移行4ページ）の実装・ローカル確認
+
+### 実施したこと
+- KMT様の進め方変更（段階2以降に先立ち、「サイドバーだけ」を未移行ページにも先に追加）に従い、
+  `events.html`／`masters.html`／`targets.html`／`ranking-control.html`へ共通サイドバー・上部バーを追加（コミット`2f4c711`）
+- `ui.css`から`tokens.css`（色・間隔）と`shell.css`（サイドバー・上部バー）を分離。旧ページは`common.css`のまま
+  `data-shell="legacy"`の補正のみで共存（本文のレイアウト・挙動は変更なし）
+- `events.html`に`id="demo"`・`id="battles"`、`masters.html`に`id="devices"`を付与（サイドバーのアンカー用）
+- ローカル確認：モックAPI＋実Chrome（claude-in-chrome）。表示、events.htmlの「開始」操作、各ページのモーダルの重なり、
+  アンカー3種、Console、幅390pxの横はみ出し（iframe計測）を確認。スクリーンショットは`C:\Projects\screenshots\admin-ui-sidebar-*`
+
+### 変更したファイル
+- コード（`2f4c711`）：`public/admin/tokens.css`・`shell.css`（新規）、`shell.js`・`ui.css`・`index.html`・`events.html`・
+  `masters.html`・`targets.html`・`ranking-control.html`
+- docs：`docs/spec.md`（9.5追記・変更履歴）、`docs/runbook.md`（デプロイ・ロールバック手順追記）、`docs/worklog.md`
+
+### 判明した事実 / 想定と違ったこと
+- 旧ページに共通サイドバーを入れるだけでは、幅390pxで`events.html`の対抗戦ペア一覧の表（元々幅が広い）が
+  ページ全体を横に伸ばしていた（サイドバーとは無関係の既存の問題）。旧ページ限定で`.card`内スクロールにして対処
+- ヘッドレスChromeで`#hash`付きURLを撮ると空白の画像になった（描画タイミングの問題）。アンカーのスクリーンショットは実ブラウザで撮り直した
+- 旧ページへ新CSSのトークンを持ち込んでも`common.css`の変数（`--bg`等）とは名前が衝突しない（`--color-*`のため）
+
+### 次回への申し送り
+- **本番未反映。** 手順はrunbook「管理画面UI刷新 サイドバー先行追加のデプロイ」（ロールバック手順付き）。反映はKMT様の指示後
+- 本番でサイドバーを確認した後、段階2（events.htmlの試合管理の新デザイン移行）に進む（KMT様の指示待ち）
+- 未確認：実API・staging DBでの通し確認、書き込み系操作（登録・保存・一括操作・デモ開始/停止・順位確定・CSV取込）のブラウザ操作
+
+### 未解決のまま残した課題
+- お客様向けの認証・データ範囲の限定（`docs/proposals/admin-customer-access-todo.md`、変更なし）
+
+---
+
 ## 2026-10-27 管理画面UI刷新 段階1（共通CSS・共通ナビ・ランチャー）の実装・ローカル確認
 
 ### 実施したこと

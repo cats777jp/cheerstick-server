@@ -1516,6 +1516,34 @@ shell.js    … 共通シェル（左サイドバー・上部バーの記録状�
 - ローカル確認：モックAPI＋Chromeヘッドレスで、記録中／記録停止中の表示、現在地ハイライト、
   幅390pxで横はみ出し無しを確認。実APIでの確認と、ブラウザでの実操作確認は未実施
 
+**追記（2026-10-28、サイドバーの先行追加・コミット`2f4c711`・ローカル確認まで・本番未反映）：**
+段階2以降（各ページ本体の新デザインへの移行）に先立ち、未移行の4ページ
+（`events.html`／`masters.html`／`targets.html`／`ranking-control.html`）にも共通サイドバー・上部バーだけを追加した。
+本文のレイアウト・挙動・`common.css`は変えていない（上記「段階1」の追記に対する追加であり、既存記述は残している）。
+
+- **CSSの分離：** `ui.css`から色・間隔のトークンを`tokens.css`へ、サイドバー・上部バーのスタイルを`shell.css`へ切り出した
+  （計：新規2ファイル。管理画面のファイルは11になる：index／events／masters／targets／ranking-control／
+  common.css／common.js／ui.css／brand.css／shell.js／tokens.css／shell.css）。
+  `ui.css`を使うのは`index.html`のみで、読み込み順は`tokens.css`→`shell.css`→`ui.css`→`brand.css`。
+  旧ページは`common.css`のまま`tokens.css`→`shell.css`→`brand.css`を追加で読み込む
+- **旧ページの指定：** `<body data-page="..." data-shell="legacy">`の直後で`shell.js`を読み込む。
+  `data-shell="legacy"`のページは、`shell.css`がサイドバー幅ぶんの左余白、上部バー・エラーバーの位置のみを補正する。
+  `z-index`はサイドバー・上部バーを10とし、本文のエラーバー（20）・モーダル（30）より下に置いた
+  （モーダルが常にサイドバーの上に表示される）
+- **上部バーの記録状態チップ：** `events.html`・`ranking-control.html`は取得済みの試合一覧から
+  `AdminShell.setRecordStatus(events)`で更新する。`masters.html`・`targets.html`は
+  `AdminShell.loadRecordStatus()`が`GET /events`を1回だけ呼ぶ（失敗してもエラーバーは出さず、上部バーは非表示のまま）。
+  記録状態が分かるまで上部バーは表示しない
+- **アンカー：** サイドバーの「対抗戦ペア」「デモモード」「デバイス」は、`events.html`の`id="battles"`・`id="demo"`と
+  `masters.html`の`id="devices"`（いずれも該当カードの`div`）へ飛ぶ。固定の上部バーに見出しが隠れないよう
+  `[id].card`に`scroll-margin-top`を付けている
+- **狭い画面：** 旧ページの対抗戦ペア一覧の表（元々幅が広い）がページ全体を横に伸ばしていたため、
+  `body[data-shell="legacy"] .card { overflow-x: auto }`でカード内スクロールにした。幅900px未満ではサイドバーが上部の横並びメニューに畳まれる
+- **ローカル確認：** モックAPI＋実Chromeで、5ページの表示、Consoleエラーなし（events.html）、`events.html`の「開始」操作
+  （`PATCH /events/:id/status`が送られチップが更新）、各ページのモーダルがサイドバーより上に重なること、
+  アンカー3種、幅390pxでの横はみ出しなし（5ページ）を確認。**未確認：** 実API・staging DBでの通し確認、
+  登録・保存の送信、一括操作、デモの開始・停止、順位確定の実行、CSV取込（本文のコードは変更していない）
+
 ### 9.6 管理画面：選手・推し対象管理 `public/admin/targets.html`（2026-09-13新設・ローカル確認まで）
 
 8.5章のAPIに対応する管理画面。`masters.html`（チーム管理・デバイス管理）と同じ構成
@@ -2984,3 +3012,4 @@ WebARENA VPSから`battle-demo.js`で、本番EC2（t3.micro）に対し`legacy`
 | 2026-10-13 | 9.15に追記②：試合をliveにした実機確認の結果。再開後のカウント0表示、再開後の`count`のサーバー到達（過去分と合算）、「データ参照」での総数表示を確認し、終了ボタン修正（`2ec68a5`）の実機確認が完了 | 実機確認の完了を記録するため。既存記述は削除せず追記のみ（前回の「次回確認事項」は削除せず、本追記で解消済みと明記した） |
 | 2026-10-19 | 5.2・11.11に追記：LED連携（`sendLED`）は実機でチームカラー変更（青→赤）の反映を確認済みで、「Vanstone様側で未実装」は解消済みと明記。ブリッジの現行運用（`receiveFromApp`／`myBridge`／`androidBridge`／`sendData`）を追記。Vanstone様受領仕様との対応表を`docs/proposals/vanstone-bridge-spec-gap-2026-10-19.md`に新設 | 岩村様の報告による実機確認結果の反映と、受領仕様との差分調査の記録のため。既存記述は削除せず追記のみ |
 | 2026-10-27 | 9.5に追記：管理画面UI刷新 段階1（`ui.css`・`brand.css`・`shell.js`の新設と`index.html`の新UI移行、コミット`ff95cef`、ローカル確認まで・本番未反映） | 将来お客様（業販先）にも管理画面を使っていただく可能性があり、見た目の完成度・誤操作の防ぎやすさ・色とロゴの差し替え構造が必要になったため。ページごとに本番反映できるよう新旧CSSを併存させる方式とした。既存記述は削除していない |
+| 2026-10-28 | 9.5に追記：管理画面UI刷新のサイドバー先行追加（未移行4ページへ共通サイドバー・上部バーを追加、`tokens.css`・`shell.css`を`ui.css`から分離、アンカー用id付与。コミット`2f4c711`、ローカル確認まで・本番未反映） | 各ページ本体の新デザインへの移行（段階2以降）に先立ち、全ページで共通ナビ・現在地表示を使えるようにするため。本文のレイアウト・挙動・`common.css`は変更していない。既存記述は削除していない |

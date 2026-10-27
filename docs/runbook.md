@@ -295,6 +295,50 @@ ls -la /var/www/cheerstick-admin/
 `/var/www/cheerstick-admin/index.html`へ置く）。新規3ファイルは置いたままでよい（参照されなくなるだけ）。
 各ページのHTMLは`?v=20261027`付きでCSS・JSを読む。次回以降、これらを更新するときは`?v=`の日付も更新すること。
 
+### 管理画面UI刷新 サイドバー先行追加のデプロイ（2026-10-28追記・本番未反映）
+
+**理由：** 未移行の4ページにも共通サイドバーを追加し（`docs/spec.md` 9.5章追記）、`ui.css`から`tokens.css`・
+`shell.css`を分離したため。**管理画面は計11ファイルになる**（上の「段階1のデプロイ」の9ファイル＋新規
+`tokens.css`・`shell.css`）。静的ファイルのみの変更で、**`pm2 restart`・nginx reloadは不要**
+（`src/`は無変更。実行しても動作は変わらないが、`pm2 restart`は既存のWebSocket接続を切るため試合中は避ける）。
+**`ui.css`の中身が変わる（シェル部分を`shell.css`へ移した）ため、`ui.css`・`shell.js`・全HTMLを必ず一式で入れ替えること**
+（`ui.css`だけ、または`index.html`だけを新旧混在させるとサイドバーの表示が崩れる）。
+
+```bash
+cd /home/ubuntu/cheerstick-server-new
+git pull
+D=/var/www/cheerstick-admin
+# 1) CSS・JSを先に置く（新規2ファイルを含む）。新規ファイルは所有者が root になるため chown/chmod が必須
+sudo cp public/admin/tokens.css public/admin/shell.css public/admin/brand.css public/admin/ui.css public/admin/shell.js $D/
+sudo chown ubuntu:ubuntu $D/tokens.css $D/shell.css $D/brand.css $D/ui.css $D/shell.js
+sudo chmod 664 $D/tokens.css $D/shell.css $D/brand.css $D/ui.css $D/shell.js
+# 2) HTMLを置く（既存ファイルの上書きのため所有者は引き継がれる）
+sudo cp public/admin/index.html public/admin/events.html public/admin/masters.html public/admin/targets.html public/admin/ranking-control.html $D/
+# 3) 反映確認（10ファイルとも OK が出ること。1つでも差分が出たら未反映）
+for f in tokens.css shell.css brand.css ui.css shell.js index.html events.html masters.html targets.html ranking-control.html; do diff $D/$f public/admin/$f && echo "$f: OK"; done
+ls -la $D/
+```
+
+- **キャッシュ対策：** 各HTMLは`tokens.css`・`brand.css`・`shell.js`を`?v=20261028`、`shell.css`を`?v=20261028b`、
+  `ui.css`（index.htmlのみ）を`?v=20261028`で読むため、段階1で配信済みの旧`ui.css?v=20261027`が
+  ブラウザに残っていても新しいものが取得される。HTML自体が古いまま見える場合は Ctrl+F5。次回以降これらを更新するときは`?v=`も更新する
+- **反映後の確認（オフィスのIPから）：** `https://admin.cheerstick.com/`の各ページで、左サイドバーと現在地の強調、
+  上部バーの記録状態チップ、「← 管理画面トップ」リンク、サイドバーの「対抗戦ペア」「デモモード」「デバイス」が
+  該当セクションへ飛ぶこと、既存の一覧表示・モーダルが従来どおり動くこと、開発者ツールのConsoleにエラーが無いこと
+- **ロールバック（前提：段階1の`ff95cef`は反映済み。直前の版は`2f4c711^`）：**
+  ```bash
+  cd /home/ubuntu/cheerstick-server-new
+  D=/var/www/cheerstick-admin
+  # 旧ページ4つを、サイドバー追加前の版へ戻す（これだけで旧ページは元の見た目に戻る）
+  for f in events masters targets ranking-control; do git show 2f4c711^:public/admin/$f.html | sudo tee $D/$f.html > /dev/null; done
+  # index.htmlに問題がある場合は、ui.cssとshell.jsも同じ版（段階1）へ戻す。3つは必ずセットで戻すこと
+  for f in index.html ui.css shell.js; do git show 2f4c711^:public/admin/$f | sudo tee $D/$f > /dev/null; done
+  # 戻した版との一致確認の例
+  git show 2f4c711^:public/admin/events.html | diff - $D/events.html && echo "events: rolled back"
+  ```
+  新規`tokens.css`・`shell.css`は置いたままでよい（戻した版は参照しないため無害）。
+  `tee`でも既存ファイルの所有者・権限は維持される。段階1を反映していない場合は、`index.html`は`ecd92c4`の版へ戻し、`ui.css`は置いたままでよい
+
 ### ★必須：コピー後は「反映されたこと」を diff で確認する（2026-08-18追記）
 
 **理由：** 上記の`cp`手順自体は以前から存在していたが、2026-07-31の管理画面DELETE機能
