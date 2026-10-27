@@ -7,43 +7,6 @@
    お客様ごとの差し替えは brand.css で行う（このファイルの後に読み込む）。
 */
 
-/* ---------- トークン ---------- */
-:root {
-  --color-bg: #0b0f14;
-  --color-surface: #161b22;
-  --color-surface-2: #1f2733;
-  --color-input-bg: #0f141b;
-  --color-border: #2f3946;
-  --color-text: #f4f6f8;
-  --color-muted: #a8b2bd;
-  --color-accent: #4d8dff;
-  --color-on-accent: #ffffff;
-
-  --color-danger: #c9342b;
-  --color-danger-soft: #3a1a18;
-  --color-warn: #facc15;
-  --color-warn-soft: #3a3210;
-
-  /* 状態バッジ（試合の status） */
-  --status-live: #4ade80;
-  --status-paused: #facc15;
-  --status-scheduled: #9aa4af;
-  --status-finished: #60a5fa;
-  --status-cancelled: #f87171;
-  --color-on-status: #0b0f14;
-
-  --live-bg: #1b3a24;
-  --live-border: #2e7d46;
-
-  --sidebar-w: 232px;
-  --radius: 12px;
-  --radius-sm: 6px;
-  --space: 20px;
-
-  --brand-name: "";
-  --brand-logo: none;
-}
-
 /* ---------- 基本 ---------- */
 * { box-sizing: border-box; }
 body {
@@ -62,89 +25,9 @@ h3 { font-size: 13px; color: var(--color-muted); margin: 20px 0 8px; }
 .page-lead { font-size: 13px; color: var(--color-muted); margin: 0 0 var(--space); }
 .hidden { display: none !important; }
 
-/* ---------- シェル（shell.js が生成） ---------- */
-.shell-sidebar {
-  position: fixed;
-  top: 0; left: 0; bottom: 0;
-  width: var(--sidebar-w);
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-border);
-  padding: 18px 12px;
-  overflow-y: auto;
-  z-index: 40;
-}
-.shell-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 8px 18px;
-  font-weight: bold;
-  font-size: 16px;
-  text-decoration: none;
-  color: var(--color-text);
-}
-.shell-brand-logo {
-  flex: none;
-  width: 32px; height: 32px;
-  border-radius: 8px;
-  background: var(--color-accent) var(--brand-logo) center / contain no-repeat;
-}
-.shell-brand-name::after { content: var(--brand-name); }
-.shell-group { margin-bottom: 14px; }
-.shell-group-title {
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--color-muted);
-  padding: 0 8px 4px;
-}
-.shell-link {
-  display: block;
-  padding: 9px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text);
-  text-decoration: none;
-  font-size: 14px;
-  border-left: 3px solid transparent;
-}
-.shell-link:hover { background: var(--color-surface-2); }
-.shell-link.active {
-  background: var(--color-surface-2);
-  border-left-color: var(--color-accent);
-  font-weight: bold;
-}
-.shell-topbar {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 24px;
-  background: var(--color-bg);
-  border-bottom: 1px solid var(--color-border);
-}
-.record-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: bold;
-  background: var(--color-surface-2);
-  color: var(--color-muted);
-  border: 1px solid var(--color-border);
-}
-.record-chip.live {
-  background: var(--live-bg);
-  border-color: var(--live-border);
-  color: var(--status-live);
-}
-
+/* ---------- カード ---------- */
 .container { max-width: 1280px; margin: 0 auto; padding: 24px; }
 
-/* ---------- カード ---------- */
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -296,25 +179,8 @@ input, select, textarea {
   border: 1px solid var(--color-border); vertical-align: middle;
 }
 
-/* ---------- 画面幅が狭いとき：サイドバーを上部バーに畳む ---------- */
+/* ---------- 画面幅が狭いとき（シェルの畳み込みは shell.css） ---------- */
 @media (max-width: 899px) {
   body { padding-left: 0; }
-  .shell-sidebar {
-    position: static;
-    width: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-border);
-    padding: 10px 12px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 12px;
-  }
-  .shell-brand { padding: 0 8px 0 0; }
-  .shell-group { display: contents; }
-  .shell-group-title { display: none; }
-  .shell-link { border-left: 0; border-bottom: 3px solid transparent; padding: 8px 8px; }
-  .shell-link.active { border-bottom-color: var(--color-accent); }
   .container { padding: 16px; }
-  .shell-topbar { padding: 8px 16px; }
 }

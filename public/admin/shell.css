@@ -1,0 +1,132 @@
+/* public/admin/shell.css
+   共通シェル（左サイドバー・上部バー）のスタイル。2026-10-28、ui.cssから切り出し。
+   shell.jsが生成する要素のみを対象とする。tokens.cssの後に読み込む。
+   未移行ページ（common.css）は <body data-shell="legacy"> を付け、本文のCSSは変えずに左余白だけ追加する。 */
+/* ---------- シェル（shell.js が生成） ---------- */
+.shell-sidebar {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  padding: 18px 12px;
+  overflow-y: auto;
+  z-index: 10;
+}
+.shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 18px;
+  font-weight: bold;
+  font-size: 16px;
+  text-decoration: none;
+  color: var(--color-text);
+}
+.shell-brand-logo {
+  flex: none;
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: var(--color-accent) var(--brand-logo) center / contain no-repeat;
+}
+.shell-brand-name::after { content: var(--brand-name); }
+.shell-group { margin-bottom: 14px; }
+.shell-group-title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+  padding: 0 8px 4px;
+}
+.shell-link {
+  display: block;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 14px;
+  border-left: 3px solid transparent;
+}
+.shell-link:hover { background: var(--color-surface-2); }
+.shell-link.active {
+  background: var(--color-surface-2);
+  border-left-color: var(--color-accent);
+  font-weight: bold;
+}
+.shell-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 24px;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+.record-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: bold;
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+}
+.record-chip.live {
+  background: var(--live-bg);
+  border-color: var(--live-border);
+  color: var(--status-live);
+}
+
+
+/* ---------- 画面幅が狭いとき：サイドバーを上部バーに畳む ---------- */
+@media (max-width: 899px) {
+  .shell-sidebar {
+    position: static;
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+    padding: 10px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+  }
+  .shell-brand { padding: 0 8px 0 0; }
+  .shell-group { display: contents; }
+  .shell-group-title { display: none; }
+  .shell-link { border-left: 0; border-bottom: 3px solid transparent; padding: 8px 8px; }
+  .shell-link.active { border-bottom-color: var(--color-accent); }
+  .shell-topbar { padding: 8px 16px; }
+}
+
+/* ---------- 共通の補正 ---------- */
+.shell-sidebar, .shell-topbar {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+.shell-topbar { min-height: 52px; }
+.shell-topbar[hidden] { display: none; }
+/* サイドバーのアンカーリンクで飛んだとき、固定の上部バーに見出しが隠れないようにする */
+[id].card { scroll-margin-top: 64px; }
+
+/* ---------- 未移行ページ（common.css、<body data-shell="legacy">） ----------
+   本文のCSSは変えず、サイドバーの幅ぶんの左余白と、上部バー・エラーバーの位置だけ補正する。
+   z-indexは本文のモーダル(30)・エラーバー(20)より低い10にし、モーダルが常にサイドバーの上に来るようにしている。 */
+body[data-shell="legacy"] { padding-left: calc(var(--sidebar-w) + 16px); }
+body[data-shell="legacy"] .shell-topbar { margin: -16px -16px 16px -16px; }
+body[data-shell="legacy"] .error-bar { top: 60px; }
+@media (max-width: 899px) {
+  body[data-shell="legacy"] { padding-left: 16px; }
+  body[data-shell="legacy"] .shell-sidebar { margin: -16px -16px 0; }
+  body[data-shell="legacy"] .shell-topbar { margin: 0 -16px 16px; }
+}
+/* 未移行ページの表（対抗戦ペア一覧等）は列が多く、狭い画面ではページ全体が横に伸びるため、
+   カードの内側で横スクロールさせる（本文のレイアウト自体は変えない） */
+body[data-shell="legacy"] .card { overflow-x: auto; }

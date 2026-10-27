@@ -64,6 +64,7 @@
 
   const topbar = document.createElement('div');
   topbar.className = 'shell-topbar';
+  topbar.hidden = true; // 記録状態が分かるまで表示しない（取得できないページに空のバーを出さない）
   topbar.innerHTML = '<span id="shellRecordChip" class="record-chip">記録状態を確認中…</span>';
 
   function refreshActive() {
@@ -81,10 +82,18 @@
   document.body.insertBefore(sidebar, document.body.firstChild);
 
   window.AdminShell = {
+    // 試合一覧を自前で取得しないページ（masters/targets）向け。失敗してもエラー表示は出さず、バーは非表示のまま。
+    async loadRecordStatus() {
+      try {
+        const res = await fetch(API_BASE + '/events');
+        if (res.ok) this.setRecordStatus(await res.json());
+      } catch (e) { /* 取得できなければ何も表示しない */ }
+    },
     // events: GET /events の配列。live の試合数を上部バーのチップに表示する。
     setRecordStatus(events) {
       const chip = document.getElementById('shellRecordChip');
       if (!chip) return;
+      topbar.hidden = false;
       const liveCount = (events || []).filter((e) => e.status === 'live').length;
       chip.classList.toggle('live', liveCount > 0);
       chip.textContent = liveCount > 0 ? `● 記録中 ${liveCount}件` : '■ 記録停止中';

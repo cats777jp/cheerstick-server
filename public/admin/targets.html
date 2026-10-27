@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>選手・推し対象管理 | 推しフル管理画面</title>
 <link rel="stylesheet" href="common.css">
+<link rel="stylesheet" href="tokens.css?v=20261028">
+<link rel="stylesheet" href="shell.css?v=20261028b">
+<link rel="stylesheet" href="brand.css?v=20261028">
 <style>
   /* 選手・推し対象管理（targets、2026-09-13新設）。
      masters.htmlのチーム管理・デバイス管理と同じ構成（新規登録フォーム＋一覧＋
@@ -38,7 +41,8 @@
   }
 </style>
 </head>
-<body>
+<body data-page="targets" data-shell="legacy">
+<script src="shell.js?v=20261028"></script>
 <div class="container">
   <h1>選手・推し対象管理</h1>
   <p><a href="index.html">&larr; 管理画面トップ</a></p>
@@ -153,6 +157,7 @@
 </div>
 
 <script src="common.js"></script>
+<script>if (window.AdminShell) window.AdminShell.loadRecordStatus();</script>
 <script>
 (function () {
   const targetCreateForm = document.getElementById('targetCreateForm');

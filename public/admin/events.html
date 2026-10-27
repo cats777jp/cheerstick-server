@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>試合管理 | 推しフル管理画面</title>
 <link rel="stylesheet" href="common.css">
+<link rel="stylesheet" href="tokens.css?v=20261028">
+<link rel="stylesheet" href="shell.css?v=20261028b">
+<link rel="stylesheet" href="brand.css?v=20261028">
 <style>
   /* 対抗戦ペア管理・一括操作（2チーム対抗応援合戦機能、2026-09-11追加）。
      2026-09-13、管理画面3ページ分割に伴い、旧index.htmlのインライン<style>から
@@ -48,7 +51,8 @@
   .demo-spark-toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; cursor: pointer; }
 </style>
 </head>
-<body>
+<body data-page="events" data-shell="legacy">
+<script src="shell.js?v=20261028"></script>
 <div class="container">
   <h1>試合管理</h1>
   <p><a href="index.html">&larr; 管理画面トップ</a></p>
@@ -117,7 +121,7 @@
        お客様の前で、すぐに100 vs 100の応援合戦デモを見せられるようにするための操作パネル。
        対象（カテゴリー「デモ用」・チーム・台数100・時間60秒固定）はサーバー側で固定しており、
        この画面からは変更できない（docs/proposals/demo-mode-admin-ui.md参照）。 -->
-  <div class="card">
+  <div id="demo" class="card">
     <h2>デモモード</h2>
     <div class="demo-status-row">
       <span class="demo-status-label">状態: <span id="demoStatusLabel">読み込み中...</span></span>
@@ -144,7 +148,7 @@
        対抗戦ペア登録フォームのプルダウンは同ページ内の試合一覧データ(lastEventsList)を
        使うため、2026-09-13の3ページ分割でも試合一覧(B)と同じevents.htmlに留めている
        （populateBattleEventSelects(events)の呼び出し方は変更していない）。 -->
-  <div class="card">
+  <div id="battles" class="card">
     <h2>対抗戦ペア登録</h2>
     <form id="battleCreateForm">
       <label for="battleEventA">試合A（画面左側）</label>
@@ -261,6 +265,7 @@
   }
 
   function renderBanner(events) {
+    if (window.AdminShell) window.AdminShell.setRecordStatus(events);
     const liveEvents = events.filter((e) => e.status === 'live');
 
     if (liveEvents.length > 0) {

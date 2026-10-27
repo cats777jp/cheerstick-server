@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>順位確定 | 推しフル管理画面</title>
 <link rel="stylesheet" href="common.css">
+<link rel="stylesheet" href="tokens.css?v=20261028">
+<link rel="stylesheet" href="shell.css?v=20261028b">
+<link rel="stylesheet" href="brand.css?v=20261028">
 <style>
   /* 順位確定機能（Phase 4、2026-09-24追加）ページ固有分。
      .screen-url-row はevents.htmlの.battle-url-row（対抗戦スクリーンURL欄）と同じ構成。 */
@@ -24,7 +27,8 @@
   }
 </style>
 </head>
-<body>
+<body data-page="ranking" data-shell="legacy">
+<script src="shell.js?v=20261028"></script>
 <div class="container">
   <h1>順位確定</h1>
   <p><a href="index.html">&larr; 管理画面トップ</a></p>
@@ -257,6 +261,7 @@
     try {
       const events = await apiFetch('/events');
       lastEventsList = events;
+      if (window.AdminShell) window.AdminShell.setRecordStatus(events);
       populateEventSelect(events);
       clearError();
     } catch (e) {
